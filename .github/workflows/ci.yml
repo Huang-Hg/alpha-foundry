@@ -4,9 +4,35 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 3 * * 1'   # weekly (Mon 03:17 UTC): catch numpy/gcc dependency drift on loose >= pins
 
 jobs:
-  build-and-smoke:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.13']
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install build deps
+        run: pip install numpy
+
+      - name: Build C++ extensions
+        run: bash backtest/build.sh
+
+      - name: Kernel smoke on synthetic data
+        run: python .github/ci_smoke.py
+
+  linux-sanitize:
+    # same build + smoke with ASan/UBSan-instrumented extensions: catches OOB / UAF / UB
+    # in the hand-written OpenMP kernels that a plain run silently survives.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,58 +44,42 @@ jobs:
       - name: Install build deps
         run: pip install numpy
 
-      - name: Build C++ extensions (backtest._bt + backtest.ops._ops)
+      - name: Build sanitized C++ extensions
+        run: EXTRA_CFLAGS='-g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all' bash backtest/build.sh
+
+      - name: Kernel smoke under ASan/UBSan
+        # libasan must be loaded before CPython for interceptors; leak check off (CPython noise).
+        run: |
+          export LD_PRELOAD="$(g++ -print-file-name=libasan.so)"
+          export ASAN_OPTIONS='detect_leaks=0:halt_on_error=1'
+          export UBSAN_OPTIONS='print_stacktrace=1:halt_on_error=1'
+          python .github/ci_smoke.py
+
+  windows-msys2:
+    # mirrors the real dev toolchain: Windows CPython + msys2 ucrt64 g++ → .pyd
+    # (the __GLIBC__/Windows split is exactly where linux-only symbol bugs hide).
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: '3.13'
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+
+      - name: Install build deps
+        run: python -m pip install numpy
+
+      - name: Build C++ extensions (.pyd)
+        shell: msys2 {0}
+        env:
+          PYTHON: ${{ steps.py.outputs.python-path }}
         run: bash backtest/build.sh
 
       - name: Kernel smoke on synthetic data
-        run: |
-          python - <<'EOF'
-          import numpy as np
-
-          rng = np.random.default_rng(0)
-          T, S = 400, 12
-          close = np.ascontiguousarray(np.cumprod(1 + 0.01 * rng.standard_normal((T, S)), axis=0) * 100)
-          opn = np.ascontiguousarray(close * (1 + 0.001 * rng.standard_normal((T, S))))
-
-          # C operator library
-          from backtest.ops import cs_zscore_np
-          z = cs_zscore_np(np.ascontiguousarray(rng.standard_normal((T, S))))
-          assert z.shape == (T, S)
-
-          # all three portfolio backtest kernels via their Python wrappers
-          # (also exercises INI config parsing + MarketProfile registry)
-          from rl.backtest_reward import (BacktestRewardConfig, EquityCostsConfig, AShareCostsConfig,
-                                          run_bt, run_equity_bt, run_ashare_bt)
-
-          sig = np.ascontiguousarray(rng.standard_normal((T, S)))
-          qvol = np.full((T, S), 1e6)
-          vol = np.full((T, S), 0.01)
-          fund = np.zeros((T, S))
-          r = run_bt(sig, close, opn, qvol, vol, fund, BacktestRewardConfig())
-          print('crypto ', {k: round(v, 4) for k, v in r.items()})
-
-          w = sig - sig.mean(1, keepdims=True)
-          w /= np.abs(w).sum(1, keepdims=True)
-          r = run_equity_bt(np.ascontiguousarray(w), close, opn, EquityCostsConfig())
-          print('equity ', {k: round(v, 4) for k, v in r.items()})
-
-          wl = np.full((T, S), 1.0 / S)
-          r = run_ashare_bt(wl, close, opn, AShareCostsConfig())
-          print('ashare ', {k: round(v, 4) for k, v in r.items()})
-
-          # bars_per_year is a required positional arg on every kernel (no hidden default)
-          from backtest import _bt
-          zero3 = np.zeros((10, 2))
-          one3 = np.ones((10, 2))
-          for name, args in (
-              ('portfolio_bt_equity', (zero3, one3, one3, 1e5, 0, 0.0005, 0.0)),
-              ('portfolio_bt_ashare', (zero3, one3, one3, 1e5, 0, 0.00025, 0.0005, 0.00001)),
-          ):
-              try:
-                  getattr(_bt, name)(*args)
-              except TypeError:
-                  pass
-              else:
-                  raise SystemExit(f'{name}: bars_per_year must be a required argument')
-          print('smoke OK')
-          EOF
+        run: python .github/ci_smoke.py
