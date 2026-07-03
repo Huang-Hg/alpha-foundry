@@ -1,4 +1,9 @@
-"""1m kline + binance metrics → 5m panel(47 列)聚合,纯函数.
+"""crypto 专属特征聚合 —— 1m kline + binance metrics → 5m panel(47 列),纯函数.
+
+⚠️ 本模块 **crypto-bound**(quote_volume/taker_imbalance/OI/LSR + 写死 12/48/144/288 bar 窗,
+皆 binance 永续语义),不是市场无关层;权益类特征在 data/{us_equity,a_share}_panel.py 各自构造。
+通用的只有 DSL 求值,故此文件以 crypto_ 前缀显式标边界。
+
 
 每符号独立处理。跨月 rolling features 由 caller 在前面拼接 prev-month 尾部 5m bars
 再调用 add_rolling_features,然后切回当月。

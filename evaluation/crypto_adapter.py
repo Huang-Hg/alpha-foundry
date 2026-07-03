@@ -1,5 +1,8 @@
-"""
-读 parquet_5m 月文件 → (T, S) 面板 + future-return 标签
+"""crypto 专属面板适配器 —— 读 parquet_5m 月文件 → (T, S) 面板 + future-return 标签。
+
+⚠️ 本模块 **crypto-bound**(import CRYPTO_PARQUET_COLUMNS、写死 5m=288 bar/日 的 tenure 衰减),
+不是市场无关层;美股 / A 股走 data/{us_equity,a_share}_panel.py 各自 loader。通用的只有
+DSL 求值(evaluation/{grammar,ast,expression,cache}.py),故此文件以 crypto_ 前缀显式标边界。
 =======================================================
 
 输出:
