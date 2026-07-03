@@ -17,20 +17,35 @@ import numpy as np
 
 from backtest import _bt as _bt_kernel
 from config.config import ini
-from markets.profile import ACTIVE as _MKT, CALENDAR as _CAL, get_profile
+from markets.profile import get_profile
+
+
+class _MarketCostConfig:
+    """市场成本配置基类:每个市场的成本/口径 config 绑定一个 MarketProfile(子类设 profile_name),
+    warmup / 年化全由该 profile 单源派生 —— 取代旧的「crypto 读全局 ACTIVE、权益各自 get_profile」
+    双通道 + 各市场重复定义的 property。新增市场 = 子类 + profile_name,不再重复 warmup/年化。"""
+    profile_name: str = ''                              # 子类覆盖为具体画像名
+
+    @property
+    def skip_warmup_bars(self) -> int:
+        return get_profile(self.profile_name).warmup_bars
+
+    @property
+    def bars_per_year(self) -> float:
+        return get_profile(self.profile_name).calendar.bars_per_year
 
 
 @dataclass
-class BacktestRewardConfig:
+class BacktestRewardConfig(_MarketCostConfig):
     """单 bar 直达 target、全 taker @ open 的 bt 配置(费率模型:half_spread+fee+impact+funding+强平+
     trailing-stop)。费后 PnL 仅用于 val 诊断,不进训练 reward(reward 已纯 IC × diversity)。
     cost 三项均为 fraction:half_spread(半点差)/ fee(taker 单边)/ impact_Y(sqrt-impact 系数)。"""
+    profile_name = 'continuous24x7'                    # crypto 永续;warmup=288 / bars_per_year=105120 由此单源派生
     initial_cash:      float = 100_000.0
     half_spread_rate:  float = ini('backtest_reward', 'half_spread_rate',  0.0)
     fee_rate:          float = ini('backtest_reward', 'fee_rate',          0.00050)
     impact_Y:          float = ini('backtest_reward', 'impact_Y',          0.5)
     maint_margin_rate: float = 0.005
-    skip_warmup_bars:  int   = _MKT.warmup_bars        # crypto 288;由 active MarketProfile 派生
     leverage_cap:      float = ini('backtest_reward', 'leverage_cap',      2.0)    # top-K 多空 gross 目标 Σ|w|
     max_concentration: float = ini('backtest_reward', 'max_concentration', 0.20)   # 旧 z 加权 clip;top-K 下不触及
     # top-K 多空组合构造(eval/部署共享口径;贴 alphasage/alphacfg top-K 等权 + 允许做空 + swap 缓冲)
@@ -50,25 +65,15 @@ class BacktestRewardConfig:
         return np.array([x for pr in pairs for x in pr], dtype=np.float64)
 
 
-_EQUITY_PROFILE = 'us_equity_daily'
-
-
 @dataclass
-class EquityCostsConfig:
+class EquityCostsConfig(_MarketCostConfig):
     """US 权益回测口径(EquityPolicy:佣金+半点差单边对称 cost_rate、空腿日借券费;
     无 funding / 强平 / sqrt-impact)。MTM 与 rebalance 全走**复权 OHLC**(单一总收益口径,
     与 EquityPanel.fwd_ret 一致;不混原始价以免 split/分红跳空双计数)。年化走 us_equity_daily=252。"""
+    profile_name = 'us_equity_daily'
     initial_cash:      float = 100_000.0
     cost_rate:         float = ini('equity_costs', 'cost_rate',    0.0005)   # 佣金+半点差,单边 fraction
     daily_borrow:      float = ini('equity_costs', 'daily_borrow', 0.0)      # 空腿日借券费(年化/252);0=关
-
-    @property
-    def skip_warmup_bars(self) -> int:
-        return get_profile(_EQUITY_PROFILE).warmup_bars
-
-    @property
-    def bars_per_year(self) -> float:
-        return get_profile(_EQUITY_PROFILE).calendar.bars_per_year
 
 
 def run_equity_bt(weights_TS: np.ndarray,
@@ -87,9 +92,9 @@ def run_equity_bt(weights_TS: np.ndarray,
         np.ascontiguousarray(adj_open_TS, dtype=np.float64),
         ecfg.initial_cash, int(ecfg.skip_warmup_bars),
         ecfg.cost_rate, ecfg.daily_borrow,
+        float(ecfg.bars_per_year),         # 必传:profile 单源年化(252)
         1 if raw_weights else 0,
         0.0, None,                         # equity 暂不启用 per-name trailing-stop
-        float(ecfg.bars_per_year),
     )
     out = {
         'total_return':  float(res['total_return']),
@@ -101,26 +106,16 @@ def run_equity_bt(weights_TS: np.ndarray,
     return out
 
 
-_ASHARE_PROFILE = 'a_share_daily'
-
-
 @dataclass
-class AShareCostsConfig:
+class AShareCostsConfig(_MarketCostConfig):
     """中国 A 股回测口径(ASharePolicy:佣金双边 + 印花税卖出单边 + 过户费双边;**long-only**,无 funding/
     强平/impact)。MTM/rebalance 全走 qfq 复权 OHLC(总收益)。年化 √242;daily cadence 天然满足 T+1。"""
+    profile_name = 'a_share_daily'
     initial_cash:      float = 100_000.0
     commission:        float = ini('ashare_costs', 'commission',       0.00025)  # 佣金单边(万2.5)
     stamp_tax_sell:    float = ini('ashare_costs', 'stamp_tax_sell',   0.0005)   # 印花税卖出单边(万5,2023 减半)
     transfer_fee:      float = ini('ashare_costs', 'transfer_fee',     0.00001)  # 过户费双边(万0.1)
     price_limit_pct:   float = ini('ashare_costs', 'price_limit_pct',  0.10)     # 涨跌停幅度(沪深300 主板 ±10%)
-
-    @property
-    def skip_warmup_bars(self) -> int:
-        return get_profile(_ASHARE_PROFILE).warmup_bars
-
-    @property
-    def bars_per_year(self) -> float:
-        return get_profile(_ASHARE_PROFILE).calendar.bars_per_year
 
 
 def ashare_trade_block(adj_close_TS: np.ndarray, adj_open_TS: np.ndarray,
@@ -157,9 +152,9 @@ def run_ashare_bt(weights_TS: np.ndarray,
         np.ascontiguousarray(adj_open_TS, dtype=np.float64),
         acfg.initial_cash, int(acfg.skip_warmup_bars),
         acfg.commission, acfg.stamp_tax_sell, acfg.transfer_fee,
+        float(acfg.bars_per_year),         # 必传:profile 单源年化(242)
         1 if raw_weights else 0,
         None if trade_block is None else np.ascontiguousarray(trade_block, dtype=np.int8),
-        float(acfg.bars_per_year),
     )
     out = {
         'total_return':  float(res['total_return']),
@@ -253,13 +248,13 @@ def run_bt(deployed_signal: np.ndarray,
         bcfg.initial_cash, int(bcfg.skip_warmup_bars),
         bcfg.half_spread_rate, bcfg.fee_rate, bcfg.impact_Y,
         bcfg.maint_margin_rate,
+        float(bcfg.bars_per_year),       # 必传:Sharpe 年化 = sqrt(bars_per_year);crypto 105120(profile 单源)
         float(leverage_cap if leverage_cap is not None else bcfg.leverage_cap),
         float(max_concentration if max_concentration is not None else bcfg.max_concentration),
         1 if raw_weights else 0,         # raw_weights:1=直接用目标权重;0=走 signal_to_weight
         None,                            # leverage_TS:isolated 杠杆未启用
         float(bcfg.stop_trail_pct),
         bcfg.stop_ratchet_flat(),
-        float(_CAL.bars_per_year),       # Sharpe 年化 = sqrt(bars_per_year);crypto 105120
     )
     out = {
         'total_return':  float(res['total_return']),

@@ -51,7 +51,7 @@ log = logging.info
 
 from config.config import FactorMiningConfig, NeutralizeConfig, ini
 from backtest import ops
-from evaluation.adapter import load_panel, month_iter, split_train_val
+from evaluation.crypto_adapter import load_panel, month_iter, split_train_val
 from evaluation.ast import AlphaTree
 from evaluation.expression import evaluate as eval_tree
 from rl.alpha_pool import AlphaPool
@@ -77,7 +77,7 @@ def prepare_gp_data(train_start: str, train_end: str, val_start: str, val_end: s
     切分、operand 面板降 1h(ts O(T) 缩 12×)、val 5m 价路径辅助(run_bt 用)+ 1h dec 诊断网格。"""
     import gc
     from rl.backtest_reward import prepare_close_TS, prepare_open_TS
-    from evaluation.aggregator import aggregate_5m_to_1h
+    from evaluation.crypto_aggregator import aggregate_5m_to_1h
     bundle = load_panel(train_start=train_start, train_end=train_end,
                         val_start=val_start, val_end=val_end, parquet_root=parquet_root,
                         primary_horizon=primary_horizon)
