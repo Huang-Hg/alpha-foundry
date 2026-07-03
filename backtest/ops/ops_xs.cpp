@@ -19,7 +19,11 @@
 
 #include <math.h>
 #include <stdint.h>
-#include <stdlib.h>     /* malloc_trim(fm_malloc_trim) */
+#include <stdlib.h>
+#ifdef __GLIBC__
+#include <malloc.h>     /* malloc_trim(fm_malloc_trim);glibc 头自带 extern "C" —— 手写 extern 声明
+                         * 在 .cpp 里会被 C++ 修饰成 _Z11malloc_trimm → Linux 加载时 undefined symbol */
+#endif
 
 #include <algorithm>    /* std::sort */
 #include <utility>      /* std::pair */
@@ -733,7 +737,6 @@ void fm_omp_set_num_threads(int n) {
  * 归还物理页。fork 前 / worker 每局末调。非 glibc(Windows .pyd)no-op 返 0。 */
 int fm_malloc_trim(void) {
 #ifdef __GLIBC__
-    extern int malloc_trim(size_t);
     return malloc_trim(0);
 #else
     return 0;
