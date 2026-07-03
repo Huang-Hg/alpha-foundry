@@ -67,15 +67,15 @@ static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
     double leverage_cap = 1.0, max_concentration = 0.0;
     int raw_weights = 0;
     double stop_trail_pct = 0.0;
-    double bars_per_year = 365.0 * 24.0 * 12.0;
+    double bars_per_year;             // 必传:由 Python 侧 MarketProfile.bars_per_year 单源提供(无默认,见 rl/backtest_reward.py)
 
-    if (!PyArg_ParseTuple(args, "OOOOOOOOdLdddd|ddiOdOd",
+    if (!PyArg_ParseTuple(args, "OOOOOOOOdLddddd|ddiOdO",
                           &o_alpha, &o_close, &o_open, &o_high, &o_low,
                           &o_bvol, &o_sigma, &o_funding,
                           &init_cash, &skip_warmup_ll,
-                          &half_spread, &fee, &impact_Y, &mmr,
+                          &half_spread, &fee, &impact_Y, &mmr, &bars_per_year,
                           &leverage_cap, &max_concentration, &raw_weights,
-                          &o_leverage, &stop_trail_pct, &o_ratchet, &bars_per_year)) {
+                          &o_leverage, &stop_trail_pct, &o_ratchet)) {
         return NULL;
     }
 
@@ -141,8 +141,8 @@ static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
 
 
 /* ============================ portfolio_bt_equity(US 权益 / EquityPolicy)============================
- * portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow,
- *                     [raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None, bars_per_year=252.0]) -> dict
+ * portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, bars_per_year,
+ *                     [raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None]) -> dict
  * close/open = 复权 OHLC(总收益);无 funding/margin-call 强平/impact。long-short(空腿计借券费)。
  * 权重外部构造(raw_weights=1 直传)→ leverage_cap/max_concentration 无意义,不暴露。 */
 static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
@@ -150,12 +150,13 @@ static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
     double init_cash, cost_rate, daily_borrow;
     long long skip_warmup_ll;
     int raw_weights = 0;
-    double stop_trail_pct = 0.0, bars_per_year = 252.0;
+    double stop_trail_pct = 0.0;
+    double bars_per_year;                               // 必传:MarketProfile 单源年化,无默认
 
-    if (!PyArg_ParseTuple(args, "OOOdLdd|idOd",
+    if (!PyArg_ParseTuple(args, "OOOdLddd|idO",
                           &o_alpha, &o_close, &o_open,
-                          &init_cash, &skip_warmup_ll, &cost_rate, &daily_borrow,
-                          &raw_weights, &stop_trail_pct, &o_ratchet, &bars_per_year)) {
+                          &init_cash, &skip_warmup_ll, &cost_rate, &daily_borrow, &bars_per_year,
+                          &raw_weights, &stop_trail_pct, &o_ratchet)) {
         return NULL;
     }
 
@@ -291,8 +292,8 @@ static PyObject* py_stop_latch_scan(PyObject* self, PyObject* args) {
 
 
 /* ============================ portfolio_bt_ashare(中国 A 股 / ASharePolicy)============================
- * portfolio_bt_ashare(alpha, close, open, init_cash, skip_warmup, commission, stamp_tax_sell, transfer_fee,
- *                     [raw_weights=0, trade_block=None, bars_per_year=242.0]) -> dict
+ * portfolio_bt_ashare(alpha, close, open, init_cash, skip_warmup, commission, stamp_tax_sell, transfer_fee, bars_per_year,
+ *                     [raw_weights=0, trade_block=None]) -> dict
  * close/open = qfq 复权 OHLC(总收益);佣金双边 + 印花税卖出单边 + 过户费双边;long-only,无 funding/强平。
  * trade_block:(T,S) int8 涨跌停/停牌方向冻结掩码 | None(bit0=涨停禁买、bit1=跌停禁卖、3=停牌双禁)。
  * 权重外部构造(raw_weights=1 直传)→ leverage_cap/max_concentration 无意义,不暴露。 */
@@ -300,13 +301,13 @@ static PyObject* py_portfolio_bt_ashare(PyObject* self, PyObject* args) {
     PyObject *o_alpha, *o_close, *o_open, *o_tblock = Py_None;
     double init_cash, commission, stamp_tax_sell, transfer_fee;
     long long skip_warmup_ll;
-    double bars_per_year = 242.0;
+    double bars_per_year;             // 必传:MarketProfile.bars_per_year 单源年化,无默认
     int raw_weights = 0;
 
-    if (!PyArg_ParseTuple(args, "OOOdLddd|iOd",
+    if (!PyArg_ParseTuple(args, "OOOdLdddd|iO",
                           &o_alpha, &o_close, &o_open,
-                          &init_cash, &skip_warmup_ll, &commission, &stamp_tax_sell, &transfer_fee,
-                          &raw_weights, &o_tblock, &bars_per_year)) {
+                          &init_cash, &skip_warmup_ll, &commission, &stamp_tax_sell, &transfer_fee, &bars_per_year,
+                          &raw_weights, &o_tblock)) {
         return NULL;
     }
 
@@ -365,15 +366,15 @@ static PyObject* py_portfolio_bt_ashare(PyObject* self, PyObject* args) {
 static PyMethodDef methods[] = {
     {"portfolio_bt", py_portfolio_bt, METH_VARARGS,
      "portfolio_bt(alpha, close, open, high|None, low|None, bar_volume|None, sigma|None, funding|None, "
-     "init_cash, skip_warmup, half_spread, fee, impact_Y, mmr, "
+     "init_cash, skip_warmup, half_spread, fee, impact_Y, mmr, bars_per_year, "
      "[leverage_cap=1.0, max_concentration=0.0, raw_weights=0, leverage_TS=None, stop_trail_pct=0.0, "
-     "stop_ratchet=None, bars_per_year=105120.0]) -> dict  (crypto perp / PerpPolicy)"},
+     "stop_ratchet=None]) -> dict  (crypto perp / PerpPolicy)"},
     {"portfolio_bt_equity", py_portfolio_bt_equity, METH_VARARGS,
-     "portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, "
-     "[raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None, bars_per_year=252.0]) -> dict  (US equity / EquityPolicy)"},
+     "portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, bars_per_year, "
+     "[raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None]) -> dict  (US equity / EquityPolicy)"},
     {"portfolio_bt_ashare", py_portfolio_bt_ashare, METH_VARARGS,
-     "portfolio_bt_ashare(alpha, close, open, init_cash, skip_warmup, commission, stamp_tax_sell, transfer_fee, "
-     "[raw_weights=0, trade_block=None, bars_per_year=242.0]) -> dict  (China A-share / ASharePolicy)"},
+     "portfolio_bt_ashare(alpha, close, open, init_cash, skip_warmup, commission, stamp_tax_sell, transfer_fee, bars_per_year, "
+     "[raw_weights=0, trade_block=None]) -> dict  (China A-share / ASharePolicy)"},
     {"stop_latch_scan", py_stop_latch_scan, METH_VARARGS,
      "stop_latch_scan(w_dec, close_5m, start_idx, bars_per_dec, trail, ratchet|None) -> (keep, jstar, fired)"},
     {NULL, NULL, 0, NULL}

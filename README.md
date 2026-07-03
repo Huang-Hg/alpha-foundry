@@ -58,7 +58,7 @@ python main.py materialize output/pool.json output/materialized/  # alpha JSON �
 
 挖矿产物 = deploy bundle JSON(`{"pool": [{tree, ...}, ...]}`)+ `logs/` 快照。
 
-> 本仓为公开快照:挖矿需自备符合 `evaluation/adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `alphasage` / `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的组件(GFlowNet 引擎 / 权益数据加载器)。
+> 本仓为公开快照:挖矿需自备符合 `evaluation/crypto_adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `alphasage` / `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的组件(GFlowNet 引擎 / 权益数据加载器)。
 
 ---
 
