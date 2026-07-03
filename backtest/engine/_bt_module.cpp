@@ -45,10 +45,11 @@ static PyObject* pack_result(PyArrayObject* equity_arr, PyArrayObject* turnover_
     PyDict_SetItemString(d, "equity",    (PyObject*)equity_arr);
     PyDict_SetItemString(d, "turnover",  (PyObject*)turnover_arr);
     PyDict_SetItemString(d, "cost_drag", (PyObject*)cost_arr);
-    PyDict_SetItemString(d, "liq_at",        PyLong_FromLongLong((long long)liq_at));
-    PyDict_SetItemString(d, "total_return",  PyFloat_FromDouble(total_return));
-    PyDict_SetItemString(d, "sharpe",        PyFloat_FromDouble(sharpe));
-    PyDict_SetItemString(d, "mean_turnover", PyFloat_FromDouble(mean_turnover));
+    PyObject* v;                       /* SetItemString 不偷引用:标量临时须配对 DECREF,否则每调用漏 4 对象 */
+    v = PyLong_FromLongLong((long long)liq_at); PyDict_SetItemString(d, "liq_at",        v); Py_DECREF(v);
+    v = PyFloat_FromDouble(total_return);       PyDict_SetItemString(d, "total_return",  v); Py_DECREF(v);
+    v = PyFloat_FromDouble(sharpe);             PyDict_SetItemString(d, "sharpe",        v); Py_DECREF(v);
+    v = PyFloat_FromDouble(mean_turnover);      PyDict_SetItemString(d, "mean_turnover", v); Py_DECREF(v);
     Py_DECREF(equity_arr); Py_DECREF(turnover_arr); Py_DECREF(cost_arr);
     return d;
 }
@@ -64,17 +65,17 @@ static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
     PyObject *o_leverage = Py_None, *o_ratchet = Py_None;
     double init_cash, half_spread, fee, impact_Y, mmr;
     long long skip_warmup_ll;
-    double leverage_cap = 1.0, max_concentration = 0.0;
+    double leverage_cap = 1.0;
     int raw_weights = 0;
     double stop_trail_pct = 0.0;
     double bars_per_year;             // 必传:由 Python 侧 MarketProfile.bars_per_year 单源提供(无默认,见 rl/backtest_reward.py)
 
-    if (!PyArg_ParseTuple(args, "OOOOOOOOdLddddd|ddiOdO",
+    if (!PyArg_ParseTuple(args, "OOOOOOOOdLddddd|diOdO",
                           &o_alpha, &o_close, &o_open, &o_high, &o_low,
                           &o_bvol, &o_sigma, &o_funding,
                           &init_cash, &skip_warmup_ll,
                           &half_spread, &fee, &impact_Y, &mmr, &bars_per_year,
-                          &leverage_cap, &max_concentration, &raw_weights,
+                          &leverage_cap, &raw_weights,
                           &o_leverage, &stop_trail_pct, &o_ratchet)) {
         return NULL;
     }
@@ -93,21 +94,31 @@ static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
         Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr); return NULL;
     }
 
-    PyArrayObject* high_arr  = bt_as_2d_or_none(o_high);
-    PyArrayObject* low_arr   = bt_as_2d_or_none(o_low);
-    PyArrayObject* bvol_arr  = bt_as_2d_or_none(o_bvol);
-    PyArrayObject* sigma_arr = bt_as_2d_or_none(o_sigma);
-    PyArrayObject* fund_arr  = bt_as_2d_or_none(o_funding);
-    PyArrayObject* lev_arr   = bt_as_2d_or_none(o_leverage);
+    /* or_none 的 NULL 双义:None → NULL 无异常;坏类型 → NULL + pending exception。逐个短路,
+     * 失败路径级联释放全部已获取引用(高频入口,坏输入不许留 pending exception 进 kernel)。 */
+    PyObject* o_opt[6] = { o_high, o_low, o_bvol, o_sigma, o_funding, o_leverage };
+    PyArrayObject* opt[6] = {};
+    int arg_bad = 0;
+    for (int i = 0; i < 6 && !arg_bad; i++) {
+        opt[i] = bt_as_2d_or_none(o_opt[i]);
+        arg_bad = (opt[i] == NULL && PyErr_Occurred() != NULL);
+    }
     PyArrayObject* ratchet_arr = NULL;
-    if (o_ratchet != Py_None) {
+    if (!arg_bad && o_ratchet != Py_None) {
         ratchet_arr = bt_as_1d_f64(o_ratchet);
         if (!ratchet_arr || (PyArray_DIM(ratchet_arr, 0) % 2) != 0) {
             PyErr_SetString(PyExc_ValueError, "stop_ratchet must be flat (2k,) [gain, trail] pairs");
-            Py_XDECREF(ratchet_arr);
-            Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr); return NULL;
+            arg_bad = 1;
         }
     }
+    if (arg_bad) {
+        for (int i = 0; i < 6; i++) Py_XDECREF(opt[i]);
+        Py_XDECREF(ratchet_arr);
+        Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr);
+        return NULL;
+    }
+    PyArrayObject *high_arr = opt[0], *low_arr  = opt[1], *bvol_arr = opt[2],
+                  *sigma_arr = opt[3], *fund_arr = opt[4], *lev_arr  = opt[5];
 
     const bool iso_active = (lev_arr != NULL && high_arr != NULL && low_arr != NULL);
     bt::PerpPolicy policy(half_spread, fee, impact_Y, mmr, iso_active);
@@ -125,7 +136,7 @@ static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
         _DAT(fund_arr), _DAT(lev_arr),
         nullptr,                                /* crypto 永续无涨跌停 */
         (int64_t)T, (int64_t)S, init_cash, (int64_t)skip_warmup_ll,
-        leverage_cap, max_concentration, raw_weights,
+        leverage_cap, raw_weights,
         stop_trail_pct, _DAT(ratchet_arr),
         ratchet_arr ? (int64_t)(PyArray_DIM(ratchet_arr, 0) / 2) : 0,
         policy,
@@ -144,7 +155,7 @@ static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
  * portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, bars_per_year,
  *                     [raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None]) -> dict
  * close/open = 复权 OHLC(总收益);无 funding/margin-call 强平/impact。long-short(空腿计借券费)。
- * 权重外部构造(raw_weights=1 直传)→ leverage_cap/max_concentration 无意义,不暴露。 */
+ * 权重外部构造(raw_weights=1 直传)→ leverage_cap 无意义,不暴露。 */
 static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
     PyObject *o_alpha, *o_close, *o_open, *o_ratchet = Py_None;
     double init_cash, cost_rate, daily_borrow;
@@ -197,7 +208,7 @@ static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         nullptr,                                /* 美股研究口径不建模 halt 冻结 */
         (int64_t)T, (int64_t)S, init_cash, (int64_t)skip_warmup_ll,
-        1.0, 0.0, raw_weights,                  /* lev/conc raw_weights 旁路不触及 */
+        1.0, raw_weights,                       /* lev:raw_weights 旁路不触及 */
         stop_trail_pct, _DAT(ratchet_arr),
         ratchet_arr ? (int64_t)(PyArray_DIM(ratchet_arr, 0) / 2) : 0,
         policy,
@@ -296,7 +307,7 @@ static PyObject* py_stop_latch_scan(PyObject* self, PyObject* args) {
  *                     [raw_weights=0, trade_block=None]) -> dict
  * close/open = qfq 复权 OHLC(总收益);佣金双边 + 印花税卖出单边 + 过户费双边;long-only,无 funding/强平。
  * trade_block:(T,S) int8 涨跌停/停牌方向冻结掩码 | None(bit0=涨停禁买、bit1=跌停禁卖、3=停牌双禁)。
- * 权重外部构造(raw_weights=1 直传)→ leverage_cap/max_concentration 无意义,不暴露。 */
+ * 权重外部构造(raw_weights=1 直传)→ leverage_cap 无意义,不暴露。 */
 static PyObject* py_portfolio_bt_ashare(PyObject* self, PyObject* args) {
     PyObject *o_alpha, *o_close, *o_open, *o_tblock = Py_None;
     double init_cash, commission, stamp_tax_sell, transfer_fee;
@@ -351,7 +362,7 @@ static PyObject* py_portfolio_bt_ashare(PyObject* self, PyObject* args) {
         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         tblock_arr ? (const int8_t*)PyArray_DATA(tblock_arr) : nullptr,
         (int64_t)T, (int64_t)S, init_cash, (int64_t)skip_warmup_ll,
-        1.0, 0.0, raw_weights,                  /* lev/conc raw_weights 旁路不触及 */
+        1.0, raw_weights,                       /* lev:raw_weights 旁路不触及 */
         0.0, nullptr, 0,
         policy,
         (double*)PyArray_DATA(equity_arr), (double*)PyArray_DATA(turnover_arr),
@@ -367,7 +378,7 @@ static PyMethodDef methods[] = {
     {"portfolio_bt", py_portfolio_bt, METH_VARARGS,
      "portfolio_bt(alpha, close, open, high|None, low|None, bar_volume|None, sigma|None, funding|None, "
      "init_cash, skip_warmup, half_spread, fee, impact_Y, mmr, bars_per_year, "
-     "[leverage_cap=1.0, max_concentration=0.0, raw_weights=0, leverage_TS=None, stop_trail_pct=0.0, "
+     "[leverage_cap=1.0, raw_weights=0, leverage_TS=None, stop_trail_pct=0.0, "
      "stop_ratchet=None]) -> dict  (crypto perp / PerpPolicy)"},
     {"portfolio_bt_equity", py_portfolio_bt_equity, METH_VARARGS,
      "portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, bars_per_year, "

@@ -161,14 +161,14 @@ def cmd_gp_baseline(output: str) -> None:
     bcfg = BacktestRewardConfig()
     log(f"[gp-baseline] train={_GP_TRAIN[0]}~{_GP_TRAIN[1]}  val={_GP_VAL[0]}~{_GP_VAL[1]}  (test held out)")
     data = prepare_gp_data(_GP_TRAIN[0], _GP_TRAIN[1], _GP_VAL[0], _GP_VAL[1], fm.parquet_5m_root)
-    pool, collected = run_gp(data['train_panels'], data['train_y'],
-                             capacity=fm.pool_capacity, seed=42, log=log)
-    pool_ic, pool_ret = eval_pool_val(pool, data, bcfg)
-    log(f"[gp-baseline] pool_size={pool.size} collected={len(collected)} "
-        f"val pool_ic={pool_ic:+.4f} pool_ret={pool_ret:+.4f}")
     run_ts = os.environ.get('RUN_TS') or time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
     snap = Path(f'logs/gp_pool_{run_ts}.jsonl')
     snap.parent.mkdir(parents=True, exist_ok=True)
+    pool, collected = run_gp(data['train_panels'], data['train_y'],
+                             capacity=fm.pool_capacity, seed=42, log=log, snap_path=str(snap))
+    pool_ic, pool_ret = eval_pool_val(pool, data, bcfg)
+    log(f"[gp-baseline] pool_size={pool.size} collected={len(collected)} "
+        f"val pool_ic={pool_ic:+.4f} pool_ret={pool_ret:+.4f}")
     with open(snap, 'w', encoding='utf-8') as f:
         f.write(json.dumps({'pool': pool.to_jsonable(), 'val_pool_ic': pool_ic,
                             'val_pool_ret': pool_ret, 'collected': len(collected)},
@@ -227,15 +227,16 @@ def _run_equity_like_mining(panel, tag: str, output: str, val_frac: float = 0.25
         f"split train[:{n_train}] val[{n_train}:] (OOS)")
     log(f"[{tag}] ⚠️ universe:纳入前视由建 parquet 阶段 PIT 过滤消除(parquet 即 PIT-correct,本步只读);"
         f"幸存者偏差仅当 pull 按 membership union 拉含退市名才消(当期成分套全历史时仍在)→ IC 仍偏乐观")
-    pool, collected = run_gp(train_panels, train_y, capacity=fm.pool_capacity, seed=42, log=log)
+    run_ts = os.environ.get('RUN_TS') or time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+    snap = Path(f'logs/{tag.replace("-", "_")}_pool_{run_ts}.jsonl')
+    snap.parent.mkdir(parents=True, exist_ok=True)
+    pool, collected = run_gp(train_panels, train_y, capacity=fm.pool_capacity, seed=42, log=log,
+                             snap_path=str(snap))
     val_ics = [abs(float(ops.rank_ic(
         np.ascontiguousarray(eval_tree(m.tree, full_panels, None), dtype=np.float64), val_y)))
         for m in pool.members]
     val_ic = float(np.mean(val_ics)) if val_ics else 0.0
     log(f"[{tag}] pool_size={pool.size} collected={len(collected)} val_mean|IC|={val_ic:+.4f}(OOS)")
-    run_ts = os.environ.get('RUN_TS') or time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
-    snap = Path(f'logs/{tag.replace("-", "_")}_pool_{run_ts}.jsonl')
-    snap.parent.mkdir(parents=True, exist_ok=True)
     with open(snap, 'w', encoding='utf-8') as f:
         f.write(json.dumps({'pool': pool.to_jsonable(), 'collected': len(collected),
                             'val_mean_abs_ic': val_ic}, ensure_ascii=False) + '\n')
