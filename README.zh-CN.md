@@ -15,7 +15,7 @@
 
 1. **DSL(`evaluation/`)** — 公式 alpha 表示为强类型 AST;上下文无关文法(CFG + α-Sem-k 成本预算)约束搜索空间,保证语法/语义合法。operand 词表**由 parquet 列名自动构建**(自动分类 价/量/特征),换市场即换列。求值器把整棵 token 树编译到 C(及可选 CUDA)上批量求值,subtree-hash 缓存复用公共子树。
 
-2. **搜索(`search/`)** — `gp/`:DEAP 强类型 GP,NSGA-II 双目标(净 Sharpe + 行为多样性),在 train 段挖公式 alpha。`tail_diversity/`:尾部条件多样性搜索原型(真多样 vs 伪多样,隔离实现)。
+2. **搜索(`search/`)** — `gp/`:DEAP 强类型 GP,NSGA-II 双目标(净 Sharpe + 行为多样性),在 train 段挖公式 alpha。`alphasage/`:GFlowNet 结构感知挖矿(P(α)∝reward 采样;TB loss + 熵正则,RGCN 结构编码器,R_IC/R_SA/R_NOV 复合 reward)。`tail_diversity/`:尾部条件多样性搜索原型(真多样 vs 伪多样,隔离实现)。
 
 3. **评估 + 建池(`rl/`)** — evaluator 算 rank-IC 与组合回测收益,经多道准入门(|IC| / 正交贡献 Δ / OOS holdout)收进 `LinearAlphaPool`,池不定权。
 
@@ -30,7 +30,7 @@
 | 模块 | 职责 |
 |---|---|
 | `evaluation/` | 公式 DSL(AST / CFG / C+CUDA 求值)+ panel adapter + subtree-hash 缓存 |
-| `search/` | `gp`(DEAP 强类型 GP)+ `tail_diversity`(尾部多样性原型) |
+| `search/` | `gp`(DEAP 强类型 GP)+ `alphasage`(GFlowNet)+ `tail_diversity`(尾部多样性原型) |
 | `rl/` | evaluator + LinearAlphaPool + sizing 融合 |
 | `backtest/` | C++/OpenMP 回测内核(engine)+ 因子算子(ops C++ / ops_cuda CUDA) |
 | `markets/` | MarketProfile 市场画像抽象(日历 / 年化 / 复权 / 词表) |
@@ -58,12 +58,13 @@ GPU 研究路径(`[evaluator] device=cuda`)需另装 `cupy`;CPU 路径设 `devic
 
 ```bash
 python main.py gp-baseline output/pool.json                       # DEAP 强类型 GP(NSGA-II)— crypto 永续挖矿
+python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto 永续挖矿(独立 baseline)
 python main.py materialize output/pool.json output/materialized/  # alpha JSON → 月级 per-alpha parquet
 ```
 
 挖矿产物 = deploy bundle JSON(`{"pool": [{tree, ...}, ...]}`)+ `logs/` 快照。
 
-> 本仓为公开快照:挖矿需自备符合 `evaluation/crypto_adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `alphasage` / `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的组件(GFlowNet 引擎 / 权益数据加载器)。
+> 本仓为公开快照:挖矿需自备符合 `evaluation/crypto_adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的权益数据加载器。
 
 ---
 
@@ -74,7 +75,8 @@ python main.py materialize output/pool.json output/materialized/  # alpha JSON �
 - **Alpha Discovery via Grammar-Guided Learning and Search** —— `evaluation/grammar.py` 的 CFG 文法与 α-Sem-k 成本预算受其启发。
 - **FACT**(arXiv:2604.26666)—— `backtest/ops_cuda/` 的算子融合吸收其 compositional kernel synthesis 范式。
 - **NSGA-II**(Deb et al., 2002)+ **DEAP**(Fortin et al., 2012)—— `search/gp` 的多目标强类型 GP。
-- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** —— `[alphasage]` 配置与 `alphasage` 子命令对应的 GFlowNet 挖矿方法(引擎实现未含在本快照)。
+- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** —— `search/alphasage` GFlowNet 挖矿实现所依据的方法。
+- **torchgfn**(Lahlou et al.)—— GFlowNet 基础库(TB loss / DiscreteEnv / Sampler)。
 
 `search/tail_diversity/` 原型参考:
 - Mallela & Leonelli, 2026(arXiv:2606.16840)—— 崩盘下尾依赖图。

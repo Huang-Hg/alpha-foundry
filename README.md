@@ -15,7 +15,7 @@ End to end, the system is one pipeline — *formula search → backtest evaluati
 
 1. **DSL (`evaluation/`)** — Formulaic alphas are represented as strongly-typed ASTs. A context-free grammar (CFG + α-Sem-k cost budget) constrains the search space and guarantees syntactic/semantic validity. The operand vocabulary is **built automatically from parquet column names** (auto-classified into price / volume / feature), so switching markets just means switching columns. The evaluator compiles whole token trees to C (and optionally CUDA) for batch evaluation, with a subtree-hash cache reusing common subtrees.
 
-2. **Search (`search/`)** — `gp/`: strongly-typed GP on DEAP with two NSGA-II objectives (net Sharpe + behavioral diversity), mining formulaic alphas on the train split. `tail_diversity/`: a prototype for tail-conditional diversity search (true vs. spurious diversity, implemented in isolation).
+2. **Search (`search/`)** — `gp/`: strongly-typed GP on DEAP with two NSGA-II objectives (net Sharpe + behavioral diversity), mining formulaic alphas on the train split. `alphasage/`: structure-aware GFlowNet mining (sampling P(α)∝reward; TB loss + entropy regularization, RGCN structural encoder, composite R_IC/R_SA/R_NOV reward). `tail_diversity/`: a prototype for tail-conditional diversity search (true vs. spurious diversity, implemented in isolation).
 
 3. **Evaluation + pooling (`rl/`)** — The evaluator computes rank-IC and portfolio backtest returns; candidates pass a series of admission gates (|IC| / orthogonal contribution Δ / OOS holdout) into a `LinearAlphaPool`. The pool holds no fixed weights.
 
@@ -30,7 +30,7 @@ Module overview:
 | Module | Responsibility |
 |---|---|
 | `evaluation/` | Formula DSL (AST / CFG / C+CUDA evaluation) + panel adapter + subtree-hash cache |
-| `search/` | `gp` (strongly-typed GP on DEAP) + `tail_diversity` (tail-diversity prototype) |
+| `search/` | `gp` (strongly-typed GP on DEAP) + `alphasage` (GFlowNet) + `tail_diversity` (tail-diversity prototype) |
 | `rl/` | Evaluator + LinearAlphaPool + sizing fusion |
 | `backtest/` | C++/OpenMP backtest kernels (engine) + factor operators (ops C++ / ops_cuda CUDA) |
 | `markets/` | MarketProfile abstraction (calendar / annualization / adjustment / vocabulary) |
@@ -58,12 +58,13 @@ The GPU research path (`[evaluator] device=cuda`) additionally requires `cupy`; 
 
 ```bash
 python main.py gp-baseline output/pool.json                       # strongly-typed GP on DEAP (NSGA-II) — crypto perpetual mining
+python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto perpetual mining (independent baseline)
 python main.py materialize output/pool.json output/materialized/  # alpha JSON → monthly per-alpha parquet
 ```
 
 Mining output = a deploy-bundle JSON (`{"pool": [{tree, ...}, ...]}`) plus snapshots under `logs/`.
 
-> This repository is a public snapshot: mining requires your own parquet panel matching the format read by `evaluation/crypto_adapter.py` (the data-collection pipeline is not included). `main.py` also has `alphasage` / `gp-equity` / `gp-ashare` subcommands, which depend on components not included in this snapshot (the GFlowNet engine / equity data loaders).
+> This repository is a public snapshot: mining requires your own parquet panel matching the format read by `evaluation/crypto_adapter.py` (the data-collection pipeline is not included). `main.py` also has `gp-equity` / `gp-ashare` subcommands, which depend on equity data loaders not included in this snapshot.
 
 ---
 
@@ -74,7 +75,8 @@ This project builds on the following work, gratefully acknowledged:
 - **Alpha Discovery via Grammar-Guided Learning and Search** — the CFG grammar and α-Sem-k cost budget in `evaluation/grammar.py` are inspired by it.
 - **FACT** (arXiv:2604.26666) — the operator fusion in `backtest/ops_cuda/` adopts its compositional kernel-synthesis paradigm.
 - **NSGA-II** (Deb et al., 2002) + **DEAP** (Fortin et al., 2012) — the multi-objective strongly-typed GP in `search/gp`.
-- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** — the GFlowNet mining method behind the `[alphasage]` config section and the `alphasage` subcommand (engine implementation not included in this snapshot).
+- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** — the method behind the GFlowNet mining implementation in `search/alphasage`.
+- **torchgfn** (Lahlou et al.) — the GFlowNet foundation library (TB loss / DiscreteEnv / Sampler).
 
 References for the `search/tail_diversity/` prototype:
 - Mallela & Leonelli, 2026 (arXiv:2606.16840) — lower-tail dependence graphs under crashes.
