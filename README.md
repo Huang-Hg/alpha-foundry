@@ -1,78 +1,83 @@
-# quant — 公式化 Alpha 因子挖掘 + 回测内核
+# alpha-foundry — Formulaic Alpha Mining + Backtest Kernels
 
-用强类型遗传规划(GP)搜索公式化 alpha,经纯 C++ / OpenMP 回测内核评估,确定性 sizing 融合成组合权重。支持 crypto 永续 / 美股日线 / A 股日线三市场。
+[![CI](https://github.com/Huang-Hg/alpha-foundry/actions/workflows/ci.yml/badge.svg)](https://github.com/Huang-Hg/alpha-foundry/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+**English** | [中文](README.zh-CN.md)
+
+Search formulaic alphas with strongly-typed genetic programming (GP), evaluate them through pure C++ / OpenMP backtest kernels, and fuse them into portfolio weights via deterministic sizing. Three markets are supported: crypto perpetuals, US daily equities, and China A-share daily equities.
 
 ---
 
-## 代码逻辑
+## How it works
 
-端到端是「公式 alpha 搜索 → 回测评估 → 建池 → sizing 融合」一条流水线,各层搜索引擎无关:
+End to end, the system is one pipeline — *formula search → backtest evaluation → pool building → sizing fusion* — and every layer is search-engine agnostic:
 
-1. **DSL(`evaluation/`)** — 公式 alpha 表示为强类型 AST;上下文无关文法(CFG + α-Sem-k 成本预算)约束搜索空间,保证语法/语义合法。operand 词表**由 parquet 列名自动构建**(自动分类 价/量/特征),换市场即换列。求值器把整棵 token 树编译到 C(及可选 CUDA)上批量求值,subtree-hash 缓存复用公共子树。
+1. **DSL (`evaluation/`)** — Formulaic alphas are represented as strongly-typed ASTs. A context-free grammar (CFG + α-Sem-k cost budget) constrains the search space and guarantees syntactic/semantic validity. The operand vocabulary is **built automatically from parquet column names** (auto-classified into price / volume / feature), so switching markets just means switching columns. The evaluator compiles whole token trees to C (and optionally CUDA) for batch evaluation, with a subtree-hash cache reusing common subtrees.
 
-2. **搜索(`search/`)** — `gp/`:DEAP 强类型 GP,NSGA-II 双目标(净 Sharpe + 行为多样性),在 train 段挖公式 alpha。`tail_diversity/`:尾部条件多样性搜索原型(真多样 vs 伪多样,隔离实现)。
+2. **Search (`search/`)** — `gp/`: strongly-typed GP on DEAP with two NSGA-II objectives (net Sharpe + behavioral diversity), mining formulaic alphas on the train split. `tail_diversity/`: a prototype for tail-conditional diversity search (true vs. spurious diversity, implemented in isolation).
 
-3. **评估 + 建池(`rl/`)** — evaluator 算 rank-IC 与组合回测收益,经多道准入门(|IC| / 正交贡献 Δ / OOS holdout)收进 `LinearAlphaPool`,池不定权。
+3. **Evaluation + pooling (`rl/`)** — The evaluator computes rank-IC and portfolio backtest returns; candidates pass a series of admission gates (|IC| / orthogonal contribution Δ / OOS holdout) into a `LinearAlphaPool`. The pool holds no fixed weights.
 
-4. **回测内核(`backtest/`)** — 纯 C++ / OpenMP:`engine/` 做组合级 (T,S) 连续 target-position 回测(fee / funding / trailing-stop / 强平);`ops/` 是 C++ 因子算子,`ops_cuda/` 是 CUDA kernels(cupy NVRTC 运行时编译)。不建模订单簿。
+4. **Backtest kernels (`backtest/`)** — Pure C++ / OpenMP: `engine/` runs portfolio-level (T,S) continuous target-position backtests (fees / funding / trailing stop / liquidation); `ops/` is the C++ factor-operator library, `ops_cuda/` holds CUDA kernels (compiled at runtime via cupy NVRTC). The order book is not modeled.
 
-5. **sizing(`rl/sizing.py`)** — 确定性融合:池成员 z-score → AFF 因果滚动 lstsq 融合 → top-K 多空构造 → 组合级 vol-target 标量杠杆。
+5. **Sizing (`rl/sizing.py`)** — Deterministic fusion: z-score pool members → AFF causal rolling least-squares fusion → top-K long-short construction → portfolio-level vol-target scalar leverage.
 
-6. **市场抽象(`markets/`)** — `MarketProfile` 把日历 / 年化 / 复权口径隔离在引擎外;crypto / 美股 / A 股为三种模式,词表与画像由数据自动识别。
+6. **Market abstraction (`markets/`)** — `MarketProfile` isolates calendar / annualization / price-adjustment conventions from the engine; crypto / US equity / A-share are three profiles, with vocabulary and profile auto-detected from the data.
 
-模块速览:
+Module overview:
 
-| 模块 | 职责 |
+| Module | Responsibility |
 |---|---|
-| `evaluation/` | 公式 DSL(AST / CFG / C+CUDA 求值)+ panel adapter + subtree-hash 缓存 |
-| `search/` | `gp`(DEAP 强类型 GP)+ `tail_diversity`(尾部多样性原型) |
-| `rl/` | evaluator + LinearAlphaPool + sizing 融合 |
-| `backtest/` | C++/OpenMP 回测内核(engine)+ 因子算子(ops C++ / ops_cuda CUDA) |
-| `markets/` | MarketProfile 市场画像抽象(日历 / 年化 / 复权 / 词表) |
-| `config/` | INI ↔ dataclass 单一参数源 |
-| `main.py` | 训练侧 CLI |
+| `evaluation/` | Formula DSL (AST / CFG / C+CUDA evaluation) + panel adapter + subtree-hash cache |
+| `search/` | `gp` (strongly-typed GP on DEAP) + `tail_diversity` (tail-diversity prototype) |
+| `rl/` | Evaluator + LinearAlphaPool + sizing fusion |
+| `backtest/` | C++/OpenMP backtest kernels (engine) + factor operators (ops C++ / ops_cuda CUDA) |
+| `markets/` | MarketProfile abstraction (calendar / annualization / adjustment / vocabulary) |
+| `config/` | Single source of tunable parameters (INI ↔ dataclass) |
+| `main.py` | Research-side CLI |
 
 ---
 
-## 使用方法
+## Usage
 
-### 安装 + 构建扩展
+### Install + build extensions
 
 ```bash
 pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirement.txt   # numpy/pandas/pyarrow/torch/deap
 
-bash backtest/build.sh           # 编 C++ 扩展:backtest._bt(引擎)+ backtest.ops._ops(算子);Linux→.so / WSL→Win .pyd
-bash backtest/ops_cuda/build.sh  # CUDA 算子:cupy NVRTC 运行时编译 + 对 numpy 黄金参考验证(需 cupy + GPU)
+bash backtest/build.sh           # build C++ extensions: backtest._bt (engine) + backtest.ops._ops (operators); Linux→.so / WSL→Windows .pyd
+bash backtest/ops_cuda/build.sh  # CUDA operators: cupy NVRTC runtime compilation + verification against numpy golden reference (needs cupy + GPU)
 ```
 
-GPU 研究路径(`[evaluator] device=cuda`)需另装 `cupy`;CPU 路径设 `device=cpu`。
+The GPU research path (`[evaluator] device=cuda`) additionally requires `cupy`; for CPU set `device=cpu`.
 
-### 挖因子 / 物化
+### Mine alphas / materialize
 
-`main.py` 只接位置参数(输出路径),其余全读 `config/config.ini`:
+`main.py` takes positional arguments only (output paths); everything else is read from `config/config.ini`:
 
 ```bash
-python main.py gp-baseline output/pool.json                       # DEAP 强类型 GP(NSGA-II)— crypto 永续挖矿
-python main.py materialize output/pool.json output/materialized/  # alpha JSON → 月级 per-alpha parquet
+python main.py gp-baseline output/pool.json                       # strongly-typed GP on DEAP (NSGA-II) — crypto perpetual mining
+python main.py materialize output/pool.json output/materialized/  # alpha JSON → monthly per-alpha parquet
 ```
 
-挖矿产物 = deploy bundle JSON(`{"pool": [{tree, ...}, ...]}`)+ `logs/` 快照。
+Mining output = a deploy-bundle JSON (`{"pool": [{tree, ...}, ...]}`) plus snapshots under `logs/`.
 
-> 本仓为公开快照:挖矿需自备符合 `evaluation/crypto_adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `alphasage` / `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的组件(GFlowNet 引擎 / 权益数据加载器)。
+> This repository is a public snapshot: mining requires your own parquet panel matching the format read by `evaluation/crypto_adapter.py` (the data-collection pipeline is not included). `main.py` also has `alphasage` / `gp-equity` / `gp-ashare` subcommands, which depend on components not included in this snapshot (the GFlowNet engine / equity data loaders).
 
 ---
 
-## 参考论文 / 致谢
+## References / Acknowledgments
 
-本项目站在以下工作之上,谨致谢:
+This project builds on the following work, gratefully acknowledged:
 
-- **Alpha Discovery via Grammar-Guided Learning and Search** —— `evaluation/grammar.py` 的 CFG 文法与 α-Sem-k 成本预算受其启发。
-- **FACT**(arXiv:2604.26666)—— `backtest/ops_cuda/` 的算子融合吸收其 compositional kernel synthesis 范式。
-- **NSGA-II**(Deb et al., 2002)+ **DEAP**(Fortin et al., 2012)—— `search/gp` 的多目标强类型 GP。
-- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** —— `[alphasage]` 配置与 `alphasage` 子命令对应的 GFlowNet 挖矿方法(引擎实现未含在本快照)。
+- **Alpha Discovery via Grammar-Guided Learning and Search** — the CFG grammar and α-Sem-k cost budget in `evaluation/grammar.py` are inspired by it.
+- **FACT** (arXiv:2604.26666) — the operator fusion in `backtest/ops_cuda/` adopts its compositional kernel-synthesis paradigm.
+- **NSGA-II** (Deb et al., 2002) + **DEAP** (Fortin et al., 2012) — the multi-objective strongly-typed GP in `search/gp`.
+- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** — the GFlowNet mining method behind the `[alphasage]` config section and the `alphasage` subcommand (engine implementation not included in this snapshot).
 
-`search/tail_diversity/` 原型参考:
-- Mallela & Leonelli, 2026(arXiv:2606.16840)—— 崩盘下尾依赖图。
-- Engelke & Taeb, JMLR 2025(arXiv:2403.09604)—— eglatent 剥离共因。
-- Dominated Novelty Search, GECCO 2025(arXiv:2502.00593)—— 无界 archive 多样性。
-- Campbell et al., 2026(arXiv:2603.15963)—— 收益尾部外部坐标。
+References for the `search/tail_diversity/` prototype:
+- Mallela & Leonelli, 2026 (arXiv:2606.16840) — lower-tail dependence graphs under crashes.
+- Engelke & Taeb, JMLR 2025 (arXiv:2403.09604) — eglatent for removing common factors.
+- Dominated Novelty Search, GECCO 2025 (arXiv:2502.00593) — unbounded-archive diversity.
+- Campbell et al., 2026 (arXiv:2603.15963) — external coordinates for return tails.
