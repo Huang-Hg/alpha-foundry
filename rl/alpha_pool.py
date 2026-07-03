@@ -51,7 +51,7 @@ class PoolMember:
 class LinearAlphaPool:
     capacity: int = 16
     # 最小正交贡献 Δ = |IC|·(1−R²):admission/prune 门 = Δ < delta_floor → reject/evict。
-    delta_floor:       float = ini('alpha_pool', 'delta_floor',       0.001)
+    delta_floor:       float = ini('alpha_pool', 'delta_floor',       0.02)
     # 冗余硬门(与 |IC| 解耦):R² > r2_cap → reject / evict,强冗余强 alpha 也踢。
     r2_cap:            float = ini('alpha_pool', 'r2_cap',            0.5)
     # OOS holdout 边际门:末 holdout_frac 比例 per_t_pnl bars 作嵌入式 holdout,候选用 fit 段估的
