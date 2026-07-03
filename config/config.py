@@ -49,7 +49,7 @@ def ini(section: str, key: str, default: T) -> T:
 
 @dataclass
 class FactorMiningConfig:
-    parquet_5m_root: str = ini('factor_mining', 'parquet_5m_root', './data/parquet_5m')
+    parquet_5m_root: str = ini('factor_mining', 'parquet_5m_root', './data/parquet_5m_univ4h')
     pool_capacity:   int = ini('factor_mining', 'pool_capacity', 24)
 
 
@@ -92,14 +92,14 @@ class NeutralizeConfig:
 class AlphaSAGEConfig:
     """AlphaSAGE GFlowNet alpha-mining baseline(main.py train-alphasage 驱动,独立于 GP)。
     parquet_root / pool_capacity 复用 [factor_mining];GFN/reward 超参在 [alphasage]。"""
-    parquet_root:        str   = ini('factor_mining', 'parquet_5m_root', './data/parquet_5m')
+    parquet_root:        str   = ini('factor_mining', 'parquet_5m_root', './data/parquet_5m_univ4h')
     pool_capacity:       int   = ini('factor_mining', 'pool_capacity', 24)
     hidden_dim:          int   = ini('alphasage', 'hidden_dim', 64)
     n_layers:            int   = ini('alphasage', 'n_layers', 2)
     lr:                  float = ini('alphasage', 'lr', 0.001)
     logz_lr:             float = ini('alphasage', 'logz_lr', 0.1)       # logZ 单独高 lr(GFlowNet 铁律,防 TB 发散)
     batch_size:          int   = ini('alphasage', 'batch_size', 16)
-    n_episodes:          int   = ini('alphasage', 'n_episodes', 4000)
+    n_episodes:          int   = ini('alphasage', 'n_episodes', 1000)
     nov_weight:          float = ini('alphasage', 'nov_weight', 0.1)
     entropy_coef:        float = ini('alphasage', 'entropy_coef', 0.01)
     entropy_temperature: float = ini('alphasage', 'entropy_temperature', 1.0)

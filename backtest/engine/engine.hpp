@@ -189,7 +189,7 @@ private:
 /* ============================ 引擎 / 扫描入口 ============================ */
 
 /* 组合回测:单 bar 直达 target、rebalance @ open。outputs caller 预分配(长度 T)。
- * 成本 / carry / 强平 全经 policy;leverage_cap / max_concentration 仅 raw_weights=0 时用。
+ * 成本 / carry / 强平 全经 policy;leverage_cap 仅 raw_weights=0 时用。
  * trade_block:(T,S) int8 方向冻结掩码 | NULL(=全可交易)。bit0=禁增仓(涨停/停牌),
  *   bit1=禁减仓(跌停/停牌);受限方向的 rebalance 被冻结(target←pos,不成交不计费)——
  *   A 股涨跌停 / 停牌不可成交建模,市场无关(NULL 时 perp/equity 逐位复现)。 */
@@ -201,7 +201,7 @@ void run_portfolio(
     const int8_t* trade_block,
     int64_t T, int64_t S,
     double initial_cash, int64_t skip_warmup,
-    double leverage_cap, double max_concentration, int raw_weights,
+    double leverage_cap, int raw_weights,
     double stop_trail_pct, const double* stop_ratchet, int64_t n_ratchet,
     const MarketPolicy& policy,
     double* equity, double* turnover, double* cost_drag, int64_t* liq_at);

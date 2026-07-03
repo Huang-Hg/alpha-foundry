@@ -47,7 +47,6 @@ class BacktestRewardConfig(_MarketCostConfig):
     impact_Y:          float = ini('backtest_reward', 'impact_Y',          0.5)
     maint_margin_rate: float = 0.005
     leverage_cap:      float = ini('backtest_reward', 'leverage_cap',      2.0)    # top-K 多空 gross 目标 Σ|w|
-    max_concentration: float = ini('backtest_reward', 'max_concentration', 0.20)   # 旧 z 加权 clip;top-K 下不触及
     # top-K 多空组合构造(eval/部署共享口径;贴 alphasage/alphacfg top-K 等权 + 允许做空 + swap 缓冲)
     top_k:             int   = ini('backtest_reward', 'top_k',    8)               # 每腿仓数(多 top_k + 空 bottom_k)
     swap_n:            int   = ini('backtest_reward', 'swap_n',   2)               # 每腿每 rebalance 最多换出名数
@@ -226,7 +225,6 @@ def run_bt(deployed_signal: np.ndarray,
            bcfg: BacktestRewardConfig,
            with_equity: bool = False,
            leverage_cap: float | None = None,
-           max_concentration: float | None = None,
            valid_mask: np.ndarray | None = None,
            raw_weights: bool = False) -> Dict[str, float]:
     """跑 _bt_kernel.portfolio_bt → 字典 (total_return / sharpe / mean_turnover / liq_at)。
@@ -250,7 +248,6 @@ def run_bt(deployed_signal: np.ndarray,
         bcfg.maint_margin_rate,
         float(bcfg.bars_per_year),       # 必传:Sharpe 年化 = sqrt(bars_per_year);crypto 105120(profile 单源)
         float(leverage_cap if leverage_cap is not None else bcfg.leverage_cap),
-        float(max_concentration if max_concentration is not None else bcfg.max_concentration),
         1 if raw_weights else 0,         # raw_weights:1=直接用目标权重;0=走 signal_to_weight
         None,                            # leverage_TS:isolated 杠杆未启用
         float(bcfg.stop_trail_pct),

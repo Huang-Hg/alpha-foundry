@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from enum import Enum, IntEnum
 from typing import Dict, FrozenSet, List, Optional, Tuple
 
+from config.config import ini as _ini
 from markets.profile import ACTIVE as _ACTIVE_PROFILE
 from markets.vocabulary import OperandKind, OperandVocabulary, crypto_vocabulary
 
@@ -462,8 +463,10 @@ def initial_context(max_total_cost: int) -> ExpansionContext:
 
 
 # ============================================================================
-# 默认配置
+# DSL 搜索空间预算([dsl] 唯一来源;GFN(gfn_codec)与 GP(gp_baseline)统一经此读,
+# 2026-07-03 收单链 —— 此前 25/3 硬编码,改 ini 只动 GP 不动 GFN 的静默分叉已修)
 # ============================================================================
 
-DEFAULT_MAX_COST: int = 25     # 单棵 alpha 最大累计 cost
-DEFAULT_MIN_COST: int =  3     # 整树最小 cost(防止 alpha = 单 operand,无意义)
+DEFAULT_MAX_COST: int = int(_ini('dsl', 'max_cost', 25))   # 单棵 alpha 最大累计 cost
+DEFAULT_MIN_COST: int = int(_ini('dsl', 'min_cost', 3))    # 整树最小 cost(防 alpha = 单 operand,无意义)
+DEFAULT_MAX_LEN:  int = int(_ini('dsl', 'max_len', 5))     # 推导 production 数上限(含 window leaf;5=实测极限)

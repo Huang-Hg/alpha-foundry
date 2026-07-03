@@ -35,17 +35,13 @@ from backtest import ops
 
 def signal_to_weight(alpha: np.ndarray,
                      leverage_cap: float = 1.0,
-                     per_sym_cap: float | None = None,
                      valid_mask: np.ndarray | None = None,
                      market_neutral: bool = True) -> np.ndarray:
     """alpha (T, S) → weight (T, S) 或 alpha (S,) → weight (S,)。
 
     NaN sym → weight=0(不参与 mu/sd/L1);全行无效(n<2 或 sd≈0) → 整行 0。
-    leverage_cap=1.0 + per_sym_cap=None 时与 bt C kernel 完全一致(Σ|w| ≤ 1)。
-
-    per_sym_cap(H7 防御):L1 norm 后若 max|w|>cap,把超额削回 cap 并重 demean +
-    重 L1 norm。会使 Σ|w| 略小于 leverage_cap(把"集中头寸"换成"分散 + 略低 gross")。
-    bt 不传此参数,保持 dollar-neutral 不变量。
+    leverage_cap=1.0 时与 bt C kernel 完全一致(Σ|w| ≤ 1)。
+    (per-symbol 集中度 clip 已删 2026-07-03:与引擎 max_concentration 同族死设计,全仓零调用。)
     """
     one_d = (alpha.ndim == 1)
     a = alpha[None, :] if one_d else alpha
@@ -74,20 +70,6 @@ def signal_to_weight(alpha: np.ndarray,
                      leverage_cap / np.maximum(l1, 1e-12),
                      1.0)
     w = w * scale
-
-    # Step 5(H7,仅部署用):per-sym cap → 重 demean → 收敛。clip+demean 是 contraction,
-    # 3 轮足够收敛到 max|w| ≤ cap 且 Σw≈0(实测 24 sym basket,3 轮 max|w|-cap < 1e-12)。
-    if per_sym_cap is not None and per_sym_cap > 0:
-        for _ in range(3):
-            w = np.clip(w, -per_sym_cap, per_sym_cap)
-            w = w - w.mean(axis=1, keepdims=True)
-        # final 再 clip 一次保严格 cap(此时 Σw 可能 ~1e-N 偏离 0,可接受)
-        w = np.clip(w, -per_sym_cap, per_sym_cap)
-        l1 = np.abs(w).sum(axis=1, keepdims=True)
-        scale = np.where(l1 > leverage_cap,
-                         leverage_cap / np.maximum(l1, 1e-12),
-                         1.0)
-        w = w * scale
 
     return w[0] if one_d else w
 
@@ -265,31 +247,65 @@ def crowding_neutralize(signal: np.ndarray, Gz: np.ndarray) -> np.ndarray:
 
 
 # ============================================================================
-# 1e. AFF 自适应融合(因果滚动 lstsq)—— 取代静态 ICIR/rank_ic 池组合
+# 1e. AFF 自适应融合(因果滚动 重选+去冗余+lstsq)—— 取代静态 ICIR/rank_ic 池组合
 #
 # 2026-06-26 实证:静态 IC/ICIR 加权对弱方向因子标定差(rank_ic/icir 是秩/标准化代理,非真回归系数);
 # 多元 lstsq(真收益回归斜率)+ 时变重拟把方向池 gross 从 +1.0 拉到 +4.5(test)。两层:① 系数标定
 # (frozen lstsq 已大胜静态代理)② 时变(test 上 regime 轮动靠重拟再翻倍)。代价=换手↑(权重在漂)。
-# 全因果(只用 ≤t−lag 的已实现 (因子,y) 对拟合),warmup 前无仓。接 [[project_cost_erosion_bottleneck]]。
+#
+# 2026-07-03 补 AlphaForge/AlphaSAGE 组合的另半套(重选+去冗余;06-26 只搬了时变 lstsq 半套),
+# 同日消融裁决(scripts/diag_alphasage_net_attrib,val 2025-03~04):**池形状依赖,不可当默认**——
+#   AS 池(GFN,成员时变失稳):重选把纯α +0.04→+0.46(全池裸 lstsq 系数 OOS 失稳被修),但 net
+#   仍 −0.19(盖不过 fee+funding 地板);GP 池(宽基稳定成员):重选反砍纯α +1.17→+0.73、net
+#   +0.36→−0.05 —— GP 的力量在广度,选择毁广度。故 sel_top 默认 None(全池旧行为,GP 部署路径
+#   逐位不变),重选=opt-in 旋钮,只对 AS 型池按需开。重选只在 refit 时点(保留 refit 节奏 ——
+# 论文逐日换子集在本制度会爆换手)。全因果(选取/拟合窗均 ≤t−lag)。接 [[project_cost_erosion_bottleneck]]。
 # ============================================================================
 
 def aff_fuse(mz: np.ndarray, y_dec: np.ndarray, valid: np.ndarray,
-             refit: int = 24, lag: int = 2, warmup: int = 480) -> np.ndarray:
-    """mz (n, S, K) 成员信号面板(各成员 cs_z,方向池先 crowding_neutralize)→ 因果滚动 lstsq 融合 (n, S)。
-    每 refit dec 在 ≤t−lag 的 valid∧finite (因子,y) 对上重拟多元系数;warmup 前 NaN(无仓);系数冻结直到下次重拟。
-    lag=2 匹配 2h 前向视界(只用已实现 y);K+200 最小样本门。"""
+             refit: int = 24, lag: int = 2, warmup: int = 480,
+             sel_window: int = 480, sel_ric: float = 0.01, sel_ricir: float = 0.05,
+             sel_top: int | None = None, sel_rho: float = 0.85) -> np.ndarray:
+    """mz (n, S, K) 成员信号面板(各成员 cs_z,方向池先 crowding_neutralize)→ 因果滚动融合 (n, S)。
+    默认(sel_top=None)= 全池裸 lstsq(部署行为)。sel_top 给定 → 每 refit 先重选+去冗余:
+    近窗(sel_window)per-t IC 双硬门(|mean|>sel_ric ∧ |IR|>sel_ricir)→ |IR| 截 sel_top →
+    贪心去冗余(fit 窗 |ρ|>sel_rho)→ 子集 lstsq;门后为空 → 取 |IR| 最大 1 个(AlphaForge 同款
+    回退)。warmup 前 NaN(无仓);系数与子集冻结直到下次重拟;lag=2 匹配 2h 前向视界;K+200 最小样本门。"""
     n, S, K = mz.shape
     out = np.full((n, S), np.nan)
-    coef = None
+    coef = None; sel = None
     finy = np.isfinite(y_dec); finm = np.isfinite(mz).all(-1)
+    if sel_top is not None:
+        vm = valid & finm & finy
+        ym = np.where(vm, y_dec, np.nan)
+        pt = np.stack([ops.per_t_ic(np.ascontiguousarray(np.where(vm, mz[:, :, k], np.nan)), ym)
+                       for k in range(K)], axis=1)                    # (n, K) 逐 bar 截面 IC(bar 内量,因果)
     for t in range(n):
         if t % refit == 0 and t >= warmup:
             cut = t - lag
             m = valid[:cut] & finm[:cut] & finy[:cut]
             if int(m.sum()) > K + 200:
-                coef, *_ = np.linalg.lstsq(mz[:cut][m], y_dec[:cut][m], rcond=None)
+                if sel_top is None:
+                    sel = np.arange(K)
+                else:
+                    w = pt[max(0, cut - sel_window):cut]
+                    mu = np.nanmean(w, 0); sd = np.nanstd(w, 0)
+                    ir = mu / np.where(sd > 1e-12, sd, np.nan)
+                    absir = np.where(np.isfinite(ir), np.abs(ir), 0.0)
+                    cand = np.where((np.abs(mu) > sel_ric) & (absir > sel_ricir))[0]
+                    if cand.size == 0:
+                        cand = np.array([int(absir.argmax())])        # 全灭 → 回退最强 1 个
+                    cand = cand[np.argsort(absir[cand])[::-1]][:sel_top]
+                    Xf = mz[:cut][m]                                  # (n_obs, K) fit 窗成员矩阵
+                    C = np.corrcoef(Xf[:, cand].T) if cand.size > 1 else np.ones((1, 1))
+                    keep = []                                         # 贪心:|IR| 降序,与已留全部 |ρ|≤sel_rho 才进
+                    for i in range(cand.size):
+                        if all(abs(C[i, j]) <= sel_rho for j in keep):
+                            keep.append(i)
+                    sel = cand[keep]
+                coef, *_ = np.linalg.lstsq(mz[:cut][m][:, sel], y_dec[:cut][m], rcond=None)
         if coef is not None:
-            out[t] = mz[t] @ coef
+            out[t] = mz[t][:, sel] @ coef
     return out
 
 

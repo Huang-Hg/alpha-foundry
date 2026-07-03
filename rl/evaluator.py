@@ -175,7 +175,7 @@ class EvalConfig:
     min_finite_ratio:      float = 0.10
     min_cs_valid_ratio:    float = 0.5
     min_holdable_coverage: float = 0.70    # holdable 截面覆盖率下限(挡稀疏信号伪高 IC)
-    cos_sim_dup_threshold: float = ini('alpha_pool', 'cos_sim_threshold', 0.99)   # G2 结构去重
+    cos_sim_dup_threshold: float = ini('alpha_pool', 'cos_sim_threshold', 0.92)   # G2 结构去重
     # 准入便宜门:|rank_ic| < 此 → 跳过财富路径(reward 已现算,免费)
     admit_rankic_min:      float = 0.01
     top_k:                 int   = ini('backtest_reward', 'top_k', 8)   # top-K gross Sharpe 度量每腿仓数

@@ -27,9 +27,8 @@ constexpr double BT_STOP_WMIN = 0.02;   /* latch 释放阈 = executor._STOP_WMIN
 thread_local std::vector<double>  g_weight_TS, g_pos, g_target, g_stp_ext, g_stp_entry, g_stp_sgn;
 thread_local std::vector<uint8_t> g_stp_flags;
 
-/* step 1: alpha → weight 行内变换(市场无关:cs_zscore → clip(±3) → demean → L1 cap → conc cap)。 */
-inline void row_signal_to_weight(const double* a, double* w, int64_t S,
-                                 double cap, double max_concentration) {
+/* step 1: alpha → weight 行内变换(市场无关:cs_zscore → clip(±3) → demean → L1 cap)。 */
+inline void row_signal_to_weight(const double* a, double* w, int64_t S, double cap) {
     double sum = 0.0, sumsq = 0.0;
     int64_t n = 0;
     for (int64_t s = 0; s < S; s++) {
@@ -62,13 +61,6 @@ inline void row_signal_to_weight(const double* a, double* w, int64_t S,
     }
     double inv_l1 = (l1 > cap && cap > 0.0) ? (cap / l1) : 1.0;
     for (int64_t s = 0; s < S; s++) w[s] *= inv_l1;
-
-    if (max_concentration > 0.0) {
-        for (int64_t s = 0; s < S; s++) {
-            if (w[s] >  max_concentration) w[s] =  max_concentration;
-            if (w[s] < -max_concentration) w[s] = -max_concentration;
-        }
-    }
 }
 
 } // anonymous namespace
@@ -82,7 +74,7 @@ void run_portfolio(
     const int8_t* trade_block,
     int64_t T, int64_t S,
     double initial_cash, int64_t skip_warmup,
-    double leverage_cap, double max_concentration, int raw_weights,
+    double leverage_cap, int raw_weights,
     double stop_trail_pct, const double* stop_ratchet, int64_t n_ratchet,
     const MarketPolicy& policy,
     double* equity, double* turnover, double* cost_drag, int64_t* liq_at_out)
@@ -114,7 +106,7 @@ void run_portfolio(
                 w_row[s] = std::isfinite(v) ? v : 0.0;
             }
         } else {
-            row_signal_to_weight(&alpha[t * S], w_row, S, leverage_cap, max_concentration);
+            row_signal_to_weight(&alpha[t * S], w_row, S, leverage_cap);
         }
     }
 

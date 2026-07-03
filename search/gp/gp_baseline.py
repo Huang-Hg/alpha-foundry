@@ -7,6 +7,12 @@ Sharpe reward + G0/G1/G2 门、同 `alpha_pool.try_new` net 感知准入、同 v
 强类型(STGP):DEAP `PrimitiveSetTyped`,4 个类型 {Panel, WinT, AddC, MulC}——panel 与
 窗口/两类常数分型,结构合法(杜绝 `cs_demean(0.5)`/`ts_min(3,w)`)。文法 SemKind 的更细反冗余
 forbid 集 DEAP 单类型/槽表达不了,故 GP 探索空间略大于文法严格合法空间,由有效性门 + cost 预算剪。
+
+搜索空间预算与 GFN 同源同刻度([dsl] 唯一来源,2026-07-03 统一):cost ∈ [min_cost, max_cost],
+长度 ≤ max_len。DEAP prefix 每元素(primitive/operand/window/const terminal)≡ 文法一条 production
+→ `len(ind)` = 推导长度,与 gfn_codec.MAX_LEN 同刻度;初始化超长重采、mate/mutate 超长回退
+(staticLimit)。max_len=5 实测极限勿调大(长树 = 多重比较选择偏差,同 reward=flat 证否机制);
+旧 [gp_baseline] init_*_height / max_height 三旋钮已删(init 高度 ramped 1..max_len−1 推导得出)。
 primitive/terminal 一一镜像 DSL 算子(unary/cs/binary/binary_const/ts/pair
 + operands/WINDOWS/ADD/MULPOW consts)。
 
@@ -23,7 +29,7 @@ CUDA context 不跨 fork)。pool_obj.embed_fn=None → 无嵌入网络(G2/FailCa
 """
 from __future__ import annotations
 
-import operator
+import json
 import random
 from inspect import isclass
 from typing import Dict, List, Optional, Tuple
@@ -45,17 +51,16 @@ from rl.evaluator import EvalConfig, _REWARD_FLOOR, evaluate_alpha
 
 
 # ============================================================================
-# config([gp_baseline];cost 上限复用 [dsl])
+# config([gp_baseline];cost / 长度预算复用 [dsl],与 GFN 同源)
 # ============================================================================
-_POP        = int(ini('gp_baseline', 'pop_size', 300))
+_POP        = int(ini('gp_baseline', 'pop_size', 2000))
 _NGEN       = int(ini('gp_baseline', 'n_gen', 40))
 _CXPB       = ini('gp_baseline', 'cxpb', 0.7)
 _MUTPB      = ini('gp_baseline', 'mutpb', 0.2)
-_INIT_MIN_H = int(ini('gp_baseline', 'init_min_height', 1))
-_INIT_MAX_H = int(ini('gp_baseline', 'init_max_height', 4))
-_MAX_H      = int(ini('gp_baseline', 'max_height', 8))
-_MAX_COST   = int(ini('dsl', 'max_cost', 25))
-_MIN_COST   = int(ini('dsl', 'min_cost', 3))
+# [dsl] 预算经 grammar 常量单链同源(ini → grammar → GFN/GP;勿再直读 ini 造第二读点)
+_MAX_LEN    = _grammar.DEFAULT_MAX_LEN        # 推导 production 数上限(=len(prefix);= gfn_codec.MAX_LEN)
+_MAX_COST   = _grammar.DEFAULT_MAX_COST
+_MIN_COST   = _grammar.DEFAULT_MIN_COST
 
 
 # ============================================================================
@@ -156,6 +161,15 @@ def gen_expr(min_: int, max_: int, pset=None, type_=None) -> list:
     return _generate(min_, max_, cond, type_)
 
 
+def gen_expr_capped() -> list:
+    """初始化生成:ramped 高度 1..(max_len−1)(len≤5 时最深形态=一元链,高度 = max_len−1),
+    超长(len>max_len)重采 —— 初始种群整体落在与 GFN 相同的推导长度空间。"""
+    while True:
+        e = gen_expr(1, _MAX_LEN - 1)
+        if len(e) <= _MAX_LEN:
+            return e
+
+
 def deap_to_alphatree(ind) -> AlphaTree:
     """DEAP PrimitiveTree(prefix 序列)→ AlphaTree。递归消费 prefix:panel 子树递归建 Node,
     ts/pair 末位 WinT terminal 收进 Node.window,binary_const 末位 const terminal 建 const_add/mul 叶。"""
@@ -234,21 +248,25 @@ def _eval_and_assign(individuals, panels, y, eval_pool, cfg, cache, collected: D
     return len(valid)
 
 
-def _build_pool(collected: Dict, capacity: int):
-    """GP 收集的候选按 |rank IC| 降序过同一准入(try_new;Δ=|rank_ic|·(1−R²))建池。"""
-    pool = AlphaPool(capacity=capacity, embed_fn=None)
-    for tree, q, ptp, ric in sorted(collected.values(), key=lambda x: -x[1]):
+def _pool_offer_fresh(pool, collected: Dict, offered: set) -> None:
+    """把本代新增 collected 候选按 |rank IC| 降序过准入(try_new;Δ=|rank_ic|·(1−R²))增量入池。
+    2026-07-03 起逐代增量建池(与 alphasage 边搜边建同型,中断即有池;旧终局全排序重建已删)。
+    同 hash 只 offer 一次(hash 定树 → q 恒同);后代更强候选靠 AlphaPool prune/evict 汰换。"""
+    fresh = [(h, collected[h]) for h in collected if h not in offered]
+    for h, (tree, q, ptp, ric) in sorted(fresh, key=lambda x: -x[1][1]):
         pool.try_new(tree, ric, ptp)
-    return pool
+        offered.add(h)
 
 
 # ============================================================================
 # NSGA-II 主循环
 # ============================================================================
 def run_gp(panels, y, capacity: int, seed: int = 42,
-           pop_size: Optional[int] = None, n_gen: Optional[int] = None, log=print):
+           pop_size: Optional[int] = None, n_gen: Optional[int] = None, log=print,
+           snap_path: Optional[str] = None):
     """跑 DEAP NSGA-II 强类型 GP,返回 (pool, collected)。pop_size 须被 4 整除(selTournamentDCD)。
-    中性化(crowding 等)由统一 [neutralize] 经 EvalConfig 驱动,不在此传参。"""
+    中性化(crowding 等)由统一 [neutralize] 经 EvalConfig 驱动,不在此传参。
+    池逐代增量构建(_pool_offer_fresh),snap_path 给定时每代覆盖写 {'gen','pool'} 快照 → 中断可恢复。"""
     pop_size = pop_size or _POP
     n_gen = n_gen if n_gen is not None else _NGEN
     if pop_size % 4 != 0:
@@ -265,14 +283,15 @@ def run_gp(panels, y, capacity: int, seed: int = 42,
         f'set_vocabulary 与 panels 不一致(import 顺序或市场切换出错)'
 
     tb = base.Toolbox()
-    tb.register("expr", gen_expr, _INIT_MIN_H, _INIT_MAX_H)
+    tb.register("expr", gen_expr_capped)
     tb.register("individual", tools.initIterate, creator.IndividualGP, tb.expr)
     tb.register("population", tools.initRepeat, list, tb.individual)
     tb.register("mate", gp.cxOnePoint)
     tb.register("expr_mut", gen_expr, 0, 2)                   # mutUniform 以 (pset=, type_=) kwargs 调
     tb.register("mutate", gp.mutUniform, expr=tb.expr_mut, pset=_PSET)
-    tb.decorate("mate", gp.staticLimit(operator.attrgetter("height"), _MAX_H))
-    tb.decorate("mutate", gp.staticLimit(operator.attrgetter("height"), _MAX_H))
+    # 长度预算与 GFN 同刻度:len(prefix)=production 数;超长子代回退父本(staticLimit)
+    tb.decorate("mate", gp.staticLimit(len, _MAX_LEN))
+    tb.decorate("mutate", gp.staticLimit(len, _MAX_LEN))
     tb.register("select", tools.selNSGA2)
 
     eval_pool = AlphaPool(capacity=capacity, embed_fn=None)   # 仅供 evaluate_alpha(G2 嵌入支路跳过)
@@ -280,19 +299,30 @@ def run_gp(panels, y, capacity: int, seed: int = 42,
     cache = EvalCache(max_bytes=512 * 1024 ** 2)
     collected: Dict[int, tuple] = {}
 
+    offered: set = set()
+
+    def _pool_gen(gen: int) -> None:
+        _pool_offer_fresh(eval_pool, collected, offered)
+        if snap_path:
+            with open(snap_path, 'w', encoding='utf-8') as f:
+                f.write(json.dumps({'gen': gen, 'pool': eval_pool.to_jsonable()},
+                                   ensure_ascii=False) + '\n')
+
     pop = tb.population(n=pop_size)
     nv = _eval_and_assign(pop, panels, y, eval_pool, cfg, cache, collected)
     pop = tb.select(pop, pop_size)                            # 赋 NSGA-II crowding
-    log(f"[gp] gen00 valid={nv}/{pop_size} collected={len(collected)}")
+    _pool_gen(0)
+    log(f"[gp] gen00 valid={nv}/{pop_size} collected={len(collected)} pool={eval_pool.size}")
 
     for gen in range(1, n_gen + 1):
         offspring = tools.selTournamentDCD(pop, pop_size)
         offspring = algorithms.varAnd(offspring, tb, _CXPB, _MUTPB)
         nv = _eval_and_assign(offspring, panels, y, eval_pool, cfg, cache, collected)
         pop = tb.select(pop + offspring, pop_size)
+        _pool_gen(gen)
         best = max((c[1] for c in collected.values()), default=float('nan'))
-        log(f"[gp] gen{gen:02d} valid={nv} collected={len(collected)} best_rank_ic={best:+.4f}")
+        log(f"[gp] gen{gen:02d} valid={nv} collected={len(collected)} pool={eval_pool.size} "
+            f"best_rank_ic={best:+.4f}")
 
-    pool = _build_pool(collected, capacity)
-    log(f"[gp] done: collected={len(collected)} pool_size={pool.size}/{capacity}")
-    return pool, collected
+    log(f"[gp] done: collected={len(collected)} pool_size={eval_pool.size}/{capacity}")
+    return eval_pool, collected
