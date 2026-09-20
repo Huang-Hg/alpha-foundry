@@ -5,8 +5,8 @@ operand 身份 = **parquet 列名字符串本身**(直接进 AST `Node.op` / `pa
 价(PRICE)/量(VOLUME)/特征(FEATURE);缺基础量价列(high/low/close/volume,不含衍生)
 → 直接报错(信任前置条件,出错大声崩)。
 
-grammar 默认注入 `crypto_vocabulary()`(Binance 永续 5m panel 的 42 个 operand 列);
-换市场 = `grammar.set_vocabulary(from_columns(<其 parquet 列>))` → 重建 PRODUCTIONS。
+grammar 无默认词表(空占位);任何市场 = 挖矿入口
+`grammar.set_vocabulary(from_columns(<其 parquet 列>))` → 重建 PRODUCTIONS。
 
 分类口径(name-based,保守:歧义归 FEATURE):
   - PRICE  : 原始价格水平(open/high/low/close/adj_close/vwap/mark/index_price…)。
@@ -28,7 +28,7 @@ class OperandKind(IntEnum):
     """operand 的语义类别 —— 自动分类(classify_kind)产出 PRICE/VOLUME/FEATURE,
     用户可经 from_columns(overrides=...) 覆盖(含声明 NORMALIZED 补语义精度)。"""
     PRICE = 0       # 原始价格水平 → raw-level(G0 拒纯 wrapper);grammar 初始 SemKind=RAW
-    VOLUME = 1      # 原始成交/流动性水平 → raw-level;SemKind=RAW;5m→1h 聚合按名自动求和
+    VOLUME = 1      # 原始成交/流动性水平 → raw-level;SemKind=RAW
     FEATURE = 2     # 一般特征(funding/oi/动量/波动…)→ 非 raw-level;SemKind=RAW
     NORMALIZED = 3  # 已**截面归一**的特征(cs-zscore/percentile 类)→ 非 raw-level;SemKind=NORMALIZED
                     #   仅用户显式声明(自动分类从不产出)→ 让现成 cs-forbid 剪冗余 cs_*
@@ -136,32 +136,3 @@ def from_columns(columns: Iterable[str],
                 f'当前列={names}。基础量价数据(非衍生)必须存在,否则无法建 DSL operand 词表。')
     ops = tuple(Operand(name=c, kind=ov.get(c, classify_kind(c))) for c in names)
     return OperandVocabulary(operands=ops, name=name)
-
-
-# ============================================================================
-# crypto(Binance 永续 5m panel)默认词表 —— 直接 = parquet schema(列名直用)
-# ============================================================================
-# tenure_norm 无 parquet 列(adapter 合成 recency = exp(−tenure/288));其余 41 列 = 5m panel schema。
-# 顺序 = 旧 OperandToken 定义序 → PRODUCTIONS operand 序不变(alphasage 产生式 ID / NUM_PRODUCTIONS 稳定)。
-CRYPTO_SYNTHETIC: FrozenSet[str] = frozenset({'tenure_norm'})
-CRYPTO_OPERANDS: Tuple[str, ...] = (
-    'open', 'high', 'low', 'close', 'volume', 'quote_volume',
-    'number_of_trades', 'taker_buy_quote_volume', 'taker_imbalance',
-    'sum_oi', 'oi_log_ret', 'sum_oi_value',
-    'count_top_lsr', 'sum_top_lsr', 'count_lsr', 'sum_taker_lsr',
-    'vol_zscore_288', 'taker_imb_ema_48', 'oi_chg_48', 'oi_chg_288',
-    'ma_dist_48', 'ma_dist_288',
-    'premium_index_5m', 'funding_rate_interp', 'funding_countdown_norm',
-    'vpin_12', 'kyle_12', 'tenure_norm',
-    'intra_rv', 'intra_sum_abs_sf', 'intra_sum_abs_ret',
-    'body_pct', 'log_ret_oc', 'range_pct',
-    'ret_12', 'ret_48', 'ret_144', 'ret_288',
-    'rv_12', 'rv_48', 'rv_144', 'rv_288',
-)
-# adapter 从 parquet 读的 operand 列(排除合成 operand)。
-CRYPTO_PARQUET_COLUMNS: Tuple[str, ...] = tuple(c for c in CRYPTO_OPERANDS if c not in CRYPTO_SYNTHETIC)
-
-
-def crypto_vocabulary() -> OperandVocabulary:
-    """grammar 默认词表 —— Binance 永续 5m panel 的 42 个 operand(列名直用,自动分类价/量/特征)。"""
-    return from_columns(CRYPTO_OPERANDS, name='continuous24x7')

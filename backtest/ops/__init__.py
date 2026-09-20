@@ -26,13 +26,31 @@ tanh_  = _c.tanh_
 inv    = _c.inv
 s_log_1p = _c.s_log_1p
 
-# Elementwise binary(GT/LT 删:0/1 离散输出过拟合)
+# Elementwise binary(GT/LT 2026-07-24 恢复:自由书口径下 = regime 条件门;
+# 旧删除理由是 cs_zscore+tanh 截面分类器过拟合路径,该栈已随截面口径退役)
 add   = _c.add
 sub   = _c.sub
 mul   = _c.mul
 div   = _c.div_
 max_b = _c.max_b
 min_b = _c.min_b
+gt    = _c.gt
+lt    = _c.lt
+
+# Ternary bool 组合子(2026-07-24:事件驱动 / 精细调控)
+if_else    = _c.if_else       # if_else(cond,a,b):cond>0?a:b(cond NaN→NaN)
+trade_when = _c.trade_when    # trade_when(entry,alpha,exit):exit>0→0;entry>0→alpha;否则持有前值
+
+# 注入层 logical 族(2026-08-13:LLM 写 alpha 需完整条件逻辑)。greater/less = 上面的 gt/lt。
+# 命名尾下划线避开 Python 保留字 and/or/not。
+not_   = _c.not_              # x>0?0:1;NaN→NaN
+is_nan = _c.is_nan            # NaN?1:0 —— **唯一不传播 NaN 的算子**
+and_          = _c.and_
+or_           = _c.or_
+equal         = _c.equal
+not_equal     = _c.not_equal
+greater_equal = _c.greater_equal
+less_equal    = _c.less_equal
 
 # f32 → f64 块升格(块化求值器 operand 叶,OMP 并行)
 upcast32 = _c.upcast32
@@ -45,6 +63,20 @@ unpack_sparse = _c.unpack_sparse
 add_const = _c.add_const
 mul_const = _c.mul_const
 pow_const = _c.pow_const  # signed_power: sign(x)·|x|^k, 0→0
+
+# 注入层 panel⊕**连续**标量(2026-08-13,BRAIN transformational + time_series)
+left_tail  = _c.left_tail   # >k 全置 NaN(保左尾)
+right_tail = _c.right_tail  # <k 全置 NaN(保右尾)
+hump       = _c.hump        # |x[t]−out[t−1]|>k 才更新,否则持有前值 ⇒ 压换手(逐列时序状态机)
+
+# 注入层 rolling(2026-08-13,BRAIN time_series 族;实现 ops_inject_ts.cpp)
+ts_backfill = _c.ts_backfill   # 回看 d 行取最近有效值(**不套 min_periods**,它就是用来填 NaN 的)
+ts_median   = _c.ts_median     # 滚动中位数
+ts_av_diff  = _c.ts_av_diff    # x − mean(x,d),**均值忽略 NaN**(BRAIN 定义,与 ts_mean 相反)
+ts_decay_exp_window = _c.ts_decay_exp_window   # (x, d, factor) 权重 factor^i 归一化
+ts_scale            = _c.ts_scale              # (x, d, k) = chanpos + k
+ts_quantile         = _c.ts_quantile           # (x, d, driver) 0=gaussian 1=uniform 2=cauchy
+ts_regression       = _c.ts_regression         # (y, x, d, rettype) 0=残差 1=截距 2=斜率 3=拟合 4=R²
 
 # Rolling unary
 ts_mean  = _c.ts_mean
@@ -64,6 +96,11 @@ ts_skew  = _c.ts_skew
 ts_kurt  = _c.ts_kurt
 ts_mad   = _c.ts_mad
 ts_slope = _c.ts_slope
+# 时序书口径新增融合算子(2026-07-22:通道位置/距高点回撤/滚动z/趋势信噪比)
+ts_chanpos = _c.ts_chanpos
+ts_ddown   = _c.ts_ddown
+ts_zscore  = _c.ts_zscore
+ts_snr     = _c.ts_snr
 
 # Rolling pair
 ts_corr = _c.ts_corr
@@ -97,12 +134,16 @@ malloc_trim = _c.malloc_trim                   # glibc brk 堆空洞归还(fork 
 __all__ = [
     'abs_', 'neg', 'sign', 'log', 'sqrt_', 'square', 'tanh_', 'inv', 's_log_1p',
     'upcast32', 'pack_sparse', 'unpack_sparse',
-    'add', 'sub', 'mul', 'div', 'max_b', 'min_b',
-    'add_const', 'mul_const', 'pow_const',
+    'add', 'sub', 'mul', 'div', 'max_b', 'min_b', 'gt', 'lt', 'if_else', 'trade_when',
+    'not_', 'is_nan', 'and_', 'or_', 'equal', 'not_equal', 'greater_equal', 'less_equal',
+    'add_const', 'mul_const', 'pow_const', 'left_tail', 'right_tail', 'hump',
+    'ts_backfill', 'ts_median', 'ts_av_diff',
+    'ts_decay_exp_window', 'ts_scale', 'ts_quantile', 'ts_regression',
     'ts_mean', 'ts_std', 'ts_sum', 'ts_max', 'ts_min',
     'ts_ref', 'ts_delta', 'ts_ema', 'ts_wma',
     'ts_rank', 'ts_arg_max', 'ts_arg_min',
     'ts_skew', 'ts_kurt', 'ts_mad', 'ts_slope',
+    'ts_chanpos', 'ts_ddown', 'ts_zscore', 'ts_snr',
     'ts_corr', 'ts_cov',
     'cs_rank', 'cs_zscore', 'cs_zscore_np', 'cs_demean', 'cs_scale', 'cs_finite_validstd', 'cs_holdable_coverage',
     'ic', 'rank_ic', 'icir', 'turnover', 'per_t_ic', 'per_t_pnl', 'pnl_corr_vec',

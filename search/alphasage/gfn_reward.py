@@ -1,8 +1,10 @@
 """AlphaSAGE GFN reward 桥(2026-06-24):seq → decode → evaluate_alpha → R = R_IC + λ(T)·R_SA + η·R_NOV。
 
 忠实复刻 AlphaSAGE 三项奖励(reward = R_Q + λ·R_SA + η·R_NOV,floor 到 _R_FLOOR ≈ exp(-10)):
-    R_Q   = |候选 top-K gross Sharpe|             —— gross-aware 质量(2026-06-24 由 |rank IC| 改;治 IC↔PnL
-            背离:rv_* 类特征 IC 高但 top-K 极端押注 PnL 烂,|IC| 奖励它们 → OOS 崩,Sharpe 不奖励)
+    R_Q   = 候选 softmax 书相对 EW 的超额年化 IR,原始带符号
+            (excess-vs-EW:beta 是所有 alpha 公共分量,绝对口径奖励抢 beta —— 基准相对超额 =
+            纯截面选币;2026-07-05 top-K 全删换 softmax;2026-06-24 |rank IC|→
+            Sharpe 治 IC↔PnL 背离;2026-07-03 gross→net;删 max(·,0) 负超额给负梯度)
     R_SA  = 结构感知**稠密**奖励(论文核心 = 参考 `alpha_pool.compute_ssl_reward`,专治 reward 稀疏):
             候选的 RGCN 结构签名 e 在**池成员**里取 k 个最近结构邻居,
             w_k = softmax(−‖e−e_k‖²/τ)(结构嵌入相似度权重),
@@ -10,7 +12,8 @@
             consistency = Σ_k w_k·d_behav_k,R_SA = exp(−consistency) ∈ (0,1]。
             "结构相似 → 行为应相似":结构邻域行为越一致 R_SA 越高 → 把稀疏 IC 平滑成稠密结构信号。
             池 < 2 成员 → 0(同参考 size<=1 路径)。
-    R_NOV = 1 − R²,R² = max_k corr(候选 per_t_pnl, 成员_k)²  —— 与池最像成员的平方 PnL 相关 = 正交新颖度
+    R_NOV = 1 − R²,R² = 候选 per_t_pnl 对池成员子空间的 OLS R²(2026-07-05 与准入同口径升级;
+            旧 max-pairwise 口径下同族兄弟 R_NOV≈0.54 恒有甜头 → 一族 24 连;子空间口径族饱和后 →0)
     λ(T)/η 由 trainer 写入 sched(λ 高→低:早期靠结构稠密先验导航探索,晚期让 R_IC 主导;η 常数 = 真正交门)。
 每个采样 alpha 评估后 `pool.try_new` 生长正交池(自带 IC+Δ+holdout 准入门;池 admission = IC+行为新颖,
 与参考一致,**不开** embedding G2 结构去重 → 不动已验证 eval gate)。非法/越成本/below-gate → R=floor,不入池。
@@ -63,7 +66,7 @@ def _r_sa(cand_emb: np.ndarray, cand_pnl_std: np.ndarray, pool: AlphaPool,
 class _Stats:
     """批级 reward 诊断累加器(区分模式坍缩 vs IC 噪声墙)。trainer 每 log 窗口读 + reset。"""
     __slots__ = ('n', 'floor_incomplete', 'floor_cost', 'floor_belowgate',
-                 'valid', 'hashes', 'valid_abs_ics', 'len_sum', 'sa_sum')
+                 'valid', 'hashes', 'valid_edges', 'len_sum', 'sa_sum')
 
     def __init__(self):
         self.reset()
@@ -75,17 +78,17 @@ class _Stats:
         self.floor_belowgate = 0
         self.valid = 0
         self.hashes = set()
-        self.valid_abs_ics = []
+        self.valid_edges = []
         self.len_sum = 0
         self.sa_sum = 0.0
 
 
-def make_reward_fn(panels: Dict[str, np.ndarray], y: np.ndarray,
+def make_reward_fn(panels: Dict[str, np.ndarray],
                    pool: AlphaPool, nov_weight: float,
                    embedder: Callable[[List], np.ndarray], sched: Dict[str, float],
                    r_sa_k: int, r_sa_tau: float,
                    cache_bytes: int = 512 * 1024 ** 2) -> Callable[[List[int]], float]:
-    """构造 GFNEnv 注入的 reward_fn(闭包持 panels/y/pool/cache/embedder/sched)。
+    """构造 GFNEnv 注入的 reward_fn(闭包持 panels/pool/cache/embedder/sched)。
     embedder:List[AlphaTree] → (n,H) 结构签名(= RGCN.embed_trees,R_SA 用)。
     sched:trainer 每 episode 写 {'lam':λ(T), 'eta':η}(λ 时变退火)。
     pool 在训练中被原地生长;reward_fn.stats 暴露批级诊断(trainer 读取)。"""
@@ -104,22 +107,28 @@ def make_reward_fn(panels: Dict[str, np.ndarray], y: np.ndarray,
         if not cost_ok(tree):
             stats.floor_cost += 1
             return _R_FLOOR
-        m = evaluate_alpha(tree, panels, y, pool, cfg, cache, diagnostics=False)
+        m = evaluate_alpha(tree, panels, cfg, cache)
         ptp = m['per_t_pnl']
         if ptp is None:                                       # below-gate / 坏结构
             stats.floor_belowgate += 1
             return _R_FLOOR
         stats.valid += 1
-        stats.valid_abs_ics.append(abs(m['rank_ic']))           # diag 仍记 |IC| 作参考(reward 已改 Sharpe)
-        # 质量 = |top-K gross Sharpe|(gross-aware reward,治 |IC| 的 IC↔PnL 背离:rv_* 类 IC 高但极端 PnL 烂 → Sharpe 低)
-        r_q = abs(m['topk_sharpe'])
-        r_nov = 1.0 - pool._proj_r2(pool._corr_with_pool(ptp))   # 1 − max_k corr²(候选 vs 池)
+        # 质量 = **R4 滚动折中位 edge**(2026-07-25 用户令接入滚动时序 CV;evaluator._qnt_ts_net
+        # 5 折 ~18mo,折 edge 中位数,零增量回测):时间轴尖峰(单 regime 走运树)在取出统计量处
+        # 就不给分,>0 ⇔ ≥3/5 折胜锚;**原始带符号**(删 max(·,0):负给负梯度;池准入才 >0 截)。
+        # 全窗 edge 仍在 m['net_sharpe'] 供日志/电池。谱系:R3 邻域 min/R1 TM 07-24 A/B 证否
+        # (判决见 [ts_book] INI 注释);折一致性作**后置选树滤器** 07-22 证否 —— R4 换的是
+        # 取出统计量本身而非后置滤,效果预注册待 q25k 仲裁,勿混谱系。
+        r_q = m['cv_edge']
+        stats.valid_edges.append(r_q)                         # 纯诊断日志
+        r_nov = 1.0 - pool.subspace_r2(ptp)      # 1 − 子空间 R²(2026-07-05 与准入同口径升级)
         # R_SA 在 try_new 之前算(候选尚未入池 → 不会成为自身邻居,同参考 exclude_self)。
         cand_emb = embedder([tree])[0]                        # RGCN 结构签名(H,)
         r_sa = _r_sa(cand_emb, _standardize(ptp), pool, embedder, r_sa_k, r_sa_tau)
         stats.sa_sum += r_sa
-        # 池按 Sharpe 质量(cand_quality)留/剔;PoolMember.rank_ic 仍存真 IC 给 bundle/参考。
-        pool.try_new(tree, m['rank_ic'], ptp, cand_quality=r_q)
+        # 池按 cv_edge 质量 + 正交 Δ 留/剔(与 reward 同刀;snapshot 'edge' 字段 07-25 起
+        # 语义 = cv_edge)。
+        pool.try_new(tree, ptp, r_q)
         return max(r_q + sched['lam'] * r_sa + sched['eta'] * r_nov, _R_FLOOR)
 
     reward_fn.stats = stats

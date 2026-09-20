@@ -230,6 +230,185 @@ void fm_ts_mad(const double* x, double* out, int64_t T, int64_t S, int64_t w, in
 }
 
 
+/* ============================================================================
+ * 时序书口径新增融合算子(2026-07-22)—— 文献对齐的 4 个单-production 趋势原语:
+ *   ts_chanpos  Donchian 通道位置 (x−min)/(max−min) ∈[0,1](Zarattini 突破集成)
+ *   ts_ddown    距滚动高点回撤 x/max−1 ≤0(George-Hwang nearness-to-high)
+ *   ts_zscore   滚动 z=(x−μ)/σ(归一趋势;ddof=0)
+ *   ts_snr      趋势信噪比 μ/σ(rolling t-stat;AdaptiveTrend 趋势质量门)
+ * 组合语义在 max_len=5 预算下用现有算子拼不出(各需 ≥4 production)→ 融合成 1;
+ * 实现同 ts_mad 模式:滑动 NaN 计数 + 有效窗 O(w) 重扫(数值稳,免增量幂和漂移),
+ * 窗含 NaN → NaN;退化窗(极差/σ≈0)→ chanpos=0.5,zscore/snr/ddown=NaN。
+ * ============================================================================ */
+#define TS_FUSED_LOOP(...)                                                           \
+    _Pragma("omp parallel for schedule(static)")                                     \
+    for (int64_t s = 0; s < S; s++) {                                                \
+        int64_t vlo, vhi;                                                            \
+        if (rng_lo) { vlo = rng_lo[s]; vhi = rng_hi[s]; }                            \
+        else        { _col_range(x, T, ldx, s, &vlo, &vhi); }                        \
+        if (vlo > vhi) { for (int64_t t = 0; t < T; t++) out[t * ldo + s] = NAN; continue; } \
+        for (int64_t t = 0; t < vlo; t++)      out[t * ldo + s] = NAN;               \
+        for (int64_t t = vhi + 1; t < T; t++)  out[t * ldo + s] = NAN;               \
+        int64_t cnt_nan = 0;                                                         \
+        for (int64_t t = vlo; t <= vhi; t++) {                                       \
+            double v = x[t * ldx + s];                                               \
+            if (isnan(v)) cnt_nan++;                                                 \
+            if (t - vlo >= w) {                                                      \
+                double old = x[(t - w) * ldx + s];                                   \
+                if (isnan(old)) cnt_nan--;                                           \
+            }                                                                        \
+            if (t - vlo >= w - 1 && cnt_nan == 0) { __VA_ARGS__ }                    \
+            else out[t * ldo + s] = NAN;                                             \
+        }                                                                            \
+    }
+
+/* ---------------------------------------------------------------------------
+ * 逐列滚动 min/max —— 双单调 deque,O(1) 摊销。chanpos / ddown / ts_scale 共用。
+ *
+ * 2026-08-13:这三个算子原先各自在窗内做**逐点 O(w) 重扫**,而同文件上方的
+ * rolling_minmax_impl 早就是 deque 版了。实测(3103×74 面板):chanpos 从 d=5 的
+ * 0.77ms 涨到 d=1500 的 7.12ms(9.3×),而 ts_min/ts_max 全程平 1.3ms。
+ *
+ * **这个替换逐位不变**:min/max 是精确选择(挑出窗内的某一个数),不做任何算术 ——
+ * deque 与重扫挑出的是同一个 double,下游 (v−mn)/(mx−mn) 逐字相同。
+ * (对比:zscore/snr/skew/kurt 的窗内累加**不能**这样换 —— 改成增量会挪动浮点运算顺序,
+ *  而 CPU f64 是全系统的黄金参照。那几个保持原样,见 skew 上方 2026-06-20 的记录。)
+ *
+ * ok[t]=1 ⇔ 窗满且窗内无 NaN,判据与 TS_FUSED_LOOP 逐字一致(含 rng 裁剪与
+ * `t - vlo >= w-1` 的累计起点约定)。deque scratch 由调用方给,各 w 个 int64。
+ * --------------------------------------------------------------------------- */
+void fm_win_minmax_col(const double* x, int64_t T, int64_t ldx, int64_t s, int64_t w,
+                            const int64_t* rng_lo, const int64_t* rng_hi,
+                            int64_t* dq_lo, int64_t* dq_hi,
+                            double* mn, double* mx, unsigned char* ok) {
+    for (int64_t t = 0; t < T; t++) ok[t] = 0;
+    int64_t vlo, vhi;
+    if (rng_lo) { vlo = rng_lo[s]; vhi = rng_hi[s]; }
+    else        { _col_range(x, T, ldx, s, &vlo, &vhi); }
+    if (vlo > vhi) return;
+    int64_t hlo = 0, tlo = 0, hhi = 0, thi = 0;
+    int64_t cnt_nan = 0;
+    for (int64_t t = vlo; t <= vhi; t++) {
+        int64_t lo = t - w + 1;             /* lo-pop 必须先于 push(同 rolling_minmax_impl 的环形槽约定) */
+        while (tlo > hlo && dq_lo[hlo % w] < lo) hlo++;
+        while (thi > hhi && dq_hi[hhi % w] < lo) hhi++;
+        double v = x[t * ldx + s];
+        if (isnan(v)) {
+            cnt_nan++;
+        } else {
+            while (tlo > hlo && x[dq_lo[(tlo - 1) % w] * ldx + s] >= v) tlo--;
+            dq_lo[tlo % w] = t; tlo++;
+            while (thi > hhi && x[dq_hi[(thi - 1) % w] * ldx + s] <= v) thi--;
+            dq_hi[thi % w] = t; thi++;
+        }
+        if (t - vlo >= w) {
+            double old = x[(t - w) * ldx + s];
+            if (isnan(old)) cnt_nan--;
+        }
+        if (t - vlo >= w - 1 && cnt_nan == 0 && tlo > hlo && thi > hhi) {
+            mn[t] = x[dq_lo[hlo % w] * ldx + s];
+            mx[t] = x[dq_hi[hhi % w] * ldx + s];
+            ok[t] = 1;
+        }
+    }
+}
+
+/* chanpos / ddown 的外壳:每线程一份 scratch,逐列取极值后套各自公式。 */
+#define TS_MINMAX_LOOP(...)                                                          \
+    _Pragma("omp parallel")                                                          \
+    {                                                                                \
+        std::vector<int64_t> _dq((size_t)(2 * w));                                   \
+        std::vector<double> _mn((size_t)T), _mx((size_t)T);                          \
+        std::vector<unsigned char> _ok((size_t)T);                                   \
+        _Pragma("omp for schedule(static)")                                          \
+        for (int64_t s = 0; s < S; s++) {                                            \
+            fm_win_minmax_col(x, T, ldx, s, w, rng_lo, rng_hi,                         \
+                            _dq.data(), _dq.data() + w,                              \
+                            _mn.data(), _mx.data(), _ok.data());                     \
+            for (int64_t t = 0; t < T; t++) {                                        \
+                if (!_ok[t]) { out[t * ldo + s] = NAN; continue; }                   \
+                double v = x[t * ldx + s], mn = _mn[t], mx = _mx[t];                 \
+                (void)v; (void)mn; (void)mx;                                         \
+                __VA_ARGS__                                                          \
+            }                                                                        \
+        }                                                                            \
+    }
+
+/* deque 版对小窗**反而更慢**:实测 chanpos d=5 时重扫 0.77ms、deque 2.41ms —— 窗内只有
+ * 5 个数,重扫是 cache-hot 的 5 次比较,而 deque 要维护环形缓冲 + 三个 T 长临时数组。
+ * 交叉点实测在 d≈230(d=120 重扫 1.63 vs deque 2.74;d=365 重扫 4.01 vs deque 2.76)。
+ * ⇒ 按窗口分派,与 fm_ts_rank 的 `w<32 走 naive` 同一先例。两支**互相逐位一致**
+ * (都只是挑出窗内极值),refdump 的窗口集刻意跨过这个阈值两侧。 */
+#define TS_MINMAX_W_MIN 256
+
+void fm_ts_chanpos(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    if (w < TS_MINMAX_W_MIN) {
+        TS_FUSED_LOOP({
+            double mn = v, mx = v;
+            for (int64_t k = t - w + 1; k <= t; k++) {
+                double u = x[k * ldx + s];
+                if (u < mn) mn = u;
+                if (u > mx) mx = u;
+            }
+            out[t * ldo + s] = (mx > mn) ? (v - mn) / (mx - mn) : 0.5;
+        })
+        return;
+    }
+    TS_MINMAX_LOOP({
+        out[t * ldo + s] = (mx > mn) ? (v - mn) / (mx - mn) : 0.5;
+    })
+}
+
+void fm_ts_ddown(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    if (w < TS_MINMAX_W_MIN) {
+        TS_FUSED_LOOP({
+            double mx = v;
+            for (int64_t k = t - w + 1; k <= t; k++) {
+                double u = x[k * ldx + s];
+                if (u > mx) mx = u;
+            }
+            out[t * ldo + s] = (mx > 0.0) ? v / mx - 1.0 : NAN;
+        })
+        return;
+    }
+    TS_MINMAX_LOOP({
+        out[t * ldo + s] = (mx > 0.0) ? v / mx - 1.0 : NAN;
+    })
+}
+
+#undef TS_MINMAX_LOOP
+
+void fm_ts_zscore(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    TS_FUSED_LOOP({
+        double sum = 0.0;
+        for (int64_t k = t - w + 1; k <= t; k++) sum += x[k * ldx + s];
+        double mean = sum / (double)w, ss = 0.0;
+        for (int64_t k = t - w + 1; k <= t; k++) {
+            double d = x[k * ldx + s] - mean;
+            ss += d * d;
+        }
+        double sd = sqrt(ss / (double)w);
+        out[t * ldo + s] = (sd > 1e-12) ? (v - mean) / sd : NAN;
+    })
+}
+
+void fm_ts_snr(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    TS_FUSED_LOOP({
+        double sum = 0.0;
+        for (int64_t k = t - w + 1; k <= t; k++) sum += x[k * ldx + s];
+        double mean = sum / (double)w, ss = 0.0;
+        for (int64_t k = t - w + 1; k <= t; k++) {
+            double d = x[k * ldx + s] - mean;
+            ss += d * d;
+        }
+        double sd = sqrt(ss / (double)w);
+        out[t * ldo + s] = (sd > 1e-12) ? mean / sd : NAN;
+    })
+}
+
+#undef TS_FUSED_LOOP
+
+
 /* ts_skew: 滚动 3 阶标准化中心矩 = E[((x-μ)/σ)^3]。
  * **窗内两遍直接中心化**(pass1 窗均值 → pass2 Σ(v-mean)^p):数值稳,消 e2−mu² 抵消,
  * 与 GPU moment_core 逐窗两遍同算法同顺序 → 逐位一致(2026-06-20:旧增量滚动幂和在长列上

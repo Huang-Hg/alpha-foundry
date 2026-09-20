@@ -1,7 +1,7 @@
 /* factor_mining/ops/ops_elementwise.c — 元素逐位算子(无窗口、无截面、无 reduction)
  *
  * unary:fm_abs / fm_neg / fm_sign / fm_log / fm_sqrt_ / fm_square / fm_tanh / fm_inv / fm_s_log_1p
- * binary:fm_add / fm_sub / fm_mul / fm_div / fm_max_b / fm_min_b
+ * binary:fm_add / fm_sub / fm_mul / fm_div / fm_max_b / fm_min_b / fm_gt / fm_lt
  * binary_const:fm_add_const / fm_mul_const / fm_pow_const(signed_power)
  *
  * 设计原则:
@@ -166,6 +166,62 @@ FM_BIN_ARITH(fm_div, (vb == 0.0) ? NAN : (va / vb))
 
 FM_BIN_NAN(fm_max_b, (va > vb) ? va : vb)
 FM_BIN_NAN(fm_min_b, (va < vb) ? va : vb)
+/* 条件门(2026-07-24 GT/LT 恢复,自由书口径):输出 0/1 指示,NaN 传播。 */
+FM_BIN_NAN(fm_gt,    (va > vb) ? 1.0 : 0.0)
+FM_BIN_NAN(fm_lt,    (va < vb) ? 1.0 : 0.0)
+
+
+/* ---------- Ternary bool 组合子(2026-07-24,事件驱动/精细调控) ---------- */
+
+/* if_else:cond NaN → NaN;cond>0 → a,否则 b(a/b 的 NaN 自然传播)。 */
+void fm_if_else(const double* c, const double* a, const double* b, double* out,
+                int64_t T, int64_t S, int64_t ldc, int64_t lda, int64_t ldb, int64_t ldo) {
+    #pragma omp parallel for schedule(static)
+    for (int64_t t = 0; t < T; t++) {
+        const double* cr  = c + t * ldc;
+        const double* ar  = a + t * lda;
+        const double* br  = b + t * ldb;
+        double*       outr = out + t * ldo;
+        for (int64_t s = 0; s < S; s++) {
+            double vc = cr[s];
+            outr[s] = isnan(vc) ? NAN : (vc > 0.0 ? ar[s] : br[s]);
+        }
+    }
+}
+
+/* trade_when(WorldQuant 语义,逐列时序状态机,因果:仅依赖 ≤t):
+ *   exit>0 → 0;否则 entry>0 → alpha[t];否则持有前值(t=0 前值=0)。
+ *   entry/exit NaN 比较恒 false → 持有;alpha NaN 在进场时自然传播(exit 可清除)。 */
+void fm_trade_when(const double* e, const double* a, const double* x, double* out,
+                   int64_t T, int64_t S, int64_t lde, int64_t lda, int64_t ldx, int64_t ldo) {
+    #pragma omp parallel for schedule(static)
+    for (int64_t s = 0; s < S; s++) {
+        double prev = 0.0;
+        for (int64_t t = 0; t < T; t++) {
+            double v = (x[t * ldx + s] > 0.0) ? 0.0
+                     : ((e[t * lde + s] > 0.0) ? a[t * lda + s] : prev);
+            out[t * ldo + s] = v;
+            prev = v;
+        }
+    }
+}
+
+
+/* ---------- 注入层算子(2026-08-13,用户指令:LLM 写 alpha 需完整条件逻辑 + 换手控制) ----------
+ * 来源 = BRAIN logical / transformational 族。枚举见 grammar.LogicalUnaryOp /
+ * LogicalBinaryOp / ParamOp:**注入层专用,不入 GP/GFN 搜索产生式**(同 TernaryOp 先例)。
+ * NaN 约定与既有 gt/lt 一致(任一侧 NaN → NaN);唯一例外 fm_is_nan —— 它就是用来测 NaN 的,
+ * 传播 NaN 会让它永远返回不了 1。 */
+
+FM_UNARY(fm_not,    isnan(v) ? NAN : ((v > 0.0) ? 0.0 : 1.0))
+FM_UNARY(fm_is_nan, isnan(v) ? 1.0 : 0.0)
+
+FM_BIN_NAN(fm_and,           (va > 0.0 && vb > 0.0) ? 1.0 : 0.0)
+FM_BIN_NAN(fm_or,            (va > 0.0 || vb > 0.0) ? 1.0 : 0.0)
+FM_BIN_NAN(fm_equal,         (va == vb) ? 1.0 : 0.0)
+FM_BIN_NAN(fm_not_equal,     (va != vb) ? 1.0 : 0.0)
+FM_BIN_NAN(fm_greater_equal, (va >= vb) ? 1.0 : 0.0)
+FM_BIN_NAN(fm_less_equal,    (va <= vb) ? 1.0 : 0.0)
 
 
 /* ----- binary_const(panel ⊕ scalar k,1 SIMD pass) ----- */
@@ -186,6 +242,28 @@ void name(const double* x, double k, double* out, int64_t T, int64_t S, \
 
 FM_BIN_CONST(fm_add_const, v + k)
 FM_BIN_CONST(fm_mul_const, v * k)
+
+/* 注入层 panel⊕连续标量(BRAIN transformational 族):尾部截断。NaN 自然保持 NaN
+ * (isnan 比较恒 false ⇒ 走 else 分支返回 v,即 NaN)。 */
+FM_BIN_CONST(fm_left_tail,  (v > k) ? NAN : v)   /* > maximum 全置 NaN,保左尾 */
+FM_BIN_CONST(fm_right_tail, (v < k) ? NAN : v)   /* < minimum 全置 NaN,保右尾 */
+
+/* hump(x, k)(BRAIN time_series 族):|x[t] − out[t−1]| > k 才更新,否则持有前值 ⇒ 压换手。
+ * 逐列时序状态机,因果(仅依赖 ≤t),列间独立 ⇒ 按列 OMP(同 fm_trade_when 的并行轴)。
+ * 前值未定义时首个有限值直接进入;x[t]=NaN 不构成"变化",持有前值。
+ * k<0 时每步都更新(退化为恒等),不做特判 —— 交由调用方语义。 */
+void fm_hump(const double* x, double k, double* out, int64_t T, int64_t S,
+             int64_t ldx, int64_t ldo) {
+    #pragma omp parallel for schedule(static)
+    for (int64_t s = 0; s < S; s++) {
+        double prev = NAN;
+        for (int64_t t = 0; t < T; t++) {
+            double v = x[t * ldx + s];
+            if (!isnan(v) && (isnan(prev) || fabs(v - prev) > k)) prev = v;
+            out[t * ldo + s] = prev;
+        }
+    }
+}
 
 /* signed_power 内循环模板:0→0(防 0^k=inf/NaN @ k<0);其他 sign(v)·P(av),av=|v|。
  * NaN 由 fabs/P 自然传播(fabs(NaN)=NaN);0 检查不可省。P 表达式按 k 特化。 */

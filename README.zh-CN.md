@@ -5,7 +5,7 @@
 
 [English](README.md) | **中文**
 
-用强类型遗传规划(GP)搜索公式化 alpha,经纯 C++ / OpenMP 回测内核评估,确定性 sizing 融合成组合权重。支持 crypto 永续 / 美股日线 / A 股日线三市场。
+用强类型遗传规划(GP)搜索公式化 alpha,经纯 C++ / OpenMP 回测内核评估,确定性 sizing 融合成组合权重。支持 crypto 日线(Quantiacs 式成本模型)/ 美股日线 / A 股日线三市场。
 
 ---
 
@@ -19,7 +19,7 @@
 
 3. **评估 + 建池(`rl/`)** — evaluator 算 rank-IC 与组合回测收益,经多道准入门(|IC| / 正交贡献 Δ / OOS holdout)收进 `LinearAlphaPool`,池不定权。
 
-4. **回测内核(`backtest/`)** — 纯 C++ / OpenMP:`engine/` 做组合级 (T,S) 连续 target-position 回测(fee / funding / trailing-stop / 强平);`ops/` 是 C++ 因子算子,`ops_cuda/` 是 CUDA kernels(cupy NVRTC 运行时编译)。不建模订单簿。
+4. **回测内核(`backtest/`)** — 纯 C++ / OpenMP:`engine/` 做组合级 (T,S) 连续 target-position 回测(佣金 / 借券费 / 印花税卖出单边 / 涨跌停冻结)+ Quantiacs crypto 日线 1:1 内核(ATR14 滑点);`ops/` 是 C++ 因子算子,`ops_cuda/` 是 CUDA kernels(cupy NVRTC 运行时编译)。不建模订单簿。
 
 5. **sizing(`rl/sizing.py`)** — 确定性融合:池成员 z-score → AFF 因果滚动 lstsq 融合 → top-K 多空构造 → 组合级 vol-target 标量杠杆。
 
@@ -52,19 +52,18 @@ bash backtest/ops_cuda/build.sh  # CUDA 算子:cupy NVRTC 运行时编译 + 对 
 
 GPU 研究路径(`[evaluator] device=cuda`)需另装 `cupy`;CPU 路径设 `device=cpu`。
 
-### 挖因子 / 物化
+### 挖因子
 
 `main.py` 只接位置参数(输出路径),其余全读 `config/config.ini`:
 
 ```bash
-python main.py gp-baseline output/pool.json                       # DEAP 强类型 GP(NSGA-II)— crypto 永续挖矿
-python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto 永续挖矿(独立 baseline)
-python main.py materialize output/pool.json output/materialized/  # alpha JSON → 月级 per-alpha parquet
+python main.py gp-baseline output/pool.json                       # DEAP 强类型 GP(NSGA-II)— crypto 日线挖矿
+python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto 日线挖矿(独立 baseline)
 ```
 
 挖矿产物 = deploy bundle JSON(`{"pool": [{tree, ...}, ...]}`)+ `logs/` 快照。
 
-> 本仓为公开快照:挖矿需自备符合 `evaluation/crypto_adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的权益数据加载器。
+> 本仓为公开快照:挖矿需自备 parquet 面板(预期布局见 `main.py` 的 `prepare_gp_data`;数据采集管线未含)。
 
 ---
 

@@ -20,15 +20,16 @@ assert z.shape == (T, S)
 
 # all three portfolio backtest kernels via their Python wrappers
 from rl.backtest_reward import (BacktestRewardConfig, EquityCostsConfig, AShareCostsConfig,
-                                run_bt, run_equity_bt, run_ashare_bt)
+                                prepare_qnt_static, run_bt, run_equity_bt, run_ashare_bt)
 
-sig = np.ascontiguousarray(rng.standard_normal((T, S)))
-qvol = np.full((T, S), 1e6)
-vol = np.full((T, S), 0.01)
-fund = np.zeros((T, S))
-r = run_bt(sig, close, opn, qvol, vol, fund, BacktestRewardConfig())
+high = np.ascontiguousarray(close * 1.01)
+low = np.ascontiguousarray(close * 0.99)
+qs = prepare_qnt_static(opn, high, low, close)
+wq = np.ascontiguousarray(np.abs(rng.standard_normal((T, S))))
+r = run_bt(wq, qs, 20, BacktestRewardConfig())
 print('crypto ', {k: round(v, 4) for k, v in r.items()})
 
+sig = np.ascontiguousarray(rng.standard_normal((T, S)))
 w = sig - sig.mean(1, keepdims=True)
 w /= np.abs(w).sum(1, keepdims=True)
 r = run_equity_bt(np.ascontiguousarray(w), close, opn, EquityCostsConfig())
@@ -38,13 +39,15 @@ wl = np.full((T, S), 1.0 / S)
 r = run_ashare_bt(wl, close, opn, AShareCostsConfig())
 print('ashare ', {k: round(v, 4) for k, v in r.items()})
 
-# bars_per_year is a required positional arg on every kernel (no hidden default)
+# bars_per_year / ppy is a required positional arg on every kernel (no hidden default)
 from backtest import _bt
 zero3 = np.zeros((10, 2))
 one3 = np.ones((10, 2))
+ul3 = np.ones((10, 2), dtype=np.uint8)
 for name, args in (
     ('portfolio_bt_equity', (zero3, one3, one3, 1e5, 0, 0.0005, 0.0)),
     ('portfolio_bt_ashare', (zero3, one3, one3, 1e5, 0, 0.00025, 0.0005, 0.00001)),
+    ('portfolio_bt_qnt',    (zero3, one3, one3, one3, one3, one3, ul3, 0)),
 ):
     try:
         getattr(_bt, name)(*args)

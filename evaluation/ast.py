@@ -4,7 +4,7 @@ Alpha 表达式 AST(由 grammar 产生式构造)
 
 节点形式:
     Leaf:     ('operand', 列名 str)  或  ('const_add'|'const_mul', float)
-    Internal: ('unary'|'cs', op, child)
+    Internal: ('unary', op, child)
               ('binary',     op, child_l, child_r)
               ('ts',         op, w, child)
               ('pair',       op, w, child_l, child_r)
@@ -27,9 +27,26 @@ from typing import List, Optional, Tuple
 
 from evaluation import grammar as _grammar
 from evaluation.grammar import (
-    BinaryOp, ConstBinaryOp, CsOp, PairOp, Production, TsOp, UnaryOp,
+    BinaryOp, ConstBinaryOp, LogicalBinaryOp, LogicalUnaryOp, PairOp, PairParamOp,
+    ParamOp, Production, TernaryOp, TsInjOp, TsOp, TsParamOp, UnaryOp,
     PRODUCTION_COSTS,
 )
+
+# 每个节点 kind 可能的 op 枚举(搜索层在前、注入层在后)。反序列化按序试 —— 注入层算子
+# (LogicalUnaryOp/LogicalBinaryOp/ParamOp/TsInjOp/…)复用既有 kind,单枚举查找会 ValueError。
+_KIND_ENUMS = {
+    'unary':        (UnaryOp, LogicalUnaryOp),
+    'binary':       (BinaryOp, LogicalBinaryOp),
+    'binary_const': (ConstBinaryOp, ParamOp),
+    'ternary':      (TernaryOp,),
+    'ts':           (TsOp, TsInjOp),
+    'pair':         (PairOp,),
+    'ts_param':     (TsParamOp,),
+    'pair_param':   (PairParamOp,),
+}
+
+# 带滚动窗的 kind —— required_depth 沿路径累加 (w−1),is_raw_price_wrapper 判"含时序算子"
+TS_KINDS = frozenset({'ts', 'pair', 'ts_param', 'pair_param'})
 from markets.vocabulary import warmup_depth as _warmup_depth
 
 
@@ -79,8 +96,8 @@ _COMMUTATIVE_PAIR: frozenset = frozenset({PairOp.TS_CORR, PairOp.TS_COV})
 @dataclass(frozen=True)
 class Node:
     """通用节点。kind+op+window 决定操作语义,children 是子树。"""
-    kind: str                     # 'operand' | 'const_add' | 'const_mul' | 'unary' | 'cs' | 'binary' | 'binary_const' | 'ts' | 'pair'
-    op:   object                  # operand=列名 str / float / UnaryOp / CsOp / BinaryOp / TsOp / PairOp
+    kind: str                     # 'operand' | 'const_add' | 'const_mul' | 'unary' | 'binary' | 'binary_const' | 'ternary' | 'ts' | 'pair'
+    op:   object                  # operand=列名 str / float / UnaryOp / BinaryOp / TernaryOp / TsOp / PairOp
     window: Optional[int] = None  # 只在 ts/pair 用
     children: Tuple['Node', ...] = ()
     hash:  int = 0                # 自底向上 Merkle hash(post-init 计算)
@@ -175,7 +192,7 @@ class AlphaTree:
         def walk(n: Node):
             nonlocal bad
             if bad: return
-            if n.kind in ('ts', 'pair'):
+            if n.kind in TS_KINDS:
                 bad = True; return
             if n.kind == 'operand' and n.op not in raw_level:
                 bad = True; return
@@ -187,15 +204,15 @@ class AlphaTree:
     def required_depth(self) -> int:
         """最后一行非 warmup 所需最小 panel 行数:嵌套 ts/pair 沿路径累加 (w−1),
         operand 叶计自身派生窗(panel 构建端 rolling warmup + metrics lag-1)。
-        部署 panel 深度有限(cold_load_days×288),required_depth 超深度的树部署时
-        每次决策都整树 NaN→哑火 → 选池硬拒的依据。"""
+        部署 panel 深度有限(MarketProfile.deploy_depth_bars),required_depth 超深度的树
+        部署时每次决策都整树 NaN→哑火 → 选池硬拒的依据。"""
         def walk(n: Node) -> int:
             if n.kind == 'operand':
                 return _warmup_depth(n.op)
             if n.kind in ('const_add', 'const_mul', 'window'):
                 return 0
             d = max(walk(c) for c in n.children)
-            if n.kind in ('ts', 'pair'):
+            if n.kind in TS_KINDS:
                 d += int(n.window) - 1
             return d
         return walk(self.root)
@@ -217,7 +234,7 @@ def _pretty(n: Node) -> str:
         return n.op
     if n.kind in ('const_add', 'const_mul'):
         return f'{n.op:g}'
-    if n.kind in ('unary', 'cs'):
+    if n.kind == 'unary':
         op = n.op.value
         return f'{op}({_pretty(n.children[0])})'
     if n.kind == 'binary':
@@ -226,12 +243,22 @@ def _pretty(n: Node) -> str:
     if n.kind == 'binary_const':
         op = n.op.value
         return f'{op}({_pretty(n.children[0])}, {_pretty(n.children[1])})'
+    if n.kind == 'ternary':
+        op = n.op.value
+        return f'{op}({_pretty(n.children[0])}, {_pretty(n.children[1])}, {_pretty(n.children[2])})'
     if n.kind == 'ts':
         op = n.op.value
         return f'{op}({_pretty(n.children[0])}, {n.window})'
     if n.kind == 'pair':
         op = n.op.value
         return f'{op}({_pretty(n.children[0])}, {_pretty(n.children[1])}, {n.window})'
+    if n.kind == 'ts_param':          # 标量参数在窗口**之后**,与 BRAIN 的 f(x, d, param=) 同序
+        op = n.op.value
+        return f'{op}({_pretty(n.children[0])}, {n.window}, {_pretty(n.children[1])})'
+    if n.kind == 'pair_param':
+        op = n.op.value
+        return (f'{op}({_pretty(n.children[0])}, {_pretty(n.children[1])}, '
+                f'{n.window}, {_pretty(n.children[2])})')
     raise ValueError(f'unknown kind {n.kind}')
 
 
@@ -258,18 +285,18 @@ def _from_dict(d: dict) -> Node:
         op = op_raw                               # parquet 列名字符串 = operand 身份
     elif kind in ('const_add', 'const_mul'):
         op = float(op_raw)
-    elif kind == 'unary':
-        op = UnaryOp(op_raw)
-    elif kind == 'cs':
-        op = CsOp(op_raw)
-    elif kind == 'binary':
-        op = BinaryOp(op_raw)
-    elif kind == 'binary_const':
-        op = ConstBinaryOp(op_raw)
-    elif kind == 'ts':
-        op = TsOp(op_raw)
-    elif kind == 'pair':
-        op = PairOp(op_raw)
+    elif kind in _KIND_ENUMS:
+        # 按序试该 kind 的所有枚举:注入层算子复用既有 kind(如 'not' 挂在 'unary' 上),
+        # 单枚举查找会 ValueError,反序列化就此断在注入层树上。
+        for enum in _KIND_ENUMS[kind]:
+            try:
+                op = enum(op_raw)
+                break
+            except ValueError:
+                continue
+        else:
+            raise ValueError(f'kind={kind} 下未知算子 {op_raw!r}'
+                             f'(试过 {[e.__name__ for e in _KIND_ENUMS[kind]]})')
     else:
         raise ValueError(f'unknown kind {kind}')
     children = tuple(_from_dict(c) for c in d.get('c', []))
@@ -294,8 +321,6 @@ def make_node(prod: Production, children: Tuple[Node, ...]) -> Node:
         return Node.make('window', prod.op, None, ())
     if prod.rhs_kind == 'unary':
         return Node.make('unary', prod.op, None, children)
-    if prod.rhs_kind == 'cs':
-        return Node.make('cs', prod.op, None, children)
     if prod.rhs_kind == 'binary':
         return Node.make('binary', prod.op, None, children)
     if prod.rhs_kind == 'binary_const':

@@ -15,8 +15,8 @@ grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && IS_WSL=1
 
 OPT="-O3 -march=native -ffast-math -fno-finite-math-only -fno-strict-aliasing -fopenmp ${EXTRA_CFLAGS:-}"   # EXTRA_CFLAGS:CI sanitizer 等附加旋钮
 WARN="-Wall -Wextra -Wno-unused-parameter"
-OPS_SRC="$HERE/ops/ops_ts.cpp $HERE/ops/ops_xs.cpp $HERE/ops/_ops_module.cpp"
-ENG_SRC="$HERE/engine/engine.cpp $HERE/engine/_bt_module.cpp"
+OPS_SRC="$HERE/ops/ops_ts.cpp $HERE/ops/ops_xs.cpp $HERE/ops/ops_inject_ts.cpp $HERE/ops/_ops_module.cpp"
+ENG_SRC="$HERE/engine/engine.cpp $HERE/engine/qnt_bt.cpp $HERE/engine/_bt_module.cpp"
 
 if [ "$(uname -s)" = "Linux" ] && [ "$IS_WSL" = "0" ]; then
     PY="${PYTHON:-python3}"

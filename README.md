@@ -5,7 +5,7 @@
 
 **English** | [中文](README.zh-CN.md)
 
-Search formulaic alphas with strongly-typed genetic programming (GP), evaluate them through pure C++ / OpenMP backtest kernels, and fuse them into portfolio weights via deterministic sizing. Three markets are supported: crypto perpetuals, US daily equities, and China A-share daily equities.
+Search formulaic alphas with strongly-typed genetic programming (GP), evaluate them through pure C++ / OpenMP backtest kernels, and fuse them into portfolio weights via deterministic sizing. Three markets are supported: crypto daily (Quantiacs-style cost model), US daily equities, and China A-share daily equities.
 
 ---
 
@@ -19,7 +19,7 @@ End to end, the system is one pipeline — *formula search → backtest evaluati
 
 3. **Evaluation + pooling (`rl/`)** — The evaluator computes rank-IC and portfolio backtest returns; candidates pass a series of admission gates (|IC| / orthogonal contribution Δ / OOS holdout) into a `LinearAlphaPool`. The pool holds no fixed weights.
 
-4. **Backtest kernels (`backtest/`)** — Pure C++ / OpenMP: `engine/` runs portfolio-level (T,S) continuous target-position backtests (fees / funding / trailing stop / liquidation); `ops/` is the C++ factor-operator library, `ops_cuda/` holds CUDA kernels (compiled at runtime via cupy NVRTC). The order book is not modeled.
+4. **Backtest kernels (`backtest/`)** — Pure C++ / OpenMP: `engine/` runs portfolio-level (T,S) continuous target-position backtests (commissions / borrow fees / one-sided stamp tax / price-limit trade blocks) plus a 1:1 Quantiacs crypto-daily kernel (ATR14 slippage); `ops/` is the C++ factor-operator library, `ops_cuda/` holds CUDA kernels (compiled at runtime via cupy NVRTC). The order book is not modeled.
 
 5. **Sizing (`rl/sizing.py`)** — Deterministic fusion: z-score pool members → AFF causal rolling least-squares fusion → top-K long-short construction → portfolio-level vol-target scalar leverage.
 
@@ -52,19 +52,18 @@ bash backtest/ops_cuda/build.sh  # CUDA operators: cupy NVRTC runtime compilatio
 
 The GPU research path (`[evaluator] device=cuda`) additionally requires `cupy`; for CPU set `device=cpu`.
 
-### Mine alphas / materialize
+### Mine alphas
 
 `main.py` takes positional arguments only (output paths); everything else is read from `config/config.ini`:
 
 ```bash
-python main.py gp-baseline output/pool.json                       # strongly-typed GP on DEAP (NSGA-II) — crypto perpetual mining
-python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto perpetual mining (independent baseline)
-python main.py materialize output/pool.json output/materialized/  # alpha JSON → monthly per-alpha parquet
+python main.py gp-baseline output/pool.json                       # strongly-typed GP on DEAP (NSGA-II) — crypto daily mining
+python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto daily mining (independent baseline)
 ```
 
 Mining output = a deploy-bundle JSON (`{"pool": [{tree, ...}, ...]}`) plus snapshots under `logs/`.
 
-> This repository is a public snapshot: mining requires your own parquet panel matching the format read by `evaluation/crypto_adapter.py` (the data-collection pipeline is not included). `main.py` also has `gp-equity` / `gp-ashare` subcommands, which depend on equity data loaders not included in this snapshot.
+> This repository is a public snapshot: mining requires your own parquet panel (see `prepare_gp_data` in `main.py` for the expected layout; the data-collection pipeline is not included).
 
 ---
 

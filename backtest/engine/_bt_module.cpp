@@ -1,9 +1,10 @@
 /* backtest/engine/_bt_module.cpp —— backtest._bt Python 扩展 binding(C++)。
  *
  * 导出:
- *   portfolio_bt(...)         crypto 永续(PerpPolicy;签名/行为与旧内核不变 → 回归门 bit-identical)
- *   portfolio_bt_equity(...)  US 权益(EquityPolicy;佣金+借券费,无 funding/强平)
- *   stop_latch_scan(...)      决策窗 stop 自动机(f32/f64)
+ *   portfolio_bt_equity(...)  US 权益(EquityPolicy;佣金+借券费,无强平)
+ *   portfolio_bt_ashare(...)  中国 A 股(ASharePolicy;印花税卖出单边 + trade_block)
+ *   portfolio_bt_qnt(...)     Quantiacs qnt 1:1 复刻(独立递推,engine/qnt_bt.cpp)
+ * (旧 portfolio_bt(PerpPolicy)/ stop_latch_scan 随 1h/5m crypto 栈 2026-07-25 删除。)
  * numpy glue / module 样板复用 common/npy_glue.h;引擎核心 engine/portfolio。
  */
 #include "npy_glue.h"
@@ -11,6 +12,7 @@
 #include <cmath>
 
 #include "engine.hpp"
+#include "qnt_bt.hpp"
 
 
 /* equity/turnover/cost (T,) + 标量汇总 → 结果 dict。消费(steal)三个 (T,) 数组的引用。 */
@@ -57,117 +59,22 @@ static PyObject* pack_result(PyArrayObject* equity_arr, PyArrayObject* turnover_
 #define _DAT(a)  ((a) ? (const double*)PyArray_DATA(a) : nullptr)
 
 
-/* ============================ portfolio_bt(crypto / PerpPolicy)============================ */
-static PyObject* py_portfolio_bt(PyObject* self, PyObject* args) {
-    PyObject *o_alpha, *o_close, *o_open;
-    PyObject *o_high = Py_None, *o_low = Py_None;
-    PyObject *o_bvol = Py_None, *o_sigma = Py_None, *o_funding = Py_None;
-    PyObject *o_leverage = Py_None, *o_ratchet = Py_None;
-    double init_cash, half_spread, fee, impact_Y, mmr;
-    long long skip_warmup_ll;
-    double leverage_cap = 1.0;
-    int raw_weights = 0;
-    double stop_trail_pct = 0.0;
-    double bars_per_year;             // 必传:由 Python 侧 MarketProfile.bars_per_year 单源提供(无默认,见 rl/backtest_reward.py)
-
-    if (!PyArg_ParseTuple(args, "OOOOOOOOdLddddd|diOdO",
-                          &o_alpha, &o_close, &o_open, &o_high, &o_low,
-                          &o_bvol, &o_sigma, &o_funding,
-                          &init_cash, &skip_warmup_ll,
-                          &half_spread, &fee, &impact_Y, &mmr, &bars_per_year,
-                          &leverage_cap, &raw_weights,
-                          &o_leverage, &stop_trail_pct, &o_ratchet)) {
-        return NULL;
-    }
-
-    PyArrayObject* alpha_arr = bt_as_2d(o_alpha);
-    if (!alpha_arr) return NULL;
-    PyArrayObject* close_arr = bt_as_2d(o_close);
-    if (!close_arr) { Py_DECREF(alpha_arr); return NULL; }
-    PyArrayObject* open_arr = bt_as_2d(o_open);
-    if (!open_arr) { Py_DECREF(alpha_arr); Py_DECREF(close_arr); return NULL; }
-
-    npy_intp T = PyArray_DIM(alpha_arr, 0), S = PyArray_DIM(alpha_arr, 1);
-    if (PyArray_DIM(close_arr, 0) != T || PyArray_DIM(close_arr, 1) != S ||
-        PyArray_DIM(open_arr, 0) != T || PyArray_DIM(open_arr, 1) != S) {
-        PyErr_SetString(PyExc_ValueError, "close/open shape must match alpha (T,S)");
-        Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr); return NULL;
-    }
-
-    /* or_none 的 NULL 双义:None → NULL 无异常;坏类型 → NULL + pending exception。逐个短路,
-     * 失败路径级联释放全部已获取引用(高频入口,坏输入不许留 pending exception 进 kernel)。 */
-    PyObject* o_opt[6] = { o_high, o_low, o_bvol, o_sigma, o_funding, o_leverage };
-    PyArrayObject* opt[6] = {};
-    int arg_bad = 0;
-    for (int i = 0; i < 6 && !arg_bad; i++) {
-        opt[i] = bt_as_2d_or_none(o_opt[i]);
-        arg_bad = (opt[i] == NULL && PyErr_Occurred() != NULL);
-    }
-    PyArrayObject* ratchet_arr = NULL;
-    if (!arg_bad && o_ratchet != Py_None) {
-        ratchet_arr = bt_as_1d_f64(o_ratchet);
-        if (!ratchet_arr || (PyArray_DIM(ratchet_arr, 0) % 2) != 0) {
-            PyErr_SetString(PyExc_ValueError, "stop_ratchet must be flat (2k,) [gain, trail] pairs");
-            arg_bad = 1;
-        }
-    }
-    if (arg_bad) {
-        for (int i = 0; i < 6; i++) Py_XDECREF(opt[i]);
-        Py_XDECREF(ratchet_arr);
-        Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr);
-        return NULL;
-    }
-    PyArrayObject *high_arr = opt[0], *low_arr  = opt[1], *bvol_arr = opt[2],
-                  *sigma_arr = opt[3], *fund_arr = opt[4], *lev_arr  = opt[5];
-
-    const bool iso_active = (lev_arr != NULL && high_arr != NULL && low_arr != NULL);
-    bt::PerpPolicy policy(half_spread, fee, impact_Y, mmr, iso_active);
-
-    npy_intp shape_T[1] = { T };
-    PyArrayObject* equity_arr   = (PyArrayObject*)PyArray_EMPTY(1, shape_T, NPY_DOUBLE, 0);
-    PyArrayObject* turnover_arr = (PyArrayObject*)PyArray_EMPTY(1, shape_T, NPY_DOUBLE, 0);
-    PyArrayObject* cost_arr     = (PyArrayObject*)PyArray_EMPTY(1, shape_T, NPY_DOUBLE, 0);
-    int64_t liq_at = -1;
-
-    Py_BEGIN_ALLOW_THREADS
-    bt::run_portfolio(
-        _DAT(alpha_arr), _DAT(close_arr), _DAT(open_arr),
-        _DAT(high_arr), _DAT(low_arr), _DAT(bvol_arr), _DAT(sigma_arr),
-        _DAT(fund_arr), _DAT(lev_arr),
-        nullptr,                                /* crypto 永续无涨跌停 */
-        (int64_t)T, (int64_t)S, init_cash, (int64_t)skip_warmup_ll,
-        leverage_cap, raw_weights,
-        stop_trail_pct, _DAT(ratchet_arr),
-        ratchet_arr ? (int64_t)(PyArray_DIM(ratchet_arr, 0) / 2) : 0,
-        policy,
-        (double*)PyArray_DATA(equity_arr), (double*)PyArray_DATA(turnover_arr),
-        (double*)PyArray_DATA(cost_arr), &liq_at);
-    Py_END_ALLOW_THREADS
-
-    Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr);
-    Py_XDECREF(high_arr); Py_XDECREF(low_arr); Py_XDECREF(bvol_arr);
-    Py_XDECREF(sigma_arr); Py_XDECREF(fund_arr); Py_XDECREF(lev_arr); Py_XDECREF(ratchet_arr);
-    return pack_result(equity_arr, turnover_arr, cost_arr, liq_at, init_cash, bars_per_year, T);
-}
-
-
 /* ============================ portfolio_bt_equity(US 权益 / EquityPolicy)============================
  * portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, bars_per_year,
- *                     [raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None]) -> dict
- * close/open = 复权 OHLC(总收益);无 funding/margin-call 强平/impact。long-short(空腿计借券费)。
+ *                     [raw_weights=0]) -> dict
+ * close/open = 复权 OHLC(总收益);无 margin-call 强平/impact。long-short(空腿计借券费)。
  * 权重外部构造(raw_weights=1 直传)→ leverage_cap 无意义,不暴露。 */
 static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
-    PyObject *o_alpha, *o_close, *o_open, *o_ratchet = Py_None;
+    PyObject *o_alpha, *o_close, *o_open;
     double init_cash, cost_rate, daily_borrow;
     long long skip_warmup_ll;
     int raw_weights = 0;
-    double stop_trail_pct = 0.0;
     double bars_per_year;                               // 必传:MarketProfile 单源年化,无默认
 
-    if (!PyArg_ParseTuple(args, "OOOdLddd|idO",
+    if (!PyArg_ParseTuple(args, "OOOdLddd|i",
                           &o_alpha, &o_close, &o_open,
                           &init_cash, &skip_warmup_ll, &cost_rate, &daily_borrow, &bars_per_year,
-                          &raw_weights, &stop_trail_pct, &o_ratchet)) {
+                          &raw_weights)) {
         return NULL;
     }
 
@@ -184,16 +91,6 @@ static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
         PyErr_SetString(PyExc_ValueError, "close/open shape must match alpha (T,S)");
         Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr); return NULL;
     }
-    PyArrayObject* ratchet_arr = NULL;
-    if (o_ratchet != Py_None) {
-        ratchet_arr = bt_as_1d_f64(o_ratchet);
-        if (!ratchet_arr || (PyArray_DIM(ratchet_arr, 0) % 2) != 0) {
-            PyErr_SetString(PyExc_ValueError, "stop_ratchet must be flat (2k,) [gain, trail] pairs");
-            Py_XDECREF(ratchet_arr);
-            Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr); return NULL;
-        }
-    }
-
     bt::EquityPolicy policy(cost_rate, daily_borrow);
 
     npy_intp shape_T[1] = { T };
@@ -205,100 +102,16 @@ static PyObject* py_portfolio_bt_equity(PyObject* self, PyObject* args) {
     Py_BEGIN_ALLOW_THREADS
     bt::run_portfolio(
         _DAT(alpha_arr), _DAT(close_arr), _DAT(open_arr),
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         nullptr,                                /* 美股研究口径不建模 halt 冻结 */
         (int64_t)T, (int64_t)S, init_cash, (int64_t)skip_warmup_ll,
         1.0, raw_weights,                       /* lev:raw_weights 旁路不触及 */
-        stop_trail_pct, _DAT(ratchet_arr),
-        ratchet_arr ? (int64_t)(PyArray_DIM(ratchet_arr, 0) / 2) : 0,
         policy,
         (double*)PyArray_DATA(equity_arr), (double*)PyArray_DATA(turnover_arr),
         (double*)PyArray_DATA(cost_arr), &liq_at);
     Py_END_ALLOW_THREADS
 
-    Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr); Py_XDECREF(ratchet_arr);
+    Py_DECREF(alpha_arr); Py_DECREF(close_arr); Py_DECREF(open_arr);
     return pack_result(equity_arr, turnover_arr, cost_arr, liq_at, init_cash, bars_per_year, T);
-}
-
-
-/* ============================ stop_latch_scan ============================ */
-static PyObject* py_stop_latch_scan(PyObject* self, PyObject* args) {
-    PyObject *o_w, *o_close, *o_start, *o_ratchet = Py_None;
-    long long bars_ll;
-    double trail;
-    if (!PyArg_ParseTuple(args, "OOOLd|O", &o_w, &o_close, &o_start, &bars_ll, &trail, &o_ratchet))
-        return NULL;
-
-    int both_f32 = 0;
-    {
-        PyArrayObject* w_probe = (PyArrayObject*)PyArray_FROM_OF(o_w, NPY_ARRAY_ALIGNED);
-        PyArrayObject* c_probe = (PyArrayObject*)PyArray_FROM_OF(o_close, NPY_ARRAY_ALIGNED);
-        if (!w_probe || !c_probe) { Py_XDECREF(w_probe); Py_XDECREF(c_probe); return NULL; }
-        both_f32 = (PyArray_TYPE(w_probe) == NPY_FLOAT32 && PyArray_TYPE(c_probe) == NPY_FLOAT32);
-        Py_DECREF(w_probe); Py_DECREF(c_probe);
-    }
-    const int real_t = both_f32 ? NPY_FLOAT32 : NPY_FLOAT64;
-
-    PyArrayObject* w_arr = (PyArrayObject*)PyArray_FROMANY(
-        o_w, real_t, 2, 2, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!w_arr) return NULL;
-    PyArrayObject* close_arr = (PyArrayObject*)PyArray_FROMANY(
-        o_close, real_t, 2, 2, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
-    if (!close_arr) { Py_DECREF(w_arr); return NULL; }
-    PyArrayObject* start_arr = bt_as_1d_i64(o_start);
-    if (!start_arr) { Py_DECREF(w_arr); Py_DECREF(close_arr); return NULL; }
-
-    PyArrayObject* ratchet_arr = NULL;
-    if (o_ratchet != Py_None) {
-        ratchet_arr = (PyArrayObject*)PyArray_FROMANY(
-            o_ratchet, real_t, 1, 1, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED | NPY_ARRAY_FORCECAST);
-        if (!ratchet_arr || (PyArray_DIM(ratchet_arr, 0) % 2) != 0) {
-            PyErr_SetString(PyExc_ValueError, "ratchet must be flat (2k,) [gain, trail] pairs");
-            Py_XDECREF(ratchet_arr);
-            Py_DECREF(w_arr); Py_DECREF(close_arr); Py_DECREF(start_arr); return NULL;
-        }
-    }
-
-    const npy_intp T_dec = PyArray_DIM(w_arr, 0), S = PyArray_DIM(w_arr, 1);
-    const npy_intp T5 = PyArray_DIM(close_arr, 0);
-    const int64_t* start = (const int64_t*)PyArray_DATA(start_arr);
-    int shape_ok = (PyArray_DIM(close_arr, 1) == S) && (PyArray_DIM(start_arr, 0) == T_dec);
-    for (npy_intp t = 0; shape_ok && t < T_dec; t++)
-        if (start[t] < 0 || start[t] + bars_ll >= T5) shape_ok = 0;
-    if (!shape_ok) {
-        PyErr_SetString(PyExc_ValueError, "stop_latch_scan: shape/bounds mismatch");
-        Py_DECREF(w_arr); Py_DECREF(close_arr); Py_DECREF(start_arr); Py_XDECREF(ratchet_arr);
-        return NULL;
-    }
-
-    npy_intp shape2[2] = { T_dec, S };
-    PyArrayObject* keep_arr  = (PyArrayObject*)PyArray_EMPTY(2, shape2, real_t, 0);
-    PyArrayObject* jstar_arr = (PyArrayObject*)PyArray_EMPTY(2, shape2, NPY_INT64, 0);
-    PyArrayObject* fired_arr = (PyArrayObject*)PyArray_EMPTY(2, shape2, NPY_BOOL, 0);
-    const int64_t n_ratchet = ratchet_arr ? (int64_t)(PyArray_DIM(ratchet_arr, 0) / 2) : 0;
-
-    Py_BEGIN_ALLOW_THREADS
-    if (both_f32) {
-        bt::stop_scan_f32(
-            (const float*)PyArray_DATA(w_arr), (const float*)PyArray_DATA(close_arr),
-            start, (int64_t)T_dec, (int64_t)S, (int64_t)bars_ll, (float)trail,
-            ratchet_arr ? (const float*)PyArray_DATA(ratchet_arr) : nullptr, n_ratchet,
-            (float*)PyArray_DATA(keep_arr), (int64_t*)PyArray_DATA(jstar_arr),
-            (uint8_t*)PyArray_DATA(fired_arr));
-    } else {
-        bt::stop_scan_f64(
-            (const double*)PyArray_DATA(w_arr), (const double*)PyArray_DATA(close_arr),
-            start, (int64_t)T_dec, (int64_t)S, (int64_t)bars_ll, trail,
-            ratchet_arr ? (const double*)PyArray_DATA(ratchet_arr) : nullptr, n_ratchet,
-            (double*)PyArray_DATA(keep_arr), (int64_t*)PyArray_DATA(jstar_arr),
-            (uint8_t*)PyArray_DATA(fired_arr));
-    }
-    Py_END_ALLOW_THREADS
-
-    Py_DECREF(w_arr); Py_DECREF(close_arr); Py_DECREF(start_arr); Py_XDECREF(ratchet_arr);
-    PyObject* out = PyTuple_Pack(3, (PyObject*)keep_arr, (PyObject*)jstar_arr, (PyObject*)fired_arr);
-    Py_DECREF(keep_arr); Py_DECREF(jstar_arr); Py_DECREF(fired_arr);
-    return out;
 }
 
 
@@ -359,11 +172,9 @@ static PyObject* py_portfolio_bt_ashare(PyObject* self, PyObject* args) {
     Py_BEGIN_ALLOW_THREADS
     bt::run_portfolio(
         _DAT(alpha_arr), _DAT(close_arr), _DAT(open_arr),
-        nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         tblock_arr ? (const int8_t*)PyArray_DATA(tblock_arr) : nullptr,
         (int64_t)T, (int64_t)S, init_cash, (int64_t)skip_warmup_ll,
         1.0, raw_weights,                       /* lev:raw_weights 旁路不触及 */
-        0.0, nullptr, 0,
         policy,
         (double*)PyArray_DATA(equity_arr), (double*)PyArray_DATA(turnover_arr),
         (double*)PyArray_DATA(cost_arr), &liq_at);
@@ -374,21 +185,90 @@ static PyObject* py_portfolio_bt_ashare(PyObject* self, PyObject* args) {
 }
 
 
+/* ============================ portfolio_bt_qnt(Quantiacs 1:1)============================
+ * portfolio_bt_qnt(w, open_raw, prev_close, open_ff0, close_ff0, slippage, unlocked, i0, ppy) -> dict
+ * 全部 (T,S) f64(unlocked 为 uint8);静态量由 rl.backtest_reward.prepare_qnt_static 预算。
+ * 返回 rr/equity (T,) + sharpe(arith)/mean_return/volatility/max_drawdown/total_return(窗 [i0:])。 */
+static PyObject* py_portfolio_bt_qnt(PyObject* self, PyObject* args) {
+    PyObject *o_w, *o_oraw, *o_pcl, *o_off, *o_cff, *o_slip, *o_ul;
+    long long i0_ll;
+    double ppy;
+
+    if (!PyArg_ParseTuple(args, "OOOOOOOLd",
+                          &o_w, &o_oraw, &o_pcl, &o_off, &o_cff, &o_slip, &o_ul,
+                          &i0_ll, &ppy)) {
+        return NULL;
+    }
+
+    PyObject* o_f64[6] = { o_w, o_oraw, o_pcl, o_off, o_cff, o_slip };
+    PyArrayObject* arr[6] = {};
+    int arg_bad = 0;
+    for (int i = 0; i < 6 && !arg_bad; i++) {
+        arr[i] = bt_as_2d(o_f64[i]);
+        arg_bad = (arr[i] == NULL);
+    }
+    PyArrayObject* ul_arr = NULL;
+    if (!arg_bad) {
+        ul_arr = (PyArrayObject*)PyArray_FROMANY(
+            o_ul, NPY_UINT8, 2, 2, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED | NPY_ARRAY_FORCECAST);
+        arg_bad = (ul_arr == NULL);
+    }
+    npy_intp T = 0, S = 0;
+    if (!arg_bad) {
+        T = PyArray_DIM(arr[0], 0); S = PyArray_DIM(arr[0], 1);
+        for (int i = 1; i < 6 && !arg_bad; i++)
+            arg_bad = (PyArray_DIM(arr[i], 0) != T || PyArray_DIM(arr[i], 1) != S);
+        if (!arg_bad)
+            arg_bad = (PyArray_DIM(ul_arr, 0) != T || PyArray_DIM(ul_arr, 1) != S);
+        if (arg_bad)
+            PyErr_SetString(PyExc_ValueError, "all panels must be (T,S) matching w");
+    }
+    if (arg_bad) {
+        for (int i = 0; i < 6; i++) Py_XDECREF(arr[i]);
+        Py_XDECREF(ul_arr);
+        return NULL;
+    }
+
+    npy_intp shape_T[1] = { T };
+    PyArrayObject* rr_arr = (PyArrayObject*)PyArray_EMPTY(1, shape_T, NPY_DOUBLE, 0);
+    PyArrayObject* eq_arr = (PyArrayObject*)PyArray_EMPTY(1, shape_T, NPY_DOUBLE, 0);
+    bt::QntStats st;
+
+    Py_BEGIN_ALLOW_THREADS
+    st = bt::qnt_bt(_DAT(arr[0]), _DAT(arr[1]), _DAT(arr[2]), _DAT(arr[3]), _DAT(arr[4]),
+                    _DAT(arr[5]), (const uint8_t*)PyArray_DATA(ul_arr),
+                    (int64_t)T, (int64_t)S, (int64_t)i0_ll, ppy,
+                    (double*)PyArray_DATA(rr_arr), (double*)PyArray_DATA(eq_arr));
+    Py_END_ALLOW_THREADS
+
+    for (int i = 0; i < 6; i++) Py_DECREF(arr[i]);
+    Py_DECREF(ul_arr);
+
+    PyObject* d = PyDict_New();
+    PyDict_SetItemString(d, "rr",     (PyObject*)rr_arr);
+    PyDict_SetItemString(d, "equity", (PyObject*)eq_arr);
+    PyObject* v;
+    v = PyFloat_FromDouble(st.sharpe);       PyDict_SetItemString(d, "sharpe",        v); Py_DECREF(v);
+    v = PyFloat_FromDouble(st.mean_return);  PyDict_SetItemString(d, "mean_return",   v); Py_DECREF(v);
+    v = PyFloat_FromDouble(st.volatility);   PyDict_SetItemString(d, "volatility",    v); Py_DECREF(v);
+    v = PyFloat_FromDouble(st.max_drawdown); PyDict_SetItemString(d, "max_drawdown",  v); Py_DECREF(v);
+    v = PyFloat_FromDouble(st.total_return); PyDict_SetItemString(d, "total_return",  v); Py_DECREF(v);
+    Py_DECREF(rr_arr); Py_DECREF(eq_arr);
+    return d;
+}
+
+
 static PyMethodDef methods[] = {
-    {"portfolio_bt", py_portfolio_bt, METH_VARARGS,
-     "portfolio_bt(alpha, close, open, high|None, low|None, bar_volume|None, sigma|None, funding|None, "
-     "init_cash, skip_warmup, half_spread, fee, impact_Y, mmr, bars_per_year, "
-     "[leverage_cap=1.0, raw_weights=0, leverage_TS=None, stop_trail_pct=0.0, "
-     "stop_ratchet=None]) -> dict  (crypto perp / PerpPolicy)"},
     {"portfolio_bt_equity", py_portfolio_bt_equity, METH_VARARGS,
      "portfolio_bt_equity(alpha, close, open, init_cash, skip_warmup, cost_rate, daily_borrow, bars_per_year, "
-     "[raw_weights=0, stop_trail_pct=0.0, stop_ratchet=None]) -> dict  (US equity / EquityPolicy)"},
+     "[raw_weights=0]) -> dict  (US equity / EquityPolicy)"},
     {"portfolio_bt_ashare", py_portfolio_bt_ashare, METH_VARARGS,
      "portfolio_bt_ashare(alpha, close, open, init_cash, skip_warmup, commission, stamp_tax_sell, transfer_fee, bars_per_year, "
      "[raw_weights=0, trade_block=None]) -> dict  (China A-share / ASharePolicy)"},
-    {"stop_latch_scan", py_stop_latch_scan, METH_VARARGS,
-     "stop_latch_scan(w_dec, close_5m, start_idx, bars_per_dec, trail, ratchet|None) -> (keep, jstar, fired)"},
+    {"portfolio_bt_qnt", py_portfolio_bt_qnt, METH_VARARGS,
+     "portfolio_bt_qnt(w, open_raw, prev_close, open_ff0, close_ff0, slippage, unlocked, i0, ppy) -> dict  "
+     "(Quantiacs qnt calc_relative_return 1:1 + cryptodaily arithmetic stats)"},
     {NULL, NULL, 0, NULL}
 };
 
-BT_MODULE(_bt, methods, "Backtest C++ engine (policy-abstracted: PerpPolicy / EquityPolicy / ASharePolicy).")
+BT_MODULE(_bt, methods, "Backtest C++ engine (policy-abstracted: EquityPolicy / ASharePolicy + Quantiacs qnt kernel).")
