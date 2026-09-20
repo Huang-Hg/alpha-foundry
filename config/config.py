@@ -79,6 +79,16 @@ class Q25ComboConfig:
 
 
 @dataclass
+class Q25CudaConfig:
+    candidate_batch: int = ini('q25_cuda', 'candidate_batch', 256)
+    trial_batch: int = ini('q25_cuda', 'trial_batch', 16384)
+
+    def __post_init__(self):
+        if self.candidate_batch <= 0 or self.trial_batch <= 0:
+            raise ValueError('Q25 CUDA batch sizes must be positive')
+
+
+@dataclass
 class TsBookConfig:
     """时序 long-only 书(crypto_daily 挖矿口径):2026-07-24 自由书转向 —— 搜索/评估 =
     公式直出敞口(rl.sizing.qnt_free_exposure),reward = 书净 Sharpe − EW 锚不变;

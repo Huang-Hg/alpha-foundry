@@ -1,0 +1,10 @@
+# Workspace-local installation:
+# python -m pip install --target tmp/q25_cuda_deps -r scripts/requirements-q25-gpu.txt
+cupy-cuda12x==14.2.0
+cuda-pathfinder==1.8.2
+fastrlock==0.8.3
+nvidia-cuda-nvrtc-cu12==12.9.86
+nvidia-cuda-runtime-cu12==12.9.79
+pyarrow>=17
+rich>=13
+paramiko>=3
