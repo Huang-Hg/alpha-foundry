@@ -387,13 +387,15 @@ __device__ void per_t_pnl_core(const T* __restrict__ vals, const T* __restrict__
  * ========================================================================== */
 #define QNT_LANE_A 4                        /* 每 lane 资产数上限 ⇒ S ≤ 32×4 = 128 */
 
-__device__ __forceinline__ double warp_sum_bcast(double v) {
-    v = warp_reduce_sum<double>(v);
+template<typename A>
+__device__ __forceinline__ A warp_sum_bcast(A v) {
+    v = warp_reduce_sum<A>(v);
     return __shfl_sync(0xffffffff, v, 0);
 }
 
 /* 4 路并行 warp 归约 + 广播:同一条 shuffle 链上并行摊 4 个独立累加量,延迟与单路相同。 */
-__device__ __forceinline__ void warp_sum4_bcast(double& a, double& b, double& c, double& d) {
+template<typename A>
+__device__ __forceinline__ void warp_sum4_bcast(A& a, A& b, A& c, A& d) {
     for (int off = warpSize >> 1; off > 0; off >>= 1) {
         a += __shfl_down_sync(0xffffffff, a, off);
         b += __shfl_down_sync(0xffffffff, b, off);
@@ -412,7 +414,15 @@ __device__ __forceinline__ T qnt_weight(const T* W, const T* ref, long long i, d
                        __dmul_rn(alpha, (double)W[i]));
 }
 
-template<typename T, bool MIX = false>
+// Explicit FP32 mixing avoids double arithmetic in the low-precision daily path.
+template<>
+__device__ __forceinline__ float qnt_weight<float,true>(const float* W, const float* ref,
+                                                       long long i, double alpha) {
+    float a = (float)alpha;
+    return __fadd_rn(__fmul_rn(1.0f-a,ref[i]),__fmul_rn(a,W[i]));
+}
+
+template<typename T, bool MIX = false, typename A = double>
 __device__ void qnt_bt_core(const T* __restrict__ W,
                             const T* __restrict__ open_raw, const T* __restrict__ prev_close,
                             const T* __restrict__ open_ff0, const T* __restrict__ close_ff0,
@@ -427,7 +437,7 @@ __device__ void qnt_bt_core(const T* __restrict__ W,
     const T* Wb = W + (MIX ? owners[b] : b) * (long long)Tn * S;
     const double alpha = MIX ? weights[b] : 0.0;
     double* rr = rr_out + b * (long long)Tn;
-    double wt[QNT_LANE_A], shares[QNT_LANE_A], off_prev[QNT_LANE_A];
+    A wt[QNT_LANE_A], shares[QNT_LANE_A], off_prev[QNT_LANE_A];
     /* 每日串行链是延迟束缚(整批耗时不随 B 变):① W 行双缓冲预取(day+1 生效的是 W[day],
      * 在 day 迭代内就发出加载,与本日归约链重叠);② 本日静态面板一次性预取进寄存器;
      * ③ 昨日 open_ff0 寄存器携带,不再回读;④ 4 个独立累加量并到一条 shuffle 链。
@@ -436,103 +446,108 @@ __device__ void qnt_bt_core(const T* __restrict__ W,
     #pragma unroll
     for (int j = 0; j < QNT_LANE_A; j++) {
         const int a = lane + 32 * j;
-        wt[j] = 0.0; shares[j] = 0.0; off_prev[j] = 0.0;
+        wt[j] = A(0); shares[j] = A(0); off_prev[j] = A(0);
         wcur[j] = (a < S) ? qnt_weight<T,MIX>(Wb,ref,a,alpha) : (T)0;
     }
 
-    double eq_after = 0.0, prev_tonight = 1.0;
+    A eq_after = A(0), prev_tonight = A(1);
     for (int day = 0; day < Tn; day++) {
         const long long r0 = (long long)day * S;
-        double oraw[QNT_LANE_A], pcl[QNT_LANE_A], off[QNT_LANE_A], cff[QNT_LANE_A], sl[QNT_LANE_A];
+        A oraw[QNT_LANE_A], pcl[QNT_LANE_A], off[QNT_LANE_A], cff[QNT_LANE_A], sl[QNT_LANE_A];
         bool ul[QNT_LANE_A];
         T wnext[QNT_LANE_A];
         #pragma unroll
         for (int j = 0; j < QNT_LANE_A; j++) {
             const int a = lane + 32 * j;
             const bool in = a < S;
-            oraw[j] = in ? (double)open_raw[r0 + a] : 0.0;
-            pcl[j]  = in ? (double)prev_close[r0 + a] : 1.0;
-            off[j]  = in ? (double)open_ff0[r0 + a] : 0.0;
-            cff[j]  = in ? (double)close_ff0[r0 + a] : 0.0;
-            sl[j]   = in ? (double)slip[r0 + a] : 0.0;
+            oraw[j] = in ? (A)open_raw[r0 + a] : A(0);
+            pcl[j]  = in ? (A)prev_close[r0 + a] : A(1);
+            off[j]  = in ? (A)open_ff0[r0 + a] : A(0);
+            cff[j]  = in ? (A)close_ff0[r0 + a] : A(0);
+            sl[j]   = in ? (A)slip[r0 + a] : A(0);
             ul[j]   = in ? (unlocked[r0 + a] != 0) : false;
             wnext[j] = (in && day + 1 < Tn) ? qnt_weight<T,MIX>(Wb,ref,r0+a,alpha) : (T)0;
         }
 
         /* --- 当日生效权重:shift-1 → normalize → open 调整 → normalize --- */
         if (day > 0) {
-            double part = 0.0;
+            A part = A(0);
             #pragma unroll
             for (int j = 0; j < QNT_LANE_A; j++) {
-                double x = (double)wcur[j];
-                if (!isfinite(x)) x = 0.0;
+                A x = (A)wcur[j];
+                if (!isfinite(x)) x = A(0);
                 wt[j] = x; part += fabs(x);
             }
-            double s1 = warp_sum_bcast(part);
-            if (s1 < 1.0) s1 = 1.0;
-            part = 0.0;
+            A s1 = warp_sum_bcast(part);
+            if (s1 < A(1)) s1 = A(1);
+            part = A(0);
             #pragma unroll
             for (int j = 0; j < QNT_LANE_A; j++) {
-                double v = (wt[j] / s1) * oraw[j] / pcl[j];
-                if (!isfinite(v)) v = 0.0;                     /* NaN 价 → 0(含 0×NaN) */
+                A v = (wt[j] / s1) * oraw[j] / pcl[j];
+                if (!isfinite(v)) v = A(0);                     /* NaN 价 → 0(含 0×NaN) */
                 wt[j] = v; part += fabs(v);
             }
-            double s2 = warp_sum_bcast(part);
-            if (s2 < 1.0) s2 = 1.0;
+            A s2 = warp_sum_bcast(part);
+            if (s2 < A(1)) s2 = A(1);
             #pragma unroll
             for (int j = 0; j < QNT_LANE_A; j++) wt[j] /= s2;
         }
 
         /* --- equity 递推(calc_relative_return_np 对照)--- */
-        double eq_part = 0.0, p_sum = 0.0, p_unl = 0.0, p_lock = 0.0;
+        A eq_part = A(0), p_sum = A(0), p_unl = A(0), p_lock = A(0);
         #pragma unroll
         for (int j = 0; j < QNT_LANE_A; j++) {
             const int a = lane + 32 * j;
             if (a < S) {
                 if (day > 0) eq_part += (off[j] - off_prev[j]) * shares[j];
-                const double aw = fabs(wt[j]);
+                const A aw = fabs(wt[j]);
                 p_sum += aw;
                 if (ul[j]) p_unl += aw;
                 else p_lock += off[j] * fabs(shares[j]);
             }
         }
         warp_sum4_bcast(eq_part, p_sum, p_unl, p_lock);
-        const double eq_before = (day > 0) ? eq_after + eq_part : 1.0;
-        const double w_free = (p_sum > 1.0 ? p_sum : 1.0) - p_sum;
-        const double w_op   = p_unl + w_free;
-        const double eq_oper = eq_before - p_lock;
+        const A eq_before = (day > 0) ? eq_after + eq_part : A(1);
+        const A w_free = (p_sum > A(1) ? p_sum : A(1)) - p_sum;
+        const A w_op   = p_unl + w_free;
+        const A eq_oper = eq_before - p_lock;
 
-        if (w_op < 1e-7) {                                 /* qnt EPS;w_op 全 warp 一致 → 分支均匀 */
+        if (w_op < A(1e-7)) {                                 /* qnt EPS;w_op 全 warp 一致 → 分支均匀 */
             eq_after = eq_before;
         } else {
-            double part = 0.0;
+            A part = A(0);
             #pragma unroll
             for (int j = 0; j < QNT_LANE_A; j++) {
                 const int a = lane + 32 * j;
                 if (a < S && ul[j]) {
-                    const double ns = eq_oper * wt[j] / (w_op * off[j]);
-                    const double dn = (day > 0) ? ns - shares[j] : ns;
+                    const A ns = eq_oper * wt[j] / (w_op * off[j]);
+                    const A dn = (day > 0) ? ns - shares[j] : ns;
                     part += sl[j] * fabs(dn);
                     shares[j] = ns;
                 }
             }
             eq_after = eq_before - warp_sum_bcast(part);
         }
-        double part2 = 0.0;
+        A part2 = A(0);
         #pragma unroll
         for (int j = 0; j < QNT_LANE_A; j++) {
             const int a = lane + 32 * j;
             if (a < S) part2 += (cff[j] - off[j]) * shares[j];
         }
-        const double eq_tonight = eq_after + warp_sum_bcast(part2);
+        const A eq_tonight = eq_after + warp_sum_bcast(part2);
 
-        double v = eq_tonight / prev_tonight - 1.0;
-        if (!isfinite(v)) v = 0.0;
+        A v = eq_tonight / prev_tonight - A(1);
+        if (!isfinite(v)) v = A(0);
+        // A low-precision overflow/underflow must trigger precision escalation,
+        // never masquerade as the legacy zero-return invalid-value handling.
+        if (sizeof(A) == sizeof(float) &&
+            (!isfinite(eq_tonight) || !isfinite(eq_after) ||
+             !isfinite(prev_tonight) || fabs(prev_tonight) < A(1e-30))) v = (A)__int_as_float(0x7fffffff);
         if (lane == 0) rr[day] = v;
         prev_tonight = eq_tonight;
         #pragma unroll
         for (int j = 0; j < QNT_LANE_A; j++) {
-            if (!ul[j]) shares[j] = 0.0;                     /* 无价资产份额清零(tonight 之后) */
+            if (!ul[j]) shares[j] = A(0);                     /* 无价资产份额清零(tonight 之后) */
             off_prev[j] = off[j];
             wcur[j] = wnext[j];
         }
@@ -613,4 +628,21 @@ extern "C" __global__ void k_qnt_bt_f32(const float* W, const float* o_raw, cons
                                         const unsigned char* ul, int T, int S, int B, long long i0,
                                         double ppy, double* rr, double* st) {
     qnt_bt_core<float >(W, o_raw, pcl, off, cff, sl, ul, T, S, B, i0, ppy, rr, st);
+}
+
+// Mixed precision: FP32 holdings/prices/daily state, FP64 return
+// storage and all final statistics. Factor construction remains independent.
+extern "C" __global__ void k_qnt_bt_mixed(const float* W, const float* o_raw, const float* pcl,
+                                        const float* off, const float* cff, const float* sl,
+                                        const unsigned char* ul, int T, int S, int B, long long i0,
+                                        double ppy, double* rr, double* st) {
+    qnt_bt_core<float,false,float>(W,o_raw,pcl,off,cff,sl,ul,T,S,B,i0,ppy,rr,st);
+}
+extern "C" __global__ void k_qnt_combo_mixed(const float* W, const float* ref,
+                                        const int* owners, const double* weights,
+                                        const float* o_raw, const float* pcl,
+                                        const float* off, const float* cff, const float* sl,
+                                        const unsigned char* ul, int T, int S, int B, long long i0,
+                                        double ppy, double* rr, double* st) {
+    qnt_bt_core<float,true,float>(W,o_raw,pcl,off,cff,sl,ul,T,S,B,i0,ppy,rr,st,ref,owners,weights);
 }

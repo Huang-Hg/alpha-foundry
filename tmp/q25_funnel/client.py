@@ -40,9 +40,9 @@ def request(req: Dict, timeout: float = 900.0) -> Optional[Dict]:
         status = request(dict(op='ping'), timeout=10.0)
         if status is None:
             return None
-        if status.get('protocol') != 'combo-cuda-v3':
+        if status.get('protocol') != 'combo-cuda-v4':
             raise RuntimeError('回测服务仍是旧 gate 协议;请部署本地新代码并重启服务后再评估/入库')
-        req = dict(req, protocol='combo-cuda-v3')
+        req = dict(req, protocol='combo-cuda-v4')
     if d.get('host'):
         import remote
         try:

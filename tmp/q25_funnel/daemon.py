@@ -448,11 +448,10 @@ class Server:
         uniq = list(dict.fromkeys(exprs))            # 去重:同式只算一次,回填时再展开
         if not accept:
             for lo in range(0,len(uniq),engine.CUDA.candidate_batch):
-                self._tick('GPU f64 组合批量',lo,len(uniq))
+                self._tick('GPU 自适应精度组合批量',lo,len(uniq))
                 batch = engine.simulate_many(uniq[lo:lo+engine.CUDA.candidate_batch],window)
                 for r,g in zip(batch,gates.run_batch(batch,ref)):
                     row = gates.rowify(r,g)
-                    row['backend'] = 'cuda-f64'
                     self._judged(rows,row)
             self._tick('收尾',len(uniq),len(uniq))
             return [rows[s] for s in exprs]
@@ -504,8 +503,9 @@ def _device() -> str:
     global _DEVICE
     if _DEVICE is None:
         try:
+            import engine
             import cupy as cp
-            _DEVICE = f'{cp.cuda.runtime.getDeviceProperties(0)["name"].decode()} · combo f64'
+            _DEVICE = f'{cp.cuda.runtime.getDeviceProperties(0)["name"].decode()} · combo {engine.CUDA.precision}'
         except Exception:
             _DEVICE = 'CUDA unavailable'
     return _DEVICE

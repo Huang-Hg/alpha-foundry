@@ -59,7 +59,8 @@ class ComboGateTests(unittest.TestCase):
             rows=server._eval_exprs([self.expr,'gt(ma_dist_20,0)'],'is',False)
         self.assertEqual(len(rows),2)
         self.assertTrue(all(r['combo']['cpu_trials']==0 for r in rows))
-        self.assertTrue(all(r['backend']=='cuda-f64' for r in rows))
+        self.assertTrue(all(r['backend'] in ('cuda-f64','cuda-mixed') for r in rows))
+        self.assertTrue(all(r['combo']['precision']['mode']=='auto' for r in rows))
 
     def test_python_source_rebuild(self):
         source=("from gpu import eval_node\nfrom fastexpr import validate\n"
@@ -72,6 +73,34 @@ class ComboGateTests(unittest.TestCase):
                 rows=combolib.evaluate_python_source(source,'test.py','is',lib,accept=True)
                 self.assertTrue(rows[0]['accepted'],rows[0])
                 cp.testing.assert_allclose(ComboLib.load().ref()['rr'],lib.ref()['rr'],atol=1e-12,rtol=1e-12)
+        self.assertEqual(STORE.read_bytes(),self.stored)
+
+    def test_precision_budget_and_gate_boundary(self):
+        from combo_gpu import proposal_many,simulate_many
+        lib=ComboLib([]);ref=lib.ref();r=engine.simulate(self.expr)
+        exact=proposal_many([r],ref,precision='f64')[0]
+        self.assertTrue(exact['passed'])
+        # Change the gain threshold across an actual candidate's decision
+        # boundary. Auto must refine both sides, including the rejection side.
+        gain=exact['wsharpe']-ref['wsharpe']
+        for threshold in (gain-1e-7,gain+1e-7):
+            with patch.object(gates.CFG,'min_sharpe_gain',threshold):
+                a=proposal_many([r],ref,precision='f64')[0]
+                b=proposal_many([r],ref,precision='auto')[0]
+            self.assertEqual(a['passed'],b['passed'])
+            self.assertTrue(b['precision']['refined'])
+            self.assertEqual(b['backend'],'cuda-f64')
+        # A stricter accuracy requirement selects FP64 regardless of GPU model.
+        with patch.object(engine.CUDA,'mixed_return_atol',1e-14):
+            b=proposal_many([r],ref,precision='auto')[0]
+        self.assertTrue(b['precision']['over_budget'])
+        self.assertTrue(b['precision']['refined'])
+        self.assertEqual(exact['weight'],b['weight'])
+        mixed=simulate_many([self.expr],precision='mixed')[0]
+        with self.assertRaises(ValueError):gates.run(mixed,ref)
+        verdict=gates.run(r,ref)
+        verdict['layers']['G2_performance']['backend']='cuda-mixed'
+        with self.assertRaises(AssertionError):lib.add(r,verdict)
         self.assertEqual(STORE.read_bytes(),self.stored)
 
     def test_fused_patterns_preserve_domains(self):

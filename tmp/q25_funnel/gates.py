@@ -8,7 +8,7 @@ from config.config import Q25ComboConfig
 import engine
 CFG=Q25ComboConfig()
 DEVICE='cuda'
-PROTOCOL='combo-cuda-v3'
+PROTOCOL='combo-cuda-v4'
 
 def g1_causality(expr):
     if not expr:return None
@@ -43,7 +43,8 @@ def combo_row(r,ref,p):
     mine,_,rho=r['_gpu_view']
     out=dict(n=ref['n'],seed=ref['seed'],sharpe=ref['wsharpe'],full_sharpe=ref['sharpe'],
              cagr=ref['cagr'],maxdd=ref['maxdd'],mine=mine,rho=rho,w=p['weight'],
-             trials=p['trials'],cpu_trials=0,backend='cuda-f64',feasible=p['passed'])
+             trials=p['trials'],cpu_trials=0,backend=p['backend'],feasible=p['passed'])
+    if 'precision' in p:out['precision']=p['precision']
     if 'wsharpe' in p:
         out.update(sharpe_after=p['wsharpe'],full_sharpe_after=p['sharpe'],
                    cagr_after=p['cagr'],maxdd_after=p['maxdd'],
@@ -57,6 +58,8 @@ def run(r,ref=None):
 
 def run_batch(rows,ref):
     from combo_gpu import proposal_many
+    if any(r.get('precision','f64') != 'f64' for r in rows):
+        raise ValueError('Experimental mixed results require CUDA f64 validation before admission')
     results=[]
     for lo in range(0,len(rows),engine.CUDA.candidate_batch):
         part=rows[lo:lo+engine.CUDA.candidate_batch]
@@ -92,7 +95,7 @@ def rowify(r,g):
         return x if not isinstance(x,float) or math.isfinite(x) else None
     row=dict(protocol=PROTOCOL,expr=r.get('expr'),lane=r.get('lane','fastexpr'),ok=bool(r['ok']),
              error=r.get('error'),passed=bool(g['passed']),stopped_at=g['stopped_at'],
-             explain=explain(g),accepted=False,backend='cuda-f64')
+             explain=explain(g),accepted=False,backend=g.get('combo',{}).get('backend','cuda-f64'))
     for k in ('sharpe','cagr','ann_ret','maxdd','total_ret','turnover','exposure','margin_bps',
               'max_single_weight','concentration','span','n_days','yearly'):
         if k in r:row[k]=js(r[k])

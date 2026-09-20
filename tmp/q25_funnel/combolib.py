@@ -102,6 +102,7 @@ class ComboLib:
         """只能使用当前参照上已经精算通过的权重;拒绝过期判定。"""
         ref = self.ref(r['window'])
         proposal = verdict['layers']['G2_performance']
+        assert proposal['backend'] == 'cuda-f64', 'Unrefined precision cannot update the portfolio'
         assert verdict['passed'] and proposal['_ref'] is ref and verdict['expr'] == r['expr']
         w = proposal['weight']
         assert 0 < w <= 1

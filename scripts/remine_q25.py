@@ -17,7 +17,7 @@ sys.path.insert(0,str(ROOT))
 sys.path.insert(0,str(FUNNEL))
 import client
 from config.config import Q25ComboConfig,Q25CudaConfig
-PROTOCOL = 'combo-cuda-v3'
+PROTOCOL = 'combo-cuda-v4'
 
 
 def main():

@@ -1,0 +1,104 @@
+{
+  "device": "Quadro T1000",
+  "fp32_to_fp64_ratio": 32,
+  "candidates": 265,
+  "valid": 260,
+  "batch": 64,
+  "trial_batch": 1024,
+  "factors": "unchanged FP64",
+  "daily_state": "FP32",
+  "statistics": "FP64",
+  "max_daily_return_error": 2.628930094727977e-07,
+  "edge_books_max_daily_return_error": 1.2607650788254432e-05,
+  "edge_books_finite": true,
+  "references": {
+    "current": {
+      "tested": 260,
+      "f64_pass": 0,
+      "mixed_pass": 0,
+      "false_accept": 0,
+      "false_reject": 0,
+      "weight_changes": 0,
+      "max_weight_error": 0.0,
+      "max_metric_error": 1.0363814735625532e-05
+    },
+    "seed": {
+      "tested": 260,
+      "f64_pass": 130,
+      "mixed_pass": 130,
+      "false_accept": 0,
+      "false_reject": 0,
+      "weight_changes": 0,
+      "max_weight_error": 3.544575712943754e-07,
+      "max_metric_error": 3.393068768620111e-05
+    },
+    "initial": {
+      "tested": 260,
+      "f64_pass": 2,
+      "mixed_pass": 2,
+      "false_accept": 0,
+      "false_reject": 0,
+      "weight_changes": 0,
+      "max_weight_error": 0.0,
+      "max_metric_error": 7.466105059139583e-06
+    }
+  },
+  "auto_references": {
+    "current": {
+      "tested": 260,
+      "passed": 0,
+      "refined": 5,
+      "fp64_trials": 365,
+      "fp32_trials": 5460,
+      "gate_flips": 0,
+      "weight_changes": 0
+    },
+    "seed": {
+      "tested": 260,
+      "passed": 130,
+      "refined": 142,
+      "fp64_trials": 3242,
+      "fp32_trials": 5460,
+      "gate_flips": 0,
+      "weight_changes": 0
+    },
+    "initial": {
+      "tested": 260,
+      "passed": 2,
+      "refined": 6,
+      "fp64_trials": 386,
+      "fp32_trials": 5460,
+      "gate_flips": 0,
+      "weight_changes": 0
+    }
+  },
+  "flips": [],
+  "warmed_seconds": {
+    "f64": [
+      11.88954300000023,
+      11.891554199999518,
+      11.8869109999996
+    ],
+    "mixed": [
+      3.25157979999949,
+      3.251168300000245,
+      3.2463589999997566
+    ],
+    "auto": [
+      5.053901299999779,
+      5.05329139999958,
+      5.062035100000685
+    ]
+  },
+  "candidates_per_second": {
+    "f64": 22.28888127260256,
+    "mixed": 81.5459294728685,
+    "auto": 52.408732368037725
+  },
+  "speedup": 3.6585923032891094,
+  "auto_speedup": 2.3513397432135106,
+  "correctness_and_compile_seconds": 45.61920629999986,
+  "pool_reserved_gib": 2.1897101402282715,
+  "production_default": "auto",
+  "unrefined_mixed_admission_blocked": true
+}

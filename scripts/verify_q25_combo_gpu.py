@@ -197,10 +197,121 @@ def verify_composition(all_candidates=False):
     finally:fusion.ENABLED=previous
 
 
+def verify_precision():
+    """Fixed workload, alternating warmed runs; experimental results never enter a library."""
+    import statistics
+    from combo_gpu import simulate_many, proposal_many
+    count=int(sys.argv[sys.argv.index('--precision-count')+1]) if '--precision-count' in sys.argv else 256
+    batch=int(sys.argv[sys.argv.index('--precision-batch')+1]) if '--precision-batch' in sys.argv else 16
+    engine.CUDA.candidate_batch=batch
+    engine.CUDA.trial_batch=1024
+    pool=json.loads((REPO/'tmp/q25_funnel/candidates/r6/full_pool.json').read_text())
+    fast=[x['expr'] for x in pool if x['lane']!='python']
+    lib=ComboLib.load()
+    names=list(dict.fromkeys([m['expr'] for m in lib.members if m['lane']!='python']+
+                            [fast[i*len(fast)//count] for i in range(count)]+[
+        'gt(ma_dist_20,0)','lt(ma_dist_20,0)','gt(ret_120,0)',
+        'ts_mean(candlebody,30)','mul_const(candlebody,0.000001)']))
+    refs={'current':lib.ref(),'seed':ComboLib([]).ref()}
+    initial=REPO/'tmp/q25_cuda/remine/initial_combo.json'
+    if initial.exists():refs['initial']=ComboLib(json.loads(initial.read_text())['members']).ref()
+    summary={k:dict(tested=0,f64_pass=0,mixed_pass=0,false_accept=0,false_reject=0,
+                   weight_changes=0,max_weight_error=0.,max_metric_error=0.) for k in refs}
+    automatic={k:dict(tested=0,passed=0,refined=0,fp64_trials=0,fp32_trials=0,
+                     gate_flips=0,weight_changes=0) for k in refs}
+    max_pnl=0.;flips=[];valid=0
+    cold_start=time.perf_counter()
+    for lo in range(0,len(names),batch):
+        rs={mode:[r for r in simulate_many(names[lo:lo+batch],precision=mode) if r['ok']]
+            for mode in ('f64','mixed')}
+        assert [r['expr'] for r in rs['f64']]==[r['expr'] for r in rs['mixed']]
+        valid+=len(rs['f64'])
+        for a,b in zip(rs['f64'],rs['mixed']):
+            assert bool(cp.array_equal(a['_W'],b['_W']))  # only the simulation precision changes
+            assert bool(cp.isfinite(b['_rr']).all()) and bool((b['_rr']>-1).all())
+            max_pnl=max(max_pnl,float(cp.max(cp.abs(a['_rr']-b['_rr']))))
+        for key,ref in refs.items():
+            ps={mode:proposal_many(rs[mode],ref,precision=mode) if rs[mode] else []
+                for mode in ('f64','mixed')}
+            auto=proposal_many(rs['f64'],ref,precision='auto') if rs['f64'] else []
+            for a,b in zip(ps['f64'],auto):
+                d=b['precision'];s=automatic[key]
+                s['tested']+=1;s['passed']+=int(b['passed']);s['refined']+=int(d['refined'])
+                s['fp64_trials']+=d['fp64_trials'];s['fp32_trials']+=d['fp32_trials']
+                s['gate_flips']+=int(a['passed']!=b['passed'])
+                if a['passed'] and b['passed']:s['weight_changes']+=int(abs(a['weight']-b['weight'])>1e-10)
+                assert a['passed']==b['passed'],(key,a,b)
+                if b['passed']:
+                    assert b['backend']=='cuda-f64'
+                    assert abs(a['weight']-b['weight'])<1e-10
+            s=summary[key]
+            for row,a,b in zip(rs['f64'],ps['f64'],ps['mixed']):
+                s['tested']+=1;s['f64_pass']+=int(a['passed']);s['mixed_pass']+=int(b['passed'])
+                s['false_accept']+=int(b['passed'] and not a['passed'])
+                s['false_reject']+=int(a['passed'] and not b['passed'])
+                if a['passed']!=b['passed']:flips.append(dict(ref=key,expr=row['expr'],f64=a['passed'],mixed=b['passed']))
+                if a['passed'] and b['passed']:
+                    e=abs(a['weight']-b['weight']);s['max_weight_error']=max(s['max_weight_error'],e)
+                    s['weight_changes']+=int(e>1e-5)
+                if abs(a.get('weight',0)-b.get('weight',0))<1e-5:
+                    for metric in ('wsharpe','sharpe','cagr','recent_growth','maxdd'):
+                        if metric in a and metric in b:
+                            s['max_metric_error']=max(s['max_metric_error'],abs(a[metric]-b[metric]))
+        del rs,ps
+        print('precision correctness',min(lo+batch,len(names)),'/',len(names),flush=True)
+    cp.cuda.get_current_stream().synchronize()
+    cold_seconds=time.perf_counter()-cold_start
+    timings={mode:[] for mode in ('f64','mixed','auto')}
+    for repeat in range(4):
+        for mode in (('f64','mixed','auto') if repeat%2==0 else ('auto','mixed','f64')):
+            cp.cuda.get_current_stream().synchronize();start=time.perf_counter()
+            for lo in range(0,len(names),batch):
+                rows=[r for r in simulate_many(names[lo:lo+batch],precision='f64' if mode=='auto' else mode) if r['ok']]
+                if rows:proposal_many(rows,refs['current'],precision=mode)
+                del rows
+            cp.cuda.get_current_stream().synchronize()
+            seconds=time.perf_counter()-start
+            if repeat:timings[mode].append(seconds)
+            print('precision timing',repeat,mode,seconds,flush=True)
+    # Include edge holdings and compare both kernels directly; all computation stays on CUDA.
+    win=refs['current']['win'];base=refs['current']['W']
+    W=cp.stack((cp.zeros_like(base),base,cp.where(win['liquid'],0.,.01),
+                cp.where(win['liquid'],1.,0.),base*1e-6))
+    W[:,:win['row0']]=0
+    a,_=launch(W,static_device(win),win['row0'])
+    b,_=launch(W,static_device(win),win['row0'],precision='mixed')
+    edge_finite=bool(cp.isfinite(b).all())
+    edge_error=float(cp.nanmax(cp.abs(a-b)))
+    # The illiquid-only target is deliberately invalid under both precisions.
+    cp.testing.assert_array_equal((a>-1).all(1),(b>-1).all(1))
+    assert edge_finite and max(max_pnl,edge_error)<1e-4,(max_pnl,edge_error)
+    # A mixed candidate must never be accepted accidentally through the production gate.
+    try:gates.run_batch([dict(precision='mixed')],refs['current'])
+    except ValueError:pass
+    else:raise AssertionError('mixed admission guard missing')
+    report=dict(device=cp.cuda.runtime.getDeviceProperties(0)['name'].decode(),
+        fp32_to_fp64_ratio=cp.cuda.Device(0).attributes['SingleToDoublePrecisionPerfRatio'],
+        candidates=len(names),valid=valid,batch=batch,trial_batch=engine.CUDA.trial_batch,
+        factors='unchanged FP64',daily_state='FP32',statistics='FP64',
+        max_daily_return_error=max_pnl,edge_books_max_daily_return_error=edge_error,
+        edge_books_finite=edge_finite,
+        references=summary,auto_references=automatic,flips=flips,warmed_seconds=timings,
+        candidates_per_second={m:len(names)/statistics.mean(t) for m,t in timings.items()},
+        speedup=statistics.mean(timings['f64'])/statistics.mean(timings['mixed']),
+        auto_speedup=statistics.mean(timings['f64'])/statistics.mean(timings['auto']),
+        correctness_and_compile_seconds=cold_seconds,
+        pool_reserved_gib=cp.get_default_memory_pool().total_bytes()/2**30,
+        production_default=engine.CUDA.precision,unrefined_mixed_admission_blocked=True)
+    out=REPO/'tmp/q25_cuda/local_precision.json';out.parent.mkdir(exist_ok=True)
+    out.write_text(json.dumps(report,indent=2),encoding='utf-8')
+    print(json.dumps(report,indent=2),flush=True)
+
+
 if __name__=='__main__':
     main()
     if '--sources' in sys.argv:verify_sources()
     if '--benchmark' in sys.argv:benchmark()
     if '--batch-sweep' in sys.argv:batch_sweep()
+    if '--precision' in sys.argv:verify_precision()
     if '--composition' in sys.argv or '--all-composition' in sys.argv:
         verify_composition('--all-composition' in sys.argv)

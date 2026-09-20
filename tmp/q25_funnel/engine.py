@@ -61,6 +61,12 @@ def load(force=False):
         'is':window(val_end,row0,(fm.train_start,fm.val_end)),
         'train':window(train_end,row0,(fm.train_start,fm.train_end)),
         'val':window(val_end,val_start,(fm.val_start,fm.val_end))})
+    # Bound the configured maxima by available device memory. This estimates
+    # live books, AST intermediates and trial reductions, leaving 35% headroom.
+    free,_=cp.cuda.runtime.memGetInfo()
+    limit=max(1,int(free*.65/(T*S*8*20)))
+    CUDA.candidate_batch=min(CUDA.candidate_batch,1<<(limit.bit_length()-1))
+    CUDA.trial_batch=min(CUDA.trial_batch,max(1,int(free*.10/(T*8*10))))
     return _D
 
 def operands():return load()['vocab']
