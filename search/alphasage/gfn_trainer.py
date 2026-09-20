@@ -25,55 +25,15 @@ from torch import nn
 from torch.optim import Adam
 
 from rl.alpha_pool import AlphaPool
+from rl.evaluator import qnt_bench_sharpe
 
 from search.alphasage.gfn_env import GFNEnv
 from search.alphasage.gfn_loss import EntropyTBGFlowNet
 from search.alphasage.gfn_reward import make_reward_fn
 from search.alphasage.gfn_rgcn import RGCNEncoder
 
-_TRAIN_IC_EVERY = 80   # 每 80 episode 记一次 pool 池 train ensemble IC(与 val pool_ic 同口径)
-
-
-def _pool_train_ic(pool, panels, y) -> float:
-    """池在 train 段的 ensemble IC = 成员 cs-zscore × **带符号 rank_ic** → 合成信号 → IC(y)(仅训练期监控
-    代理;deploy/eval 的真融合走 AFF 因果滚动 lstsq,见 rl.sizing.aff_fuse)。因子值+度量**严格走
-    c 或 cuda**(同 evaluate_alpha 分发):cuda → evaluate_resident(cupy)+ ops_cuda 度量;cpu → evaluate
-    (块化 C)+ backtest.ops 度量。不走 python/numpy 重算。
-    **nan-robust ensemble**:逐 (t,s) 只累加 finite 成员(union,非 `Σw·z` 的 intersection)——否则单个高
-    warmup/退化成员把整 ensemble 的有效截面数压到 <3 → per_t_ic 全 NaN → IC 假 0(已实测 glitch)。"""
-    if not pool.members:
-        return float('nan')
-    if _ini('evaluator', 'device', 'cpu') == 'cuda':
-        from evaluation.expression import evaluate_resident, gy
-        from backtest import ops_cuda as gops
-        from backtest.ops_cuda import metrics as gm
-        import cupy as cp
-        acc = cnt = None
-        for w_i, m in ((mb.rank_ic, mb) for mb in pool.members):
-            z = gops.cs_zscore(evaluate_resident(m.tree, panels))
-            fin = cp.isfinite(z)
-            contrib = cp.where(fin, float(w_i) * z, gops.DTYPE(0.0))
-            acc = contrib if acc is None else acc + contrib
-            cnt = fin.astype(gops.DTYPE) if cnt is None else cnt + fin
-        ens = cp.where(cnt > 0, acc, cp.asarray(cp.nan, dtype=acc.dtype))
-        _, ic, _ = gm.icir(ens, gy(y))
-        return float(ic)
-    from evaluation.expression import evaluate as eval_tree
-    from backtest.ops import cs_zscore_np, icir
-    acc = cnt = None
-    for w_i, m in ((mb.rank_ic, mb) for mb in pool.members):
-        z = cs_zscore_np(np.ascontiguousarray(eval_tree(m.tree, panels, None), dtype=np.float64))
-        fin = np.isfinite(z)
-        contrib = np.where(fin, float(w_i) * z, 0.0)
-        acc = contrib if acc is None else acc + contrib
-        cnt = fin.astype(np.float64) if cnt is None else cnt + fin
-    ens = np.where(cnt > 0, acc, np.nan)
-    _, ic, _ = icir(np.ascontiguousarray(ens, dtype=np.float64), y)
-    return float(ic)
-
-
 def train_alphasage(
-    panels: Dict[str, np.ndarray], y: np.ndarray, capacity: int, *,
+    panels: Dict[str, np.ndarray], capacity: int, *,
     hidden_dim: int, n_layers: int, lr: float, batch_size: int,
     n_episodes: int, nov_weight: float, entropy_coef: float, entropy_temperature: float,
     r_sa_weight: float, r_sa_k: int, r_sa_tau: float, logz_lr: float,
@@ -83,7 +43,7 @@ def train_alphasage(
     np.random.seed(seed)
     dev = torch.device(device)
 
-    pool = AlphaPool(capacity=capacity, embed_fn=None)
+    pool = AlphaPool(capacity=capacity)
 
     # 编码器 = 方法层核心(非基础设施):RGCN 在 partial AST 上做关系感知嵌入。pf/pb 各自独立
     # backbone(共享会让 Adam 见 duplicate params)。pf_backbone 还兼任 R_SA 的结构签名来源(embed_trees)。
@@ -91,7 +51,7 @@ def train_alphasage(
     pb_backbone = RGCNEncoder(hidden_dim=hidden_dim, n_layers=n_layers).to(dev)
 
     sched: Dict[str, float] = {'lam': r_sa_weight, 'eta': nov_weight}   # trainer 每 episode 退火更新
-    reward_fn = make_reward_fn(panels, y, pool, nov_weight,
+    reward_fn = make_reward_fn(panels, pool, nov_weight,
                                embedder=pf_backbone.embed_trees, sched=sched,
                                r_sa_k=r_sa_k, r_sa_tau=r_sa_tau)
     env = GFNEnv(reward_fn=reward_fn, device=dev)
@@ -114,6 +74,7 @@ def train_alphasage(
     save_outputs = entropy_coef > 0
 
     import time
+    bench = qnt_bench_sharpe()          # 日志绝对 Sharpe 口径(内部 reward=edge,读数=edge+锚)
     logz_hist: List[float] = []
     every = max(1, n_episodes // 50)
     denom = max(1, n_episodes - 1)
@@ -133,22 +94,20 @@ def train_alphasage(
         t3 = time.perf_counter()
         logz_hist.append(float(gflownet.logZ.item()))
         ep_total = t3 - t0
-        if ep % _TRAIN_IC_EVERY == 0 or ep == n_episodes - 1:
-            log(f"[asage-trainic] ep{ep}/{n_episodes} pool_train_ic={_pool_train_ic(pool, panels, y):+.4f} "
-                f"pool={pool.size}/{capacity}")
         if ep % every == 0 or ep == n_episodes - 1 or ep_total > 1.5:
-            best = max((m.rank_ic for m in pool.members), key=abs, default=float('nan'))
+            best = float(pool.single_q.max()) + bench if pool.size else float('nan')
             s = reward_fn.stats
             n = max(1, s.n)
-            ics = np.asarray(s.valid_abs_ics) if s.valid_abs_ics else np.array([0.0])
+            edges = np.asarray(s.valid_edges) if s.valid_edges else np.array([0.0])
             log(f"[asage] ep{ep}/{n_episodes} loss={loss.item():+.3f} "
                 f"logZ={gflownet.logZ.item():+.3f} pool={pool.size}/{capacity} "
-                f"best_rank_ic={best:+.4f} lam={sched['lam']:.3f} "
+                f"best_sharpe={best:+.4f} lam={sched['lam']:.3f} "
                 f"t_sample={t1-t0:.2f}s t_loss={t2-t1:.2f}s t_opt={t3-t2:.2f}s")
             log(f"[asage-diag] win_calls={s.n} uniq_trees={len(s.hashes)} "
                 f"valid={100*s.valid/n:.0f}% floor[incomp={100*s.floor_incomplete/n:.0f}%/"
                 f"cost={100*s.floor_cost/n:.0f}%/belowgate={100*s.floor_belowgate/n:.0f}%] "
-                f"mean_len={s.len_sum/n:.1f} validIC[mean={ics.mean():.3f} max={ics.max():.3f}] "
+                f"mean_len={s.len_sum/n:.1f} "
+                f"validSharpe[mean={edges.mean()+bench:+.3f} max={edges.max()+bench:+.3f}] "
                 f"R_SA_mean={s.sa_sum/n:.4f}")
             s.reset()
     log(f"[asage] done: pool_size={pool.size}/{capacity}")

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import cupy as cp
 
-from backtest.ops_cuda import cs_rank, k_per_t_ic, k_per_t_pnl
+from backtest.ops_cuda import DTYPE, cs_rank, k_per_t_ic, k_per_t_pnl, k_qnt_bt
 
 _F64 = cp.float64
 
@@ -93,34 +93,6 @@ def icir(x, y):
     return mean_ic / std_ic, mean_ic, std_ic
 
 
-def topk_gross_sharpe(x, y, k):
-    """per-bar top-k long / bottom-k short **等权** gross PnL 的 Sharpe(mean/std)。匹配部署 top-K 多空构造
-    (无换手缓冲、无费),奖励"极端押注真赚钱"的 alpha → 治 |IC| 的 IC↔PnL 背离(rv_* 类 IC 高但极端 PnL 烂)。
-    注:rank-conviction selection reward 2026-06-25 证否(选高换手 alpha → net 更差,diag_pool_rankconv)→ 回退等权;
-    deploy 端 conviction 仍留 rl.sizing.topk_ls_weights。每 bar 有效截面 <2k → 跳过;有效 bar <5 或 std≈0 → 0。带符号。"""
-    fin = cp.isfinite(x) & cp.isfinite(y)
-    nfin = fin.sum(1)
-    S = x.shape[1]
-    xl = cp.where(fin, x, _F64(-cp.inf))
-    xs = cp.where(fin, x, _F64(cp.inf))
-    thr_hi = cp.partition(xl, S - k, axis=1)[:, S - k]      # 每行第 k 大(finite)
-    thr_lo = cp.partition(xs, k - 1, axis=1)[:, k - 1]      # 每行第 k 小(finite)
-    long_m = fin & (x >= thr_hi[:, None])
-    short_m = fin & (x <= thr_lo[:, None])
-    # 腿内等权 gross PnL(rank-conviction selection reward 已证否 net 更差 → 回退 equal;deploy conviction 留 topk_ls_weights)
-    nl = long_m.sum(1, dtype=_F64); ns = short_m.sum(1, dtype=_F64)
-    yl = cp.where(long_m, y, _F64(0)).sum(1, dtype=_F64) / cp.maximum(nl, _F64(1))
-    ys = cp.where(short_m, y, _F64(0)).sum(1, dtype=_F64) / cp.maximum(ns, _F64(1))
-    pnl = cp.where(nfin >= 2 * k, yl - ys, cp.nan)
-    f = cp.isfinite(pnl)
-    cnt = float(f.sum())
-    if cnt < 5:
-        return 0.0
-    v = pnl[f]
-    mu = float(v.mean(dtype=_F64)); sd = float(v.std(dtype=_F64))
-    return mu / sd if sd > 1e-12 else 0.0
-
-
 def rank_cache(y):
     """y_future 的 cs_rank panel(每候选不变 → evaluator 缓存一次,喂 rank_ic 省一次排序)。"""
     return cs_rank(y)
@@ -166,3 +138,21 @@ def per_t_pnl(values, y):
     n_v==0 或 Σ|v|<1e-12 → 0。evaluator 唯一 D2H 的 (T,) 数组(喂 CPU 池 pnl_corr)。
     **融合两轮归约核**(k_per_t_pnl)替原 ~7 遍整盘归约;f64 累加器同精度。"""
     return k_per_t_pnl(values, y)
+
+
+def qnt_static_to_device(static):
+    """rl.backtest_reward.prepare_qnt_static 产物上卡:价格/滑点面板 → DTYPE,unlocked → uint8。
+    每数据集一次,常驻显存供 qnt_bt 批量评估复用。"""
+    return {k: cp.asarray(v, dtype=(cp.uint8 if k == 'unlocked' else DTYPE))
+            for k, v in static.items()}
+
+
+def qnt_bt(W_dev, static_dev, i0, ppy=365.0):
+    """crypto 组合回测(CUDA 批量)= Quantiacs qnt 1:1,与 CPU rl.backtest_reward.run_bt 同语义。
+    W_dev:(B,T,S) DTYPE 常驻 cupy(策略原始权重,核内自做 shift-1/双重归一/open 调整);
+    → (rr (B,T) f64 cupy, stats (B,5) f64 cupy = [sharpe, mean_return, volatility,
+    max_drawdown, total_return],窗 [i0:])。消费卡 DTYPE=f32:面板/权重 f32、递推恒 double,
+    对 CPU f64 容差 ~1e-4(SR 刻度);终选候选用 CPU 内核 f64 复核。"""
+    return k_qnt_bt(W_dev, static_dev['open_raw'], static_dev['prev_close'],
+                    static_dev['open_ff0'], static_dev['close_ff0'],
+                    static_dev['slippage'], static_dev['unlocked'], i0, ppy)

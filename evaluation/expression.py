@@ -29,17 +29,11 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from config.config import ini
 from backtest import ops
 from evaluation.ast import AlphaTree, Node
 from evaluation.grammar import (
-    BinaryOp, ConstBinaryOp, CsOp, PairOp, TsOp, UnaryOp,
+    BinaryOp, ConstBinaryOp, PairOp, TernaryOp, TsOp, UnaryOp,
 )
-
-# 求值后端:cpu=块化 C 执行器(本文件上半);cuda=全panel常驻 GPU 执行器(本文件下半,lazy)。
-# config.ini[evaluator] device 单一来源,import 阶段固化。
-_DEVICE = ini('evaluator', 'device', 'cpu')
-
 
 # 模块级 phase profiler:eval_tree 内 cache 命中 + 各 kind 算子耗时。
 # 调用方 reset_prof() / get_prof() 取数据。
@@ -48,18 +42,21 @@ _PROF: Dict[str, float] = {
     'operand': 0.0,       # 叶子取 panels[op]
     'const': 0.0,         # np.full 标量广播
     'unary': 0.0,         # ops.abs/neg/sqrt/...
-    'cs': 0.0,            # ops.cs_rank/cs_zscore/...
     'binary': 0.0,        # ops.add/sub/mul/...
     'binary_const': 0.0,  # _add_const / _mul_const / _pow_const
+    'ternary': 0.0,       # ops.if_else / trade_when(三 panel)
     'ts': 0.0,            # ops.ts_mean/ts_std/...(带 window)
     'pair': 0.0,          # ops.ts_corr / ts_cov(双 panel + window)
+    'ts_param': 0.0,      # ops.ts_decay_exp_window / ts_scale / ts_quantile(window + 标量)
+    'pair_param': 0.0,    # ops.ts_regression(双 panel + window + 标量)
     'cache_store': 0.0,   # cache[hash] = result
 }
 _PROF_N: Dict[str, int] = {
     'cache_hit': 0,
     'cache_miss': 0,
-    'operand': 0, 'const': 0, 'unary': 0, 'cs': 0,
-    'binary': 0, 'binary_const': 0, 'ts': 0, 'pair': 0,
+    'operand': 0, 'const': 0, 'unary': 0,
+    'binary': 0, 'binary_const': 0, 'ternary': 0, 'ts': 0, 'pair': 0,
+    'ts_param': 0, 'pair_param': 0,
 }
 
 
@@ -101,6 +98,8 @@ _BINARY_FN = {
     BinaryOp.DIV: ops.div,
     BinaryOp.MAX: ops.max_b,
     BinaryOp.MIN: ops.min_b,
+    BinaryOp.GT:  ops.gt,
+    BinaryOp.LT:  ops.lt,
 }
 
 # binary_const:panel ⊕ scalar k → ops C kernel(1 SIMD pass,替换 numpy 多 pass)。
@@ -112,11 +111,9 @@ _CONST_BIN_FN = {
     ConstBinaryOp.POW_CONST: ops.pow_const,
 }
 
-_CS_FN = {
-    CsOp.CS_RANK:   ops.cs_rank,
-    CsOp.CS_ZSCORE: ops.cs_zscore,
-    CsOp.CS_DEMEAN: ops.cs_demean,
-    CsOp.CS_SCALE:  ops.cs_scale,
+_TERNARY_FN = {
+    TernaryOp.IF_ELSE:    ops.if_else,
+    TernaryOp.TRADE_WHEN: ops.trade_when,
 }
 
 _TS_FN = {
@@ -136,12 +133,23 @@ _TS_FN = {
     TsOp.TS_KURT:    ops.ts_kurt,
     TsOp.TS_MAD:     ops.ts_mad,
     TsOp.TS_SLOPE:   ops.ts_slope,
+    # 时序书口径新增融合算子(2026-07-22)
+    TsOp.TS_CHANPOS: ops.ts_chanpos,
+    TsOp.TS_DDOWN:   ops.ts_ddown,
+    TsOp.TS_ZS:      ops.ts_zscore,
+    TsOp.TS_SNR:     ops.ts_snr,
 }
 
 _PAIR_FN = {
     PairOp.TS_CORR: ops.ts_corr,
     PairOp.TS_COV:  ops.ts_cov,
 }
+
+# 注入层新增的两个 kind(2026-08-13),由 ops_injection.register 填表:
+#   ts_param   f(x, w, k, out)          panel + window + 连续标量
+#   pair_param f(a, b, w, k, out)       panel + panel + window + 连续标量
+_TS_PARAM_FN: Dict = {}
+_PAIR_PARAM_FN: Dict = {}
 
 
 # ============================================================================
@@ -153,7 +161,8 @@ _PAIR_FN = {
 # 路径相关,这是逐位一致的前提)。64 列 × T=210k f64 ≈ 108MB/块缓冲。
 _BLOCK_COLS = 64
 
-_COLWISE = frozenset(('unary', 'binary', 'binary_const', 'ts', 'pair'))
+_COLWISE = frozenset(('unary', 'binary', 'binary_const', 'ternary', 'ts', 'pair',
+                      'ts_param', 'pair_param'))
 
 
 class _BlockPool:
@@ -213,9 +222,9 @@ def evaluate(
     panels: Dict[str, np.ndarray],
     cache=None,
 ) -> np.ndarray:
-    """求值整树,返回 (T, S) ndarray。cache 须为 EvalCache(bump 准入)或 None。"""
-    if _DEVICE == 'cuda':
-        return _gpu_evaluate(tree, panels, cache)   # 同文件 GPU 执行器(lazy cupy/ops_cuda)
+    """求值整树,返回 (T, S) ndarray。cache 须为 EvalCache(bump 准入)或 None。
+    恒 CPU(日线 panel 极小,单树 C 内核毫秒级;旧 5m 口径的 GPU 常驻执行器
+    2026-07-25 随 1h crypto 栈删除)。"""
     return _eval_full(tree.root, panels, cache, _col_ranges(panels))
 
 
@@ -247,13 +256,6 @@ def _eval_full(n: Node, panels: Dict[str, np.ndarray], cache, ranges=None, force
         result = np.full(ref.shape, float(n.op), dtype=np.float64, order='C')
         _PROF['const'] += time.perf_counter() - _t
         _PROF_N['const'] += 1
-    elif n.kind == 'cs':
-        # cs 屏障:截面语义需要整行 → 子树先整列物化(f32 operand 由 C 绑定升格)。
-        x = _eval_full(n.children[0], panels, cache, ranges)
-        _t = time.perf_counter()
-        result = _CS_FN[n.op](x)
-        _PROF['cs'] += time.perf_counter() - _t
-        _PROF_N['cs'] += 1
     else:
         # colwise 链根:列块流水,块结果直写整列输出。
         ref = next(iter(panels.values()))
@@ -286,9 +288,6 @@ def _prepare(n: Node, panels: Dict[str, np.ndarray], cache, vleaves: Dict[int, n
     虚拟叶 = cs 子结果 | cache 命中的内点 | 二次使用(bump≥2)的热内点。
     其余内点留给 _eval_block 按块流式算,不物化。"""
     if n.kind == 'operand' or n.kind in ('const_add', 'const_mul'):
-        return
-    if n.kind == 'cs':
-        vleaves[n.hash] = _eval_full(n, panels, cache, ranges)
         return
     if cache is not None:
         _t = time.perf_counter()
@@ -377,6 +376,20 @@ def _eval_block(
         if first: _PROF_N['binary_const'] += 1
         if ao: pool.put(ab)
         return dest, out is None
+    if kind == 'ternary':
+        # colwise(if_else 逐位;trade_when 列内时序扫描,列间独立)→ 块管线兼容。
+        ab, ao = _eval_block(n.children[0], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
+        bb, bo = _eval_block(n.children[1], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
+        cb, co = _eval_block(n.children[2], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
+        _t = time.perf_counter()
+        dest = out if out is not None else pool.get(j1 - j0)
+        _TERNARY_FN[n.op](ab, bb, cb, dest)
+        _PROF['ternary'] += time.perf_counter() - _t
+        if first: _PROF_N['ternary'] += 1
+        if ao: pool.put(ab)
+        if bo: pool.put(bb)
+        if co: pool.put(cb)
+        return dest, out is None
     if kind == 'ts':
         xb, xo = _eval_block(n.children[0], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
         _t = time.perf_counter()
@@ -397,197 +410,35 @@ def _eval_block(
         if ao: pool.put(ab)
         if bo: pool.put(bb)
         return dest, out is None
+    if kind == 'ts_param':
+        # 末子是常数叶(连续标量参数),**不物化成块** —— 直接取标量喂 C 内核。
+        xb, xo = _eval_block(n.children[0], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
+        _t = time.perf_counter()
+        dest = out if out is not None else pool.get(j1 - j0)
+        _TS_PARAM_FN[n.op](xb, n.window, float(n.children[1].op), dest, vlo, vhi)
+        _PROF['ts_param'] += time.perf_counter() - _t
+        if first: _PROF_N['ts_param'] += 1
+        if xo: pool.put(xb)
+        return dest, out is None
+    if kind == 'pair_param':
+        ab, ao = _eval_block(n.children[0], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
+        bb, bo = _eval_block(n.children[1], panels, vleaves, pool, j0, j1, vlo=vlo, vhi=vhi)
+        _t = time.perf_counter()
+        dest = out if out is not None else pool.get(j1 - j0)
+        _PAIR_PARAM_FN[n.op](ab, bb, n.window, float(n.children[2].op), dest, vlo, vhi)
+        _PROF['pair_param'] += time.perf_counter() - _t
+        if first: _PROF_N['pair_param'] += 1
+        if ao: pool.put(ab)
+        if bo: pool.put(bb)
+        return dest, out is None
     raise ValueError(f'unknown kind {kind}')
 
 
-# ============================================================================
-# GPU 全panel常驻执行器(device=cuda 路径)—— 与上面 CPU 块化执行器正交。
-# ============================================================================
-# 执行模型(GPU 专用):
-#   - panels 一次 H2D 常驻显存(按 id(panels) 缓存,整 run 复用 → 不每树重传 1.78GB)。
-#   - 整树自底向上递归,中间结果全 (T,S) 常驻 cupy(显存富余:实测 1.78GB/32GB)。
-#   - 算子全走 backtest.ops_cuda(语义对齐真 C,容差 ~1e-6;dtype=消费卡 f32/数据中心 f64)。
-#   - 链根 D2H 回 numpy f64 → evaluator 下游零改;cache 入参兼容但 GPU 路不用(整树常驻够快)。
-# **cupy / ops_cuda / GPU 分发表全部 lazy**:device=cpu 进程(无 cupy)import 本模块零触
-# cupy;首次 cuda 求值时 _gpu_init() 构建一次。GPU/CPU FP 累加序不同 → 非 bitwise,两路各自自洽。
-_GPU = None                                   # lazy GPU state(cupy/ops_cuda/分发表)
-_GPANEL_CACHE: Dict[int, tuple] = {}          # id(panels) → (sentinel, {tok: cupy})
-_GY_CACHE: Dict[int, tuple] = {}              # id(y_future) → (y_future, cupy)
+# 注入层算子(BRAIN logical / transformational 族,2026-08-13 用户指令)挂进上面三张分发表。
+# 放模块尾:ops_injection 要读这三个 dict,提前 import 会成环。
+# 复用既有节点 kind ⇒ _eval_block 无需新分支;新枚举不入 all_productions() ⇒ GP 搜索空间不变。
+from evaluation import ops_injection as _inj      # noqa: E402
 
+_inj.register(unary=_UNARY_FN, binary=_BINARY_FN, binary_const=_CONST_BIN_FN,
+              ts=_TS_FN, ts_param=_TS_PARAM_FN, pair_param=_PAIR_PARAM_FN)
 
-class _GpuState:
-    # unary/binary/const_bin 分发表已删:rank4 起 elementwise 走 _gpu_eval_fused 的 codegen(不再逐 op 分发)。
-    __slots__ = ('cp', 'gops', 'cs', 'ts', 'pair')
-
-
-def _gpu_init() -> '_GpuState':
-    """首次 cuda 求值时构建 cupy/ops_cuda 句柄 + 屏障算子分发表(cs/ts/pair;之后零成本复用)。
-    elementwise(unary/binary/binary_const)不进分发表 → 运行时 codegen 融合核(_gpu_eval_fused)。"""
-    global _GPU
-    if _GPU is not None:
-        return _GPU
-    import cupy as cp
-    from backtest import ops_cuda as gops
-    st = _GpuState()
-    st.cp = cp
-    st.gops = gops
-    st.cs = {
-        CsOp.CS_RANK: gops.cs_rank, CsOp.CS_ZSCORE: gops.cs_zscore,
-        CsOp.CS_DEMEAN: gops.cs_demean, CsOp.CS_SCALE: gops.cs_scale,
-    }
-    st.ts = {
-        TsOp.TS_MEAN: gops.ts_mean, TsOp.TS_STD: gops.ts_std, TsOp.TS_MAX: gops.ts_max,
-        TsOp.TS_MIN: gops.ts_min, TsOp.TS_SUM: gops.ts_sum, TsOp.TS_RANK: gops.ts_rank,
-        TsOp.TS_ARG_MAX: gops.ts_arg_max, TsOp.TS_ARG_MIN: gops.ts_arg_min,
-        TsOp.TS_EMA: gops.ts_ema, TsOp.TS_WMA: gops.ts_wma, TsOp.TS_REF: gops.ts_ref,
-        TsOp.TS_DELTA: gops.ts_delta, TsOp.TS_SKEW: gops.ts_skew, TsOp.TS_KURT: gops.ts_kurt,
-        TsOp.TS_MAD: gops.ts_mad, TsOp.TS_SLOPE: gops.ts_slope,
-    }
-    st.pair = {PairOp.TS_CORR: gops.ts_corr, PairOp.TS_COV: gops.ts_cov}
-    _GPU = st
-    return _GPU
-
-
-def _gpanels(panels: Dict[str, np.ndarray]):
-    """panels 一次 H2D 常驻,按 id 缓存(sentinel 身份校验防 id 复用),整 run 复用。"""
-    g = _gpu_init()
-    key = id(panels)
-    sentinel = next(iter(panels.values()))
-    hit = _GPANEL_CACHE.get(key)
-    if hit is not None and hit[0] is sentinel:
-        return hit[1]
-    gp = {tok: g.cp.asarray(a.astype(g.gops.DTYPE, copy=False)) for tok, a in panels.items()}
-    _GPANEL_CACHE[key] = (sentinel, gp)
-    return gp
-
-
-# ----------------------------------------------------------------------------
-# rank4 — GPU 极大 elementwise 子树融合(FACT compositional kernel synthesis)
-# ----------------------------------------------------------------------------
-# _gpu_eval 命中 elementwise 节点(unary/binary/binary_const)→ 不逐节点物化整盘,而是切出以
-# operand 叶 / const 字面量 / 屏障(ts/pair/cs)输出为界的**极大 elementwise 连通区**,codegen 成
-# 单个 cp.ElementwiseKernel(读叶+写根一遍,内部边整盘往返全消;DAG-CSE 按 node.hash 去重同子树)。
-# body 串(operand→positional in_param、const→字面量、屏障→positional in_param)即结构签名 → 按 body
-# 缓存编译核:不同 operand 绑定 / 不同公式同结构复用同核(GP 树被屏障切碎 → elementwise 区小而高频
-# 复现 → 缓存命中主导,摊掉 NVRTC 编译)。峰值显存逐节点 O(树)×整盘 → 区内 O(1)(本地 T1000 4GB 消
-# OOM)。逐元素无 reduction → 不改累加序,落 GPU ~1e-6(scripts/verify_fused 守门)。NaN 语义逐字复刻
-# ops_cuda 标量核(abs/neg/square/tanh 靠 IEEE 传播免守卫,sign/log/sqrt/inv/s_log_1p/div/max/min/
-# pow_const 显式内联)。
-_FUSED_KERNEL_CACHE: Dict[str, object] = {}     # body_str -> cp.ElementwiseKernel
-_ELEMENTWISE_KINDS = frozenset(('unary', 'binary', 'binary_const'))
-
-_UNARY_EXPR = {
-    UnaryOp.ABS:      lambda a: f'fabs({a})',
-    UnaryOp.NEG:      lambda a: f'-({a})',
-    UnaryOp.SQUARE:   lambda a: f'({a})*({a})',
-    UnaryOp.TANH:     lambda a: f'tanh({a})',
-    UnaryOp.SIGN:     lambda a: f'(isnan({a}) ? ({a}) : (({a}) > (T)0 ? (T)1 : (({a}) < (T)0 ? (T)-1 : (T)0)))',
-    UnaryOp.LOG:      lambda a: f'((isnan({a}) || ({a}) <= (T)0) ? (T)nan("") : log({a}))',
-    UnaryOp.SQRT:     lambda a: f'((isnan({a}) || ({a}) < (T)0) ? (T)nan("") : sqrt({a}))',
-    UnaryOp.INV:      lambda a: f'((isnan({a}) || ({a}) == (T)0) ? (T)nan("") : (T)1 / ({a}))',
-    UnaryOp.S_LOG_1P: lambda a: f'(isnan({a}) ? ({a}) : (({a}) >= (T)0 ? log1p({a}) : -log1p(-({a}))))',
-}
-_BINARY_EXPR = {
-    BinaryOp.ADD: lambda a, b: f'(({a}) + ({b}))',
-    BinaryOp.SUB: lambda a, b: f'(({a}) - ({b}))',
-    BinaryOp.MUL: lambda a, b: f'(({a}) * ({b}))',
-    BinaryOp.DIV: lambda a, b: f'((({b}) == (T)0) ? (T)nan("") : ({a}) / ({b}))',
-    BinaryOp.MAX: lambda a, b: f'((isnan({a}) || isnan({b})) ? (T)nan("") : (({a}) > ({b}) ? ({a}) : ({b})))',
-    BinaryOp.MIN: lambda a, b: f'((isnan({a}) || isnan({b})) ? (T)nan("") : (({a}) < ({b}) ? ({a}) : ({b})))',
-}
-_CONST_EXPR = {
-    ConstBinaryOp.ADD_CONST: lambda a, k: f'(({a}) + (T)({k}))',
-    ConstBinaryOp.MUL_CONST: lambda a, k: f'(({a}) * (T)({k}))',
-    ConstBinaryOp.POW_CONST: lambda a, k: f'(fabs({a}) == (T)0 ? (T)0 : (({a}) < (T)0 ? -pow(fabs({a}), (T)({k})) : pow(fabs({a}), (T)({k}))))',
-}
-
-
-def _emit_node(n: Node, inputs, input_index, temps, lines) -> str:
-    """post-order codegen:返回节点在 body 里的引用串(positional in_param / temp / 字面量)。
-    operand 与屏障(ts/pair/cs)= 输入边界(按 hash dedup → CSE);const = 内联字面量;
-    elementwise 内点 = 一条 `T t? = expr;`(按 hash dedup → DAG-CSE)。"""
-    k = n.kind
-    if k == 'operand' or k in ('ts', 'pair', 'cs'):
-        name = input_index.get(n.hash)
-        if name is None:
-            name = f'in{len(inputs)}'
-            input_index[n.hash] = name
-            inputs.append(n)
-        return name
-    if k in ('const_add', 'const_mul'):
-        return f'(T)({float(n.op)!r})'
-    name = temps.get(n.hash)
-    if name is not None:
-        return name
-    if k == 'unary':
-        expr = _UNARY_EXPR[n.op](_emit_node(n.children[0], inputs, input_index, temps, lines))
-    elif k == 'binary':
-        a = _emit_node(n.children[0], inputs, input_index, temps, lines)
-        b = _emit_node(n.children[1], inputs, input_index, temps, lines)
-        expr = _BINARY_EXPR[n.op](a, b)
-    else:  # binary_const:children[0]=panel,children[1]=const 叶(.op=k)
-        a = _emit_node(n.children[0], inputs, input_index, temps, lines)
-        expr = _CONST_EXPR[n.op](a, repr(float(n.children[1].op)))
-    name = f't{len(temps)}'
-    temps[n.hash] = name
-    lines.append(f'T {name} = {expr};')
-    return name
-
-
-def _gpu_eval_fused(n: Node, panels):
-    """融合 n 为根的极大 elementwise 区为单 ElementwiseKernel,输入(operand/屏障)先递归求值。"""
-    g = _GPU
-    inputs, input_index, temps, lines = [], {}, {}, []
-    root_ref = _emit_node(n, inputs, input_index, temps, lines)
-    body = ' '.join(lines) + f' o = {root_ref};'
-    kern = _FUSED_KERNEL_CACHE.get(body)
-    if kern is None:
-        in_params = ', '.join(f'T in{i}' for i in range(len(inputs)))
-        kern = g.cp.ElementwiseKernel(in_params, 'T o', body, 'fm_fused')
-        _FUSED_KERNEL_CACHE[body] = kern
-    args = [_gpu_eval(c, panels) for c in inputs]
-    return kern(*args)
-
-
-def _gpu_eval(n: Node, panels):
-    g = _GPU
-    k = n.kind
-    if k == 'operand':
-        return panels[n.op]
-    if k in ('const_add', 'const_mul'):
-        ref = next(iter(panels.values()))
-        return g.cp.full(ref.shape, g.gops.DTYPE(n.op), dtype=g.gops.DTYPE)
-    if k in _ELEMENTWISE_KINDS:
-        return _gpu_eval_fused(n, panels)        # rank4:整段 elementwise 子树融成单核
-    if k == 'cs':
-        return g.cs[n.op](_gpu_eval(n.children[0], panels))
-    if k == 'ts':
-        return g.ts[n.op](_gpu_eval(n.children[0], panels), n.window)
-    if k == 'pair':
-        return g.pair[n.op](_gpu_eval(n.children[0], panels), _gpu_eval(n.children[1], panels), n.window)
-    raise ValueError(f'unknown kind {k}')
-
-
-def _gpu_evaluate(tree: AlphaTree, panels: Dict[str, np.ndarray], cache=None) -> np.ndarray:
-    """整树 GPU 求值,链根 D2H 回 numpy f64(evaluate() 在 device=cuda 时调本函数)。"""
-    gp = _gpanels(panels)
-    res = _gpu_eval(tree.root, gp)
-    return _GPU.cp.asnumpy(res).astype(np.float64, copy=False)
-
-
-def evaluate_resident(tree: AlphaTree, panels: Dict[str, np.ndarray]):
-    """返回**常驻 cupy** (T,S),不 D2H —— device=cuda 评分路径用(因子留显存,直接喂 GPU 度量,
-    消灭每候选 1776MB D2H)。下游 ops_cuda.metrics 消费此 cupy handle。"""
-    return _gpu_eval(tree.root, _gpanels(panels))
-
-
-def gy(y_future: np.ndarray):
-    """y_future H2D 缓存(整 run 不变 → 1 份常驻)。GPU 度量(ic/rank_ic/per_t_pnl/coverage)用。"""
-    g = _gpu_init()
-    key = id(y_future)
-    hit = _GY_CACHE.get(key)
-    if hit is not None and hit[0] is y_future:
-        return hit[1]
-    gv = g.cp.asarray(y_future.astype(g.gops.DTYPE, copy=False))
-    _GY_CACHE[key] = (y_future, gv)
-    return gv

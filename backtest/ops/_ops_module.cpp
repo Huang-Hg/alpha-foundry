@@ -51,6 +51,9 @@ DEF_UNARY(square,  fm_square)
 DEF_UNARY(tanh_,   fm_tanh)
 DEF_UNARY(inv,     fm_inv)
 DEF_UNARY(s_log_1p,fm_s_log_1p)
+/* 注入层 logical 一元(2026-08-13)。 */
+DEF_UNARY(not_,    fm_not)
+DEF_UNARY(is_nan,  fm_is_nan)
 
 
 /* ---------- f32 → f64 块升格(operand 叶,必带 out)---------- */
@@ -155,6 +158,46 @@ DEF_BINARY(mul,   fm_mul)
 DEF_BINARY(div_,  fm_div)
 DEF_BINARY(max_b, fm_max_b)
 DEF_BINARY(min_b, fm_min_b)
+DEF_BINARY(gt,    fm_gt)
+DEF_BINARY(lt,    fm_lt)
+/* 注入层 logical 族(2026-08-13):greater/less 已由 gt/lt 覆盖,此处补其余六个。 */
+DEF_BINARY(and_,          fm_and)
+DEF_BINARY(or_,           fm_or)
+DEF_BINARY(equal,         fm_equal)
+DEF_BINARY(not_equal,     fm_not_equal)
+DEF_BINARY(greater_equal, fm_greater_equal)
+DEF_BINARY(less_equal,    fm_less_equal)
+
+
+/* ---------- Ternary(三 panel 入参,bool 组合子) ---------- */
+
+#define DEF_TERNARY(py_name, c_fn)                                                    \
+static PyObject* py_##py_name(PyObject* self, PyObject* args) {                       \
+    PyObject *o_a, *o_b, *o_c; PyObject* o_out = NULL;                                 \
+    if (!PyArg_ParseTuple(args, "OOO|O", &o_a, &o_b, &o_c, &o_out)) return NULL;       \
+    int64_t lda, ldb, ldc, ldo;                                                         \
+    PyArrayObject* a = as_panel_ld(o_a, &lda); if (!a) return NULL;                     \
+    PyArrayObject* b = as_panel_ld(o_b, &ldb); if (!b) { Py_DECREF(a); return NULL; }   \
+    PyArrayObject* c = as_panel_ld(o_c, &ldc);                                          \
+    if (!c) { Py_DECREF(a); Py_DECREF(b); return NULL; }                                \
+    if (PyArray_DIM(a, 0) != PyArray_DIM(b, 0) || PyArray_DIM(a, 1) != PyArray_DIM(b, 1) || \
+        PyArray_DIM(a, 0) != PyArray_DIM(c, 0) || PyArray_DIM(a, 1) != PyArray_DIM(c, 1)) { \
+        PyErr_SetString(PyExc_ValueError, "panel shape mismatch");                     \
+        Py_DECREF(a); Py_DECREF(b); Py_DECREF(c); return NULL;                         \
+    }                                                                                   \
+    npy_intp T = PyArray_DIM(a, 0), S = PyArray_DIM(a, 1);                              \
+    PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                           \
+                               : alloc_panel(T, S, &ldo);                               \
+    if (!out) { Py_DECREF(a); Py_DECREF(b); Py_DECREF(c); return NULL; }                \
+    c_fn((const double*)PyArray_DATA(a), (const double*)PyArray_DATA(b),                \
+         (const double*)PyArray_DATA(c), (double*)PyArray_DATA(out),                    \
+         (int64_t)T, (int64_t)S, lda, ldb, ldc, ldo);                                   \
+    Py_DECREF(a); Py_DECREF(b); Py_DECREF(c);                                           \
+    return (PyObject*)out;                                                              \
+}
+
+DEF_TERNARY(if_else,    fm_if_else)
+DEF_TERNARY(trade_when, fm_trade_when)
 
 
 /* ---------- Elementwise binary_const(panel ⊕ scalar k)---------- */
@@ -178,6 +221,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
 DEF_BIN_CONST(add_const, fm_add_const)
 DEF_BIN_CONST(mul_const, fm_mul_const)
 DEF_BIN_CONST(pow_const, fm_pow_const)
+/* 注入层 panel⊕连续标量(2026-08-13):k 不受常数池约束(常数池是为 GP 枚举产生式设的)。 */
+DEF_BIN_CONST(left_tail,  fm_left_tail)
+DEF_BIN_CONST(right_tail, fm_right_tail)
+DEF_BIN_CONST(hump,       fm_hump)
 
 
 /* ---------- Rolling unary ---------- */
@@ -243,6 +290,10 @@ DEF_TS_UNARY_CLIP(ts_skew,    fm_ts_skew)
 DEF_TS_UNARY_CLIP(ts_kurt,    fm_ts_kurt)
 DEF_TS_UNARY_CLIP(ts_mad,     fm_ts_mad)
 DEF_TS_UNARY(ts_slope,   fm_ts_slope)        /* 增量值随起点漂移 → 留扫描裁剪保 bit-identity */
+DEF_TS_UNARY_CLIP(ts_chanpos, fm_ts_chanpos)  /* 2026-07-22 时序书新增 4 融合算子 */
+DEF_TS_UNARY_CLIP(ts_ddown,   fm_ts_ddown)
+DEF_TS_UNARY_CLIP(ts_zscore,  fm_ts_zscore)
+DEF_TS_UNARY_CLIP(ts_snr,     fm_ts_snr)
 
 
 /* ---------- Rolling pair（corr/cov 均裁剪,统一收 vlo/vhi）---------- */
@@ -272,6 +323,60 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
 
 DEF_TS_PAIR(ts_corr, fm_ts_corr)
 DEF_TS_PAIR(ts_cov,  fm_ts_cov)
+
+
+/* ---------- 注入层 rolling(2026-08-13,BRAIN time_series 族) ----------
+ * 前三个复用 DEF_TS_UNARY(签名与既有 ts 算子一致);后四个多带一个连续标量 k。 */
+
+DEF_TS_UNARY(ts_backfill, fm_ts_backfill)
+DEF_TS_UNARY(ts_median,   fm_ts_median)
+DEF_TS_UNARY(ts_av_diff,  fm_ts_av_diff)
+
+/* panel + window + 标量:f(x, w, k, out=None) */
+#define DEF_TS_PARAM(py_name, c_fn)                                                 \
+static PyObject* py_##py_name(PyObject* self, PyObject* args) {                     \
+    PyObject* o_x; long long w; double k; PyObject* o_out = NULL;                    \
+    PyObject* o_lo = NULL; PyObject* o_hi = NULL;                                     \
+    if (!PyArg_ParseTuple(args, "OLd|OOO", &o_x, &w, &k, &o_out, &o_lo, &o_hi)) return NULL; \
+    (void)o_lo; (void)o_hi;                                                           \
+    int64_t ldx, ldo;                                                                 \
+    PyArrayObject* x = as_panel_ld(o_x, &ldx); if (!x) return NULL;                   \
+    npy_intp T = PyArray_DIM(x, 0), S = PyArray_DIM(x, 1);                            \
+    PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
+                               : alloc_panel(T, S, &ldo);                             \
+    if (!out) { Py_DECREF(x); return NULL; }                                          \
+    c_fn((const double*)PyArray_DATA(x), (double*)PyArray_DATA(out),                  \
+         (int64_t)T, (int64_t)S, (int64_t)w, k, ldx, ldo);                            \
+    Py_DECREF(x);                                                                     \
+    return (PyObject*)out;                                                            \
+}
+
+DEF_TS_PARAM(ts_decay_exp_window, fm_ts_decay_exp_window)
+DEF_TS_PARAM(ts_scale,            fm_ts_scale)
+DEF_TS_PARAM(ts_quantile,         fm_ts_quantile)
+
+/* panel + panel + window + 标量:f(y, x, w, k, out=None) */
+static PyObject* py_ts_regression(PyObject* self, PyObject* args) {
+    PyObject *o_y, *o_x; long long w; double k; PyObject* o_out = NULL;
+    PyObject* o_lo = NULL; PyObject* o_hi = NULL;
+    if (!PyArg_ParseTuple(args, "OOLd|OOO", &o_y, &o_x, &w, &k, &o_out, &o_lo, &o_hi)) return NULL;
+    (void)o_lo; (void)o_hi;
+    int64_t ldy, ldx, ldo;
+    PyArrayObject* y = as_panel_ld(o_y, &ldy); if (!y) return NULL;
+    PyArrayObject* x = as_panel_ld(o_x, &ldx); if (!x) { Py_DECREF(y); return NULL; }
+    if (PyArray_DIM(y, 0) != PyArray_DIM(x, 0) || PyArray_DIM(y, 1) != PyArray_DIM(x, 1)) {
+        PyErr_SetString(PyExc_ValueError, "panel shape mismatch");
+        Py_DECREF(y); Py_DECREF(x); return NULL;
+    }
+    npy_intp T = PyArray_DIM(y, 0), S = PyArray_DIM(y, 1);
+    PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo) : alloc_panel(T, S, &ldo);
+    if (!out) { Py_DECREF(y); Py_DECREF(x); return NULL; }
+    fm_ts_regression((const double*)PyArray_DATA(y), (const double*)PyArray_DATA(x),
+                     (double*)PyArray_DATA(out), (int64_t)T, (int64_t)S, (int64_t)w, k,
+                     ldy, ldx, ldo);
+    Py_DECREF(y); Py_DECREF(x);
+    return (PyObject*)out;
+}
 
 
 /* ---------- Cross-sectional ---------- */
@@ -494,6 +599,22 @@ static PyMethodDef methods[] = {
     {"div_",   py_div_,   METH_VARARGS, "a/b (NaN if b==0)"},
     {"max_b",  py_max_b,  METH_VARARGS, "max(a,b) elementwise"},
     {"min_b",  py_min_b,  METH_VARARGS, "min(a,b) elementwise"},
+    {"gt",     py_gt,     METH_VARARGS, "(a>b)?1:0 (NaN propagates)"},
+    {"lt",     py_lt,     METH_VARARGS, "(a<b)?1:0 (NaN propagates)"},
+    {"not_",   py_not_,   METH_VARARGS, "x>0?0:1 (NaN->NaN)"},
+    {"is_nan", py_is_nan, METH_VARARGS, "isnan(x)?1:0 (does NOT propagate NaN)"},
+    {"and_",          py_and_,          METH_VARARGS, "(a>0 && b>0)?1:0 (NaN propagates)"},
+    {"or_",           py_or_,           METH_VARARGS, "(a>0 || b>0)?1:0 (NaN propagates)"},
+    {"equal",         py_equal,         METH_VARARGS, "(a==b)?1:0 (NaN propagates)"},
+    {"not_equal",     py_not_equal,     METH_VARARGS, "(a!=b)?1:0 (NaN propagates)"},
+    {"greater_equal", py_greater_equal, METH_VARARGS, "(a>=b)?1:0 (NaN propagates)"},
+    {"less_equal",    py_less_equal,    METH_VARARGS, "(a<=b)?1:0 (NaN propagates)"},
+    {"left_tail",  py_left_tail,  METH_VARARGS, "left_tail(x,k): NaN everything > k"},
+    {"right_tail", py_right_tail, METH_VARARGS, "right_tail(x,k): NaN everything < k"},
+    {"hump",       py_hump,       METH_VARARGS,
+     "hump(x,k): update only when |x[t]-out[t-1]|>k, else hold prev (turnover damper)"},
+    {"if_else",    py_if_else,    METH_VARARGS, "if_else(cond,a,b): cond>0?a:b (cond NaN->NaN)"},
+    {"trade_when", py_trade_when, METH_VARARGS, "trade_when(entry,alpha,exit): exit>0->0; entry>0->alpha; else hold prev"},
 
     {"upcast32",  py_upcast32,  METH_VARARGS, "upcast32(x_f32, out_f64): OMP f32→f64 block cast"},
     {"pack_sparse",   py_pack_sparse,   METH_VARARGS,
@@ -505,6 +626,16 @@ static PyMethodDef methods[] = {
     {"mul_const", py_mul_const, METH_VARARGS, "x * k (1 SIMD pass, NaN propagates)"},
     {"pow_const", py_pow_const, METH_VARARGS, "sign(x)·|x|^k; 0→0; NaN propagates"},
 
+    {"ts_backfill", py_ts_backfill, METH_VARARGS, "ts_backfill(x,d): last valid value within d (no min_periods)"},
+    {"ts_median",   py_ts_median,   METH_VARARGS, "rolling median"},
+    {"ts_av_diff",  py_ts_av_diff,  METH_VARARGS, "x - mean(x,d) with NaN-ignoring mean (BRAIN)"},
+    {"ts_decay_exp_window", py_ts_decay_exp_window, METH_VARARGS,
+     "ts_decay_exp_window(x,d,factor): weights factor^i normalised"},
+    {"ts_scale",    py_ts_scale,    METH_VARARGS, "ts_scale(x,d,k): (x-min)/(max-min)+k"},
+    {"ts_quantile", py_ts_quantile, METH_VARARGS,
+     "ts_quantile(x,d,driver): 0=gaussian 1=uniform 2=cauchy; plotting-position p=(r+.5)/d"},
+    {"ts_regression", py_ts_regression, METH_VARARGS,
+     "ts_regression(y,x,d,rettype): 0=resid 1=intercept 2=slope 3=fitted 4=R2"},
     {"ts_mean",  py_ts_mean,  METH_VARARGS, "rolling mean (T,S,w)"},
     {"ts_std",   py_ts_std,   METH_VARARGS, "rolling std"},
     {"ts_sum",   py_ts_sum,   METH_VARARGS, "rolling sum"},
@@ -521,6 +652,10 @@ static PyMethodDef methods[] = {
     {"ts_kurt",    py_ts_kurt,    METH_VARARGS, "rolling excess kurtosis (m4/m2² − 3)"},
     {"ts_mad",     py_ts_mad,     METH_VARARGS, "rolling mean absolute deviation"},
     {"ts_slope",   py_ts_slope,   METH_VARARGS, "rolling OLS slope vs t"},
+    {"ts_chanpos", py_ts_chanpos, METH_VARARGS, "Donchian channel position (x-min)/(max-min) in [0,1]"},
+    {"ts_ddown",   py_ts_ddown,   METH_VARARGS, "drawdown from rolling max x/max-1 <= 0"},
+    {"ts_zscore",  py_ts_zscore,  METH_VARARGS, "rolling z-score (x-mean)/std, ddof=0"},
+    {"ts_snr",     py_ts_snr,     METH_VARARGS, "rolling mean/std (trend t-stat)"},
 
     {"ts_corr",  py_ts_corr,  METH_VARARGS, "rolling corr (T,S,w)"},
     {"ts_cov",   py_ts_cov,   METH_VARARGS, "rolling cov"},

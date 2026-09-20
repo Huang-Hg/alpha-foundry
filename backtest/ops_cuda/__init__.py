@@ -15,7 +15,7 @@ import numpy as np
 import cupy as cp
 
 # ===== 模块编译(templated C++,f64/f32 实例化按平名 get_function)=====
-with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kernels.cu')) as _f:
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kernels.cu'), encoding='utf-8') as _f:
     _MOD = cp.RawModule(code=_f.read(), options=('--std=c++14',))
 
 # ===== device-prop 驱动 launch + dtype 策略 =====
@@ -27,12 +27,30 @@ _MAXTHR   = _PROPS['maxThreadsPerBlock']
 _SHBUDGET = min(_OPTIN, _SMEM_SM // 3)
 _FP64_RATIO = cp.cuda.Device(0).attributes['SingleToDoublePrecisionPerfRatio']
 
-DTYPE = cp.float32 if _FP64_RATIO >= 8 else cp.float64
+DTYPE = cp.float64 if os.environ.get('Q25_CUDA_FP64') == '1' else (cp.float32 if _FP64_RATIO >= 8 else cp.float64)
 _SFX  = 'f32' if DTYPE == cp.float32 else 'f64'
 _ELEM = np.dtype(DTYPE).itemsize
 
-for _fn in ('k_moment', 'k_ext', 'k_pair', 'k_cs_rank'):
-    _MOD.get_function(f'{_fn}_{_SFX}').max_dynamic_shared_size_bytes = _SHBUDGET
+
+def _optin_max(fn) -> int:
+    """把该核的 dynamic-shared 上限顶到驱动肯收的最大值,返回实际生效值。
+
+    不能直接写 `_OPTIN`:CUDA 的约束是 **动态 + 静态 ≤ sharedMemPerBlockOptin**,
+    Volta+ 还另留 1 KB/block。k_pair 静态 shared 为 0 所以历史代码写 `_OPTIN` 能过,
+    k_moment/k_ext 有静态 shared ⇒ 同样写法直接 `CUDA_ERROR_INVALID_VALUE` 抛在 import 期。
+    ⇒ 从 `_OPTIN − 静态` 起步,被拒就按 1 KB 退,拿到多少算多少。"""
+    for cap in range(_OPTIN - int(getattr(fn, 'shared_size_bytes', 0) or 0), 0, -1024):
+        try:
+            fn.max_dynamic_shared_size_bytes = cap
+            return cap
+        except Exception:
+            continue
+    return _SHBUDGET
+
+
+# 各 tile 核实际拿到的动态 shared 上限;取最小值作为 `_tiles` 的升级预算(保证对所有核都合法)
+_DYNMAX = min(_optin_max(_MOD.get_function(f'{_fn}_{_SFX}'))
+              for _fn in ('k_moment', 'k_ext', 'k_pair', 'k_cs_rank'))
 
 _k_moment  = _MOD.get_function(f'k_moment_{_SFX}')
 _k_ext     = _MOD.get_function(f'k_ext_{_SFX}')
@@ -42,15 +60,17 @@ _k_cs      = _MOD.get_function(f'k_cs_{_SFX}')
 _k_cs_rank = _MOD.get_function(f'k_cs_rank_{_SFX}')
 _k_per_t_ic  = _MOD.get_function(f'k_per_t_ic_{_SFX}')
 _k_per_t_pnl = _MOD.get_function(f'k_per_t_pnl_{_SFX}')
-_k_pair.max_dynamic_shared_size_bytes = _OPTIN    # pair=2 数组,大 w shared 到 optin(单数组核留 _SHBUDGET)
-
+_k_qnt_bt    = _MOD.get_function(f'k_qnt_bt_{_SFX}')
 _DUMMY = cp.zeros(1, dtype=DTYPE)        # kmode=0 占位(kernel 不解引用)
 
 
 def candidate_tiles(w, budget=_SHBUDGET, mult=1):
     """device-prop 驱动 tile:shared 预算 budget 内,大 tile(复用高)优先。
-    mult=每元素 shared 份数(pair 核 2 数组 → mult=2);budget 默认 _SHBUDGET(保占用),
-    pair 大 w 用 _OPTIN(2 数组 ×大窗超 _SHBUDGET,牺牲占用换正确)。"""
+    mult=每元素 shared 份数(pair 核 2 数组 → mult=2)。
+
+    budget 默认 `_SHBUDGET`(= optin/SM 的 1/3,**保占用**);窗口大到该预算装不下时
+    由 `_tiles()` 自动升到 `_OPTIN`(牺牲占用换能跑)。返回 [] 表示该 w 连最小 tile
+    都装不下 —— 调用方必须处理,别直接 `[0]`(见 `_tiles` / `max_window`)。"""
     out = []
     for ss in (8, 16, 32):
         for tt in (256, 192, 128, 96, 64, 48, 32, 16):
@@ -62,6 +82,38 @@ def candidate_tiles(w, budget=_SHBUDGET, mult=1):
             out.append((ss, tt))
     out.sort(key=lambda st: -st[0] * st[1])
     return out[:4]
+
+
+def _tiles(w, mult=1):
+    """选 tile,预算两级递进:`_SHBUDGET`(保占用)→ 装不下再用 `_OPTIN`(保正确)。
+
+    ⚠️ 2026-08-13 修:此前 `_moment`/`_ext` 直接写 `candidate_tiles(w)[0]`,而该预算在
+    T1000 上 = 21845 B ⇒ **w > 667 时列表为空、抛裸 `IndexError`**。而
+    `fastexpr.MAX_WINDOW = 1500` 允许到 1500 ⇒ `ts_mean(x, 730)` 这类完全合法的候选
+    会把整个批次打崩(不是降级、不是报错信息,是 `list index out of range`)。
+    pair 核当时已经手动升到 `_OPTIN`,单数组核漏了 —— 这里统一成一条路径。
+
+    连 `_DYNMAX` 也装不下(pair 核 w>1008)⇒ 显式报错。正常路径上到不了这里:
+    `gpu.can_gpu` 用 `max_window()` 提前把这种树整棵路由到 CPU。"""
+    t = candidate_tiles(w, _SHBUDGET, mult) or candidate_tiles(w, _DYNMAX, mult)
+    if not t:
+        raise ValueError(f'窗口 {w} 超出本卡 rolling 核 tile 上限 '
+                         f'{max_window(mult)}(mult={mult},动态 shared {_DYNMAX} B)'
+                         f' —— 该树应由 gpu.can_gpu 路由到 CPU')
+    return t[0]
+
+
+def max_window(mult=1) -> int:
+    """当前卡上 rolling 核能 tile 的最大窗口(mult=1 单数组核,2 = pair 核)。
+    `gpu.can_gpu` 用它做路由判据,避免把注定崩的树塞进 GPU 批。"""
+    lo, hi = 2, 1 << 16
+    while lo < hi:                       # 单调:w 越大越难装 ⇒ 二分最大可行 w
+        mid = (lo + hi + 1) // 2
+        if candidate_tiles(mid, _DYNMAX, mult):
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
 
 def col_first_valid(d_x):
@@ -77,7 +129,7 @@ def col_first_valid(d_x):
 def _moment(d_x, w, op, kmode, d_K):
     T, S = d_x.shape
     d_o = cp.empty_like(d_x)
-    ss, tt = candidate_tiles(w)[0]
+    ss, tt = _tiles(w)
     grid = ((S + ss - 1) // ss, (T + tt - 1) // tt)
     _k_moment(grid, (ss, tt), (d_x, d_o, np.int32(T), np.int32(S), np.int32(w),
                                np.int32(op), d_K, np.int32(kmode)),
@@ -97,7 +149,7 @@ def ts_kurt(x, w): return _moment(x, w, 4, 1, col_first_valid(x))
 def _ext(d_x, w, op):
     T, S = d_x.shape
     d_o = cp.empty_like(d_x)
-    ss, tt = candidate_tiles(w)[0]
+    ss, tt = _tiles(w)
     grid = ((S + ss - 1) // ss, (T + tt - 1) // tt)
     _k_ext(grid, (ss, tt), (d_x, d_o, np.int32(T), np.int32(S), np.int32(w), np.int32(op)),
            shared_mem=(tt + w - 1) * ss * _ELEM)
@@ -117,7 +169,7 @@ def ts_arg_min(x, w): return _ext(x, w, 6)
 def _pair(d_a, d_b, w, op):
     T, S = d_a.shape
     d_o = cp.empty_like(d_a)
-    ss, tt = candidate_tiles(w, _OPTIN, 2)[0]      # 自适应(2 数组,_OPTIN 预算)→ 大 w 不撞 shared 上限
+    ss, tt = _tiles(w, 2)      # 2 数组;预算 _SHBUDGET→_OPTIN 递进(见 _tiles)
     grid = ((S + ss - 1) // ss, (T + tt - 1) // tt)
     _k_pair(grid, (ss, tt), (d_a, d_b, d_o, np.int32(T), np.int32(S), np.int32(w), np.int32(op)),
             shared_mem=2 * (tt + w - 1) * ss * _ELEM)
@@ -188,6 +240,24 @@ def k_per_t_pnl(values, y):
     o = cp.empty(T, dtype=cp.float64)
     _k_per_t_pnl((T,), (256,), (values, y, o, np.int32(S)))
     return o
+
+
+def k_qnt_bt(W, open_raw, prev_close, open_ff0, close_ff0, slip, unlocked, i0, ppy):
+    """crypto 组合回测批量核 = Quantiacs qnt 1:1(engine/qnt_bt.cpp 镜像;**一 warp 一候选**:
+    block=128 线程 = 4 候选,grid=ceil(B/4),零 shared / 零 __syncthreads;S ≤ 128 = 32 lane ×
+    QNT_LANE_A 寄存器)。W (B,T,S) DTYPE 常驻 cupy;静态面板 (T,S) DTYPE + unlocked uint8 →
+    (rr (B,T) f64, stats (B,5) f64 = [sharpe, mean_return, volatility, max_drawdown,
+    total_return],窗 [i0:])。显存注意:W 本身 B·T·S·itemsize —— 调用方按显存分批。
+    2026-09-19 取代 block-per-candidate 版(A800 上整批恒 ~36 ms 的延迟地板)与
+    thread-per-candidate 版(同形状慢 10×),两者已删。"""
+    B, T, S = W.shape
+    assert S <= 128, f'k_qnt_bt: S={S} 超 32×QNT_LANE_A=128'
+    rr = cp.empty((B, T), dtype=cp.float64)
+    stats = cp.empty((B, 5), dtype=cp.float64)
+    _k_qnt_bt(((B + 3) // 4,), (128,), (W, open_raw, prev_close, open_ff0, close_ff0, slip, unlocked,
+                                        np.int32(T), np.int32(S), np.int32(B), np.int64(i0),
+                                        np.float64(ppy), rr, stats))
+    return rr, stats
 
 
 # ===== elementwise / binary / binary_const =====

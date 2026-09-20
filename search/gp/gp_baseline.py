@@ -5,24 +5,27 @@ Sharpe reward + G0/G1/G2 门、同 `alpha_pool.try_new` net 感知准入、同 v
 搜索器 = DEAP NSGA-II 强类型 GP。
 
 强类型(STGP):DEAP `PrimitiveSetTyped`,4 个类型 {Panel, WinT, AddC, MulC}——panel 与
-窗口/两类常数分型,结构合法(杜绝 `cs_demean(0.5)`/`ts_min(3,w)`)。文法 SemKind 的更细反冗余
-forbid 集 DEAP 单类型/槽表达不了,故 GP 探索空间略大于文法严格合法空间,由有效性门 + cost 预算剪。
+窗口/两类常数分型,结构合法(杜绝 `tanh(0.5)`/`ts_min(3,w)`),与文法句法槽型一一对应
+(文法语义 forbid 层 2026-07-22 A/B 证否删除 → GP/GFN 搜索空间自此完全同构)。
+cs 算子族 2026-07-22 随截面口径退役(时序书转向,见 evaluator/grammar)。
 
 搜索空间预算与 GFN 同源同刻度([dsl] 唯一来源,2026-07-03 统一):cost ∈ [min_cost, max_cost],
 长度 ≤ max_len。DEAP prefix 每元素(primitive/operand/window/const terminal)≡ 文法一条 production
 → `len(ind)` = 推导长度,与 gfn_codec.MAX_LEN 同刻度;初始化超长重采、mate/mutate 超长回退
 (staticLimit)。max_len=5 实测极限勿调大(长树 = 多重比较选择偏差,同 reward=flat 证否机制);
 旧 [gp_baseline] init_*_height / max_height 三旋钮已删(init 高度 ramped 1..max_len−1 推导得出)。
-primitive/terminal 一一镜像 DSL 算子(unary/cs/binary/binary_const/ts/pair
+primitive/terminal 一一镜像 DSL 算子(unary/binary/binary_const/ts/pair
 + operands/WINDOWS/ADD/MULPOW consts)。
 
-fitness = NSGA-II 双目标(均最大化):
-  obj1 = 候选 standalone |rank IC|(= |evaluate_alpha['rank_ic']|;秩 IC 抗极端值过拟合)
-  obj2 = 行为多样性 = 1 − max_{j≠i}|pnl_corr(per_t_pnl_i, per_t_pnl_j)|(种群内,C 算子 pnl_corr_vec)
+fitness = NSGA-II 双目标(均最大化;2026-07-22 截面→时序转向):
+  obj1 = R4 滚动折中位 edge(= evaluate_alpha['cv_edge'],2026-07-25 与 GFN 同刀:
+         5 折 ~18mo 折 edge 中位数,时间轴尖峰不给分;带符号保留选择梯度;collect/入池
+         另须 >0 ⇔ ≥3/5 折胜锚。谱系:4 折一致性**门** 2026-07-22 实证击穿删除 ——
+         唯一 4/4 折成员 val 最差;R4 换的是取出统计量本身而非后置门,勿混)
+  obj2 = 行为多样性 = 1 − max_{j≠i}|pnl_corr(ex_i, ex_j)|(种群内,ex = rr_book − rr_ew 超额流)
 无效树(cost 越界 / 门拒 / per_t_pnl=None)→ (_REWARD_FLOOR, 0) 被支配。
 
-评估 device 由 `[evaluator] device` 派发:本地走 cpu;V100 走 cuda(因子常驻显存,单进程,
-CUDA context 不跨 fork)。pool_obj.embed_fn=None → 无嵌入网络(G2/FailCache 走嵌入的支路跳过)。
+评估恒 CPU(日线 panel 极小,单候选 C 内核毫秒级)。
 
 桥:DEAP PrimitiveTree(prefix)→ Node.make → AlphaTree。ts/pair 的 window、binary_const 的 const
 都是末位 terminal,按类型解析进父节点(const → const_add/const_mul 叶,window → Node.window attr)。
@@ -44,10 +47,10 @@ from evaluation import grammar as _grammar
 from evaluation.ast import AlphaTree, Node
 from evaluation.grammar import (
     ADD_CONSTANTS, MULPOW_CONSTANTS,
-    BinaryOp, ConstBinaryOp, CsOp, PairOp, TsOp, UnaryOp,
+    BinaryOp, ConstBinaryOp, PairOp, TsOp, UnaryOp,
 )
 from rl.alpha_pool import AlphaPool
-from rl.evaluator import EvalConfig, _REWARD_FLOOR, evaluate_alpha
+from rl.evaluator import EvalConfig, _REWARD_FLOOR, evaluate_alpha, qnt_bench_sharpe
 
 
 # ============================================================================
@@ -85,9 +88,6 @@ def _build_pset() -> Tuple[gp.PrimitiveSetTyped, Dict[str, tuple], Dict[str, tup
     for op in UnaryOp:
         nm = 'u_' + op.value
         pset.addPrimitive(_id, [Panel], Panel, name=nm); prim_map[nm] = ('unary', op)
-    for op in CsOp:
-        nm = 'c_' + op.value
-        pset.addPrimitive(_id, [Panel], Panel, name=nm); prim_map[nm] = ('cs', op)
     for op in BinaryOp:
         nm = 'b_' + op.value
         pset.addPrimitive(_id, [Panel, Panel], Panel, name=nm); prim_map[nm] = ('binary', op)
@@ -122,7 +122,7 @@ _PSET, _PRIM_MAP, _TERM_MAP = _build_pset()
 
 def rebuild_pset() -> None:
     """按当前 `_grammar.ACTIVE_VOCAB` + `ACTIVE_WINDOWS` 重建模块级 _PSET/_PRIM_MAP/_TERM_MAP
-    (operand 叶 + window 叶集)。operator(unary/cs/binary/ts/pair)+ const 不随市场变。
+    (operand 叶 + window 叶集)。operator(unary/binary/ts/pair)+ const 不随市场变。
     run_gp 入口调用 → 消除『import gp_baseline(冻结 crypto 词表/1h 窗)早于 set_vocabulary/set_windows
     (equity 词表/日线窗)』的 import 顺序陷阱(_generate/gen_expr/deap_to_alphatree 均运行时读 _PSET)。"""
     global _PSET, _PRIM_MAP, _TERM_MAP
@@ -179,7 +179,7 @@ def deap_to_alphatree(ind) -> AlphaTree:
         el = ind[idx[0]]; idx[0] += 1
         if isinstance(el, gp.Primitive):
             kind, op = _PRIM_MAP[el.name]
-            if kind in ('unary', 'cs'):
+            if kind == 'unary':
                 return Node.make(kind, op, None, (build(),))
             if kind == 'binary':
                 l = build(); r = build()
@@ -216,23 +216,24 @@ creator.create("IndividualGP", gp.PrimitiveTree, fitness=creator.FitnessGP)
 # ============================================================================
 # 评估:bridge → evaluate_alpha → (净 Sharpe, per_t_pnl);种群内算多样性 obj2
 # ============================================================================
-def _eval_and_assign(individuals, panels, y, eval_pool, cfg, cache, collected: Dict) -> int:
-    """逐个体评估并写 fitness(obj1 |rank IC|, obj2 种群内行为多样性)。有效候选累进 collected
-    (按 tree.hash 取最大 |rank IC|,供后续建池)。返回有效候选数。"""
+def _eval_and_assign(individuals, panels, cfg, cache, collected: Dict) -> int:
+    """逐个体评估并写 fitness(obj1 时序书 edge, obj2 种群内行为多样性)。edge 为正的候选
+    累进 collected(按 tree.hash 取最大 edge,供逐代建池)。返回有效候选数。"""
     results: List[Optional[tuple]] = []
     for ind in individuals:
         tree = deap_to_alphatree(ind)
         cost = tree.total_cost()
         if not (_MIN_COST <= cost <= _MAX_COST):          # DSL cost 预算
             results.append(None); continue
-        m = evaluate_alpha(tree, panels, y, eval_pool, cfg, cache, diagnostics=False)
-        ptp, q = m['per_t_pnl'], abs(m['rank_ic'])        # reward = |rank IC|(唯一质量口径)
+        m = evaluate_alpha(tree, panels, cfg, cache)
+        ptp, q = m['per_t_pnl'], m['cv_edge']             # R4 滚动折中位 edge(07-25 与 GFN 同刀,见 evaluator)
         if ptp is None or not np.isfinite(q):             # 门拒 / below-gate(per_t_pnl 仍供 obj2 + 准入 R²)
             results.append(None); continue
-        rec = (tree, float(q), ptp, float(m['rank_ic']))   # rec[3]=带符号 rank_ic(= 池 q 来源 / append_run)
+        rec = (tree, float(q), ptp)
         results.append(rec)
         h = tree.hash
-        if h not in collected or q > collected[h][1]:
+        # collect 门:edge>0(折一致性门 2026-07-22 实证击穿删除)
+        if q > 0.0 and (h not in collected or q > collected[h][1]):
             collected[h] = rec
 
     valid = [i for i, r in enumerate(results) if r is not None]
@@ -249,23 +250,22 @@ def _eval_and_assign(individuals, panels, y, eval_pool, cfg, cache, collected: D
 
 
 def _pool_offer_fresh(pool, collected: Dict, offered: set) -> None:
-    """把本代新增 collected 候选按 |rank IC| 降序过准入(try_new;Δ=|rank_ic|·(1−R²))增量入池。
-    2026-07-03 起逐代增量建池(与 alphasage 边搜边建同型,中断即有池;旧终局全排序重建已删)。
+    """把本代新增 collected 候选按超额 IR 降序过准入(try_new;近克隆门 + Δ=q·(1−R²) 正交门)
+    增量入池。2026-07-03 起逐代增量建池(与 alphasage 边搜边建同型,中断即有池;旧终局全排序重建已删)。
     同 hash 只 offer 一次(hash 定树 → q 恒同);后代更强候选靠 AlphaPool prune/evict 汰换。"""
     fresh = [(h, collected[h]) for h in collected if h not in offered]
-    for h, (tree, q, ptp, ric) in sorted(fresh, key=lambda x: -x[1][1]):
-        pool.try_new(tree, ric, ptp)
+    for h, (tree, q, ptp) in sorted(fresh, key=lambda x: -x[1][1]):
+        pool.try_new(tree, ptp, q)
         offered.add(h)
 
 
 # ============================================================================
 # NSGA-II 主循环
 # ============================================================================
-def run_gp(panels, y, capacity: int, seed: int = 42,
+def run_gp(panels, capacity: int, seed: int = 42,
            pop_size: Optional[int] = None, n_gen: Optional[int] = None, log=print,
            snap_path: Optional[str] = None):
     """跑 DEAP NSGA-II 强类型 GP,返回 (pool, collected)。pop_size 须被 4 整除(selTournamentDCD)。
-    中性化(crowding 等)由统一 [neutralize] 经 EvalConfig 驱动,不在此传参。
     池逐代增量构建(_pool_offer_fresh),snap_path 给定时每代覆盖写 {'gen','pool'} 快照 → 中断可恢复。"""
     pop_size = pop_size or _POP
     n_gen = n_gen if n_gen is not None else _NGEN
@@ -294,7 +294,7 @@ def run_gp(panels, y, capacity: int, seed: int = 42,
     tb.decorate("mutate", gp.staticLimit(len, _MAX_LEN))
     tb.register("select", tools.selNSGA2)
 
-    eval_pool = AlphaPool(capacity=capacity, embed_fn=None)   # 仅供 evaluate_alpha(G2 嵌入支路跳过)
+    eval_pool = AlphaPool(capacity=capacity)
     cfg = EvalConfig()
     cache = EvalCache(max_bytes=512 * 1024 ** 2)
     collected: Dict[int, tuple] = {}
@@ -308,21 +308,23 @@ def run_gp(panels, y, capacity: int, seed: int = 42,
                 f.write(json.dumps({'gen': gen, 'pool': eval_pool.to_jsonable()},
                                    ensure_ascii=False) + '\n')
 
+    bench = qnt_bench_sharpe()          # 日志绝对 Sharpe 口径(内部 reward=edge,读数=edge+锚)
     pop = tb.population(n=pop_size)
-    nv = _eval_and_assign(pop, panels, y, eval_pool, cfg, cache, collected)
+    nv = _eval_and_assign(pop, panels, cfg, cache, collected)
     pop = tb.select(pop, pop_size)                            # 赋 NSGA-II crowding
     _pool_gen(0)
-    log(f"[gp] gen00 valid={nv}/{pop_size} collected={len(collected)} pool={eval_pool.size}")
+    log(f"[gp] gen00 valid={nv}/{pop_size} collected={len(collected)} pool={eval_pool.size} "
+        f"(EW 锚 train Sharpe {bench:+.4f})")
 
     for gen in range(1, n_gen + 1):
         offspring = tools.selTournamentDCD(pop, pop_size)
         offspring = algorithms.varAnd(offspring, tb, _CXPB, _MUTPB)
-        nv = _eval_and_assign(offspring, panels, y, eval_pool, cfg, cache, collected)
+        nv = _eval_and_assign(offspring, panels, cfg, cache, collected)
         pop = tb.select(pop + offspring, pop_size)
         _pool_gen(gen)
         best = max((c[1] for c in collected.values()), default=float('nan'))
         log(f"[gp] gen{gen:02d} valid={nv} collected={len(collected)} pool={eval_pool.size} "
-            f"best_rank_ic={best:+.4f}")
+            f"best_sharpe={best + bench:+.4f}")
 
     log(f"[gp] done: collected={len(collected)} pool_size={eval_pool.size}/{capacity}")
     return eval_pool, collected

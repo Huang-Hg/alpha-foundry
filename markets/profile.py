@@ -1,11 +1,11 @@
 """市场画像 —— 把市场机制隔离在引擎之外的薄抽象层(日历/常量 + 复权 + 注册表)。
 
 引擎(backtest / rl / evaluation / search)从不直接知道「市场」,只消费一个
-`MarketProfile`。crypto 注入 `CONTINUOUS_24X7`(逐位复现旧行为),权益注入
+`MarketProfile`。crypto 注入 `CRYPTO_DAILY`(Quantiacs 日线),权益注入
 `US_EQUITY_DAILY` 等。本文件聚合(无 __init__.py,namespace package):
   - `TradingCalendar` / `MarketProfile` 数据类
   - `CorporateActionAdjuster` / `IdentityAdjuster`(复权口径;信号用复权价、成交用原始价)
-  - `CONTINUOUS_24X7` / `US_EQUITY_DAILY` 具体画像
+  - `CRYPTO_DAILY` / `US_EQUITY_DAILY` / `A_SHARE_DAILY` 具体画像
   - `get_profile()` / 模块级 `ACTIVE` / `CALENDAR`(由 `config.ini [calendar].profile` 选)
 CostModel / ShortingPolicy / UniverseProvider 等子模型 P2-P3 续接;operand 词表见
 `markets.vocabulary`(数据驱动,不在画像里固化)。
@@ -37,7 +37,7 @@ from config.config import ini
 class TradingCalendar:
     """市场时间模型 —— 所有 bars-per-day / 年化 / panel 深度常量的唯一来源。"""
     name:                  str
-    bars_per_day:          int      # 回测 bar cadence 下每交易日 bar 数(crypto 5m→288;US 日线→1)
+    bars_per_day:          int      # 回测 bar cadence 下每交易日 bar 数(日线→1)
     hours_per_day:         float    # 每交易日小时数(crypto 24;US RTH 6.5;A股 4)
     trading_days_per_year: float    # 年交易日(crypto 365;US ~252;A股 ~242)
     has_overnight_gap:     bool     # 是否存在隔夜/周末跳空(crypto False;权益 True)
@@ -54,8 +54,9 @@ class MarketProfile:
     """注入引擎的市场画像。含 calendar + warmup_bars + windows;子模型 P2-P3 续接。"""
     name:        str
     calendar:    TradingCalendar
-    warmup_bars: int                 # bt 跳过的初始不稳定 bar 数(crypto 288 = 1 日)
+    warmup_bars: int                 # bt 跳过的初始不稳定 bar 数
     windows:     tuple               # ts/pair 回看窗集(单位=bar cadence);挖矿入口注入 grammar.set_windows
+    deploy_depth_bars: int           # deploy 环境可供的最大因子回看深度(bar 数)→ alpha_pool 结构硬门
 
 
 # ============================================================================
@@ -97,25 +98,28 @@ class IdentityAdjuster:
 # ============================================================================
 # ts/pair 回看窗集(单位 = 各市场 bar cadence)的**唯一来源**(grammar.ACTIVE_WINDOWS 默认从此取)。
 # 圆整周期(非 2 的幂网格),贴正常 alpha 习惯:
-#   crypto(1h bars):1h/2h/4h/6h/12h/1d/2d/4d/7d/14d。
-#   daily(equity/ashare 共用):3d/1w/2w/1mo/2mo/季/半年/年。
-_CRYPTO_WINDOWS_1H: tuple = (1, 2, 4, 6, 12, 24, 48, 96, 168, 336)
-_DAILY_WINDOWS:     tuple = (3, 5, 10, 20, 40, 60, 120, 240)
+#   daily(equity/ashare 共用,交易日单位):3d/1w/2w/1mo/2mo/季/半年/年。
+#   crypto daily(日历日单位,24x7):先验金融学意义档 周/月/季/半年/年 + 现役部署档
+#   120/240 连续性(M3 参数高原邻域需含部署窗)。短窗 3..60 档移除 = 参数敏感区
+#   (diag_rolling_cv 2026-07-25:7/30d 全对象 train edge≤0,edge 只活在 ≥90d 长视界)。
+_DAILY_WINDOWS:        tuple = (3, 5, 10, 20, 40, 60, 120, 240)
+_CRYPTO_WINDOWS_DAILY: tuple = (7, 30, 90, 120, 180, 240, 365)
 
-# Continuous24x7 —— Binance 永续 crypto(现状):288 bars/day、365 交易日、bars_per_year=105120、
-# skip_warmup=288(MTM/成本/强平骨架仍 bit-identical 回归门;窗口集 1h 圆整档)。
-CONTINUOUS_24X7 = MarketProfile(
-    name='continuous24x7',
+# Crypto 日线(Quantiacs crypto_daily_long 赛道):365 交易日、bars_per_year=365、UTC。
+# 成本机制(ATR14 滑点)在 qnt_bt 内核(backtest/engine/qnt_bt.cpp),不在 calendar。
+CRYPTO_DAILY = MarketProfile(
+    name='crypto_daily',
     calendar=TradingCalendar(
-        name='continuous24x7',
-        bars_per_day=288,            # 24h × 12 (5m bars)
+        name='crypto_daily',
+        bars_per_day=1,              # 日线
         hours_per_day=24.0,
         trading_days_per_year=365.0,
         has_overnight_gap=False,
         tz='UTC',
     ),
-    warmup_bars=288,                 # = 旧 skip_warmup_bars(1 日)
-    windows=_CRYPTO_WINDOWS_1H,
+    warmup_bars=20,                  # qnt 滑点头部要求 ≥15 点(ATR14),取整 20
+    windows=_CRYPTO_WINDOWS_DAILY,
+    deploy_depth_bars=365,           # quantiacs 平台 multi-pass 预检 lookback_period=365 日
 )
 
 # US 权益(日线):日历片已落地;CostModel(非对称佣金 + SEC/TAF)、ShortingPolicy、
@@ -132,6 +136,7 @@ US_EQUITY_DAILY = MarketProfile(
     ),
     warmup_bars=20,                  # ~1 月日线 warmup(P2 校准)
     windows=_DAILY_WINDOWS,
+    deploy_depth_bars=21 * 6,        # 沿旧 21×int(hours_per_day) 口径(纯研究,无 live 面板约束)
 )
 
 # 中国 A 股(日线):242 交易日 / 4h RTH(09:30-11:30 + 13:00-15:00)/ T+1(daily cadence 天然满足)/
@@ -148,6 +153,7 @@ A_SHARE_DAILY = MarketProfile(
     ),
     warmup_bars=20,
     windows=_DAILY_WINDOWS,
+    deploy_depth_bars=21 * 4,        # 沿旧 21×int(hours_per_day) 口径(纯研究,无 live 面板约束)
 )
 
 
@@ -156,15 +162,15 @@ A_SHARE_DAILY = MarketProfile(
 # ============================================================================
 
 _PROFILES = {
-    'continuous24x7':  CONTINUOUS_24X7,
+    'crypto_daily':    CRYPTO_DAILY,
     'us_equity_daily': US_EQUITY_DAILY,
     'a_share_daily':   A_SHARE_DAILY,
 }
 
 
 def get_profile(name: str | None = None) -> MarketProfile:
-    """按名取画像;None → 读 config.ini [calendar].profile(默认 continuous24x7)。"""
-    key = name if name is not None else ini('calendar', 'profile', 'continuous24x7')
+    """按名取画像;None → 读 config.ini [calendar].profile(默认 crypto_daily)。"""
+    key = name if name is not None else ini('calendar', 'profile', 'crypto_daily')
     return _PROFILES[key]
 
 

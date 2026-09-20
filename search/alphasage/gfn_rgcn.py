@@ -10,7 +10,7 @@ relation),又让 `add(close, open) ≡ add(open, close)`(commutative 同 relatio
                                   / 4=feature operand / 5=time-series(window)operand
     边方向 child→parent(自底向上),n_layers 跳 RGCN(ReLU),global mean-pool → (B, hidden)。
     RGCNConv 默认 root_weight=True(自连接 W0·x_i)→ 我们的 self-loop 线性等价。
-本实现不引 torch_geometric:用 index_add scatter 手写 R-GCN(算家云 venv 仅 torch + cupy)。
+本实现不引 torch_geometric:用 index_add scatter 手写 R-GCN(server venv 仅 torch + cupy)。
 state = 最左推导 production-id 序列(padded -1);forward 内重放成 AST 图。pf/pb 各自独立实例
 (不共享 → Adam 不见 duplicate params)。`embed_trees` 另给 R_SA 稠密奖励提供整树结构签名(mean-pool,no_grad)。
 """
@@ -30,7 +30,7 @@ from search.alphasage.gfn_codec import MAX_DERIV_LEN
 # PRODUCTIONS / NUM_PRODUCTIONS 运行时从 _grammar 读(换市场 set_vocabulary 会重建)→ embedding
 # 尺寸在**构造时**按 active 词表定,id 映射按 id(PRODUCTIONS) 缓存自动失效。消除 import 顺序陷阱。
 
-# relation 数(按算子角色,对齐参考 GNNEncoder.num_relations=6)。
+# relation 数(按算子角色;参考 GNNEncoder=6)。
 N_RELATIONS: int = 6
 
 # commutative 算子集合(子序不影响结果 → 共用一个对称 relation,与 AST 的交换律 hash 规范化一致)。
@@ -40,7 +40,7 @@ _COMM_CONST = frozenset({ConstBinaryOp.ADD_CONST, ConstBinaryOp.MUL_CONST})
 
 def _edge_type(parent_kind: str, parent_op: object, slot_idx: int) -> int:
     """child→parent 边的 relation(按父算子角色 + 子槽位)。"""
-    if parent_kind in ('unary', 'cs'):
+    if parent_kind == 'unary':
         return 0                                          # unary operand
     if parent_kind == 'binary':
         return 1 if parent_op in _COMM_BIN else (2 if slot_idx == 0 else 3)

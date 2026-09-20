@@ -5,7 +5,7 @@
 
     @dataclass
     class FactorMiningConfig:
-        pool_capacity: int = ini('factor_mining', 'pool_capacity', 24)
+        pool_capacity: int = ini('factor_mining', 'pool_capacity', 12)
 
 INI 在 import 阶段读一次,值固化为字段默认。
 """
@@ -49,51 +49,49 @@ def ini(section: str, key: str, default: T) -> T:
 
 @dataclass
 class FactorMiningConfig:
-    parquet_5m_root: str = ini('factor_mining', 'parquet_5m_root', './data/parquet_5m_univ4h')
-    pool_capacity:   int = ini('factor_mining', 'pool_capacity', 24)
+    qnt_data_dir:    str = ini('factor_mining', 'qnt_data_dir', './data/qnt_crypto')
+    data_start:      str = ini('factor_mining', 'data_start', '2015-01-01')
+    pool_capacity:   int = ini('factor_mining', 'pool_capacity', 12)
+    # 挖矿窗口(gp/alphasage 共用;Q25 crypto_daily 口径):test = 竞赛 live,天然 held out
+    train_start:     str = ini('factor_mining', 'train_start', '2016-01-01')
+    train_end:       str = ini('factor_mining', 'train_end', '2023-06-30')
+    val_start:       str = ini('factor_mining', 'val_start', '2023-07-01')
+    val_end:         str = ini('factor_mining', 'val_end', '2026-09-01')
 
 
-_NEUTRALIZE_MODES = frozenset({'crowding', 'beta', 'market'})
+@dataclass
+class FeaturesConfig:
+    """OHLCV 提取分解特征层(scripts/build_q25_dataset.py → features.parquet;
+    2026-07-05:池审计 N_eff=1.2 修复 —— scale-free 原语 + 因果滚动 PLS 正交监督复合)。"""
+    pls_components:   int   = ini('features', 'pls_components', 4)
+    refit_days:       int   = ini('features', 'refit_days', 30)
+    pls_warmup:       int   = ini('features', 'pls_warmup', 365)
+    beta_ewma_lambda: float = ini('features', 'beta_ewma_lambda', 0.97)
 
 
-@dataclass(frozen=True)
-class NeutralizeConfig:
-    """统一中性化配置 —— 单一 INI 项 `[neutralize].neutralize`(逗号分隔启用项)。
-    研究 eval / val deploy **同源**。modes ⊆ {crowding, beta, market}:
-      crowding — 候选/信号 ⊥ 拥挤子空间(funding/lsr/基差/OI)
-      beta     — 信号 ⊥ 因果滚动市场 β(系统风险正交)
-      market   — dollar-neutral 多空平衡(Σw=0;门控 signal_to_weight 的 post-clip demean)
-    空 = 全关。非法模式名 → 大声崩(config 边界,信任前置条件)。"""
-    modes: frozenset = frozenset(
-        m for m in (s.strip().lower()
-                    for s in ini('neutralize', 'neutralize', 'beta,market').replace(',', ' ').split())
-        if m)
+@dataclass
+class Q25ComboConfig:
+    min_sharpe_gain: float = ini('q25_combo', 'min_sharpe_gain', 0.01)
+    weight_steps: int = ini('q25_combo', 'weight_steps', 20)
+    recent_halflife_days: int = ini('q25_combo', 'recent_halflife_days', 1095)
+    submission_sharpe: float = ini('q25_combo', 'submission_sharpe', 1.58)
+    max_members: int = ini('q25_combo', 'max_members', 40)
 
-    def __post_init__(self):
-        bad = self.modes - _NEUTRALIZE_MODES
-        if bad:
-            raise ValueError(f'未知中性化模式 {sorted(bad)};合法 = {sorted(_NEUTRALIZE_MODES)}'
-                             f'([neutralize].neutralize)')
 
-    @property
-    def crowding(self) -> bool:
-        return 'crowding' in self.modes
-
-    @property
-    def beta(self) -> bool:
-        return 'beta' in self.modes
-
-    @property
-    def market(self) -> bool:
-        return 'market' in self.modes
+@dataclass
+class TsBookConfig:
+    """时序 long-only 书(crypto_daily 挖矿口径):2026-07-24 自由书转向 —— 搜索/评估 =
+    公式直出敞口(rl.sizing.qnt_free_exposure),reward = 书净 Sharpe − EW 锚不变;
+    state_window 退位为部署层原语参数(现役 ts_arg_min 提交栈复现)。"""
+    state_window: int   = ini('ts_book', 'state_window', 120)
+    gross_scale:  float = ini('ts_book', 'gross_scale', 1.0)
 
 
 @dataclass
 class AlphaSAGEConfig:
     """AlphaSAGE GFlowNet alpha-mining baseline(main.py train-alphasage 驱动,独立于 GP)。
-    parquet_root / pool_capacity 复用 [factor_mining];GFN/reward 超参在 [alphasage]。"""
-    parquet_root:        str   = ini('factor_mining', 'parquet_5m_root', './data/parquet_5m_univ4h')
-    pool_capacity:       int   = ini('factor_mining', 'pool_capacity', 24)
+    数据路径/pool_capacity 复用 [factor_mining];GFN/reward 超参在 [alphasage]。"""
+    pool_capacity:       int   = ini('factor_mining', 'pool_capacity', 12)
     hidden_dim:          int   = ini('alphasage', 'hidden_dim', 64)
     n_layers:            int   = ini('alphasage', 'n_layers', 2)
     lr:                  float = ini('alphasage', 'lr', 0.001)
