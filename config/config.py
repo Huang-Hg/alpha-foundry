@@ -13,6 +13,7 @@ INI 在 import 阶段读一次,值固化为字段默认。
 from __future__ import annotations
 
 import configparser
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
@@ -82,10 +83,18 @@ class Q25ComboConfig:
 class Q25CudaConfig:
     candidate_batch: int = ini('q25_cuda', 'candidate_batch', 256)
     trial_batch: int = ini('q25_cuda', 'trial_batch', 16384)
+    precision: str = ini('q25_cuda', 'precision', 'auto')
+    mixed_return_atol: float = ini('q25_cuda', 'mixed_return_atol', 1e-6)
+    mixed_error_safety: float = ini('q25_cuda', 'mixed_error_safety', 16.)
 
     def __post_init__(self):
         if self.candidate_batch <= 0 or self.trial_batch <= 0:
             raise ValueError('Q25 CUDA batch sizes must be positive')
+        if self.precision not in ('auto','f64'):
+            raise ValueError('Production Q25 precision must be auto or f64')
+        if (not math.isfinite(self.mixed_return_atol) or not math.isfinite(self.mixed_error_safety)
+                or self.mixed_return_atol <= 0 or self.mixed_error_safety < 1):
+            raise ValueError('Q25 precision error budgets must be positive with safety >= 1')
 
 
 @dataclass
