@@ -1,0 +1,26 @@
+# build outputs
+__pycache__/
+*.pyc
+*.pyd
+*.dll
+*.so
+*.o
+*.log
+
+# runtime artifacts: diagnostics, temporary products, logs, checkpoints
+/scripts/
+/tmp/
+/logs/
+/output/
+
+# local only, never public: market data, the production library, the Quantiacs venue, internal notes
+/data/
+/production/
+/venues/
+/docs/
+
+# agent and tooling configuration
+AGENTS.md
+.claude/
+.mcp.json
+mcp-ssh/
