@@ -406,20 +406,29 @@ __device__ __forceinline__ void warp_sum4_bcast(A& a, A& b, A& c, A& d) {
     c = __shfl_sync(0xffffffff, c, 0); d = __shfl_sync(0xffffffff, d, 0);
 }
 
+/* Trial book = (ref + alpha*W) / max(1, exposure): the candidate is ADDED to the portfolio and
+ * both shrink only on days the sum is above full exposure. Books are nonnegative, so the day's
+ * exposure is eref[day] + alpha*eown[day] from two precomputed row sums - no reduction here. */
+template<bool MIX>
+__device__ __forceinline__ double qnt_den(const double* eref, const double* eown, int day, double alpha) {
+    if (!MIX) return 1.0;
+    const double e = __dadd_rn(eref[day], __dmul_rn(alpha, eown[day]));
+    return e > 1.0 ? e : 1.0;
+}
+
 template<typename T, bool MIX>
-__device__ __forceinline__ T qnt_weight(const T* W, const T* ref, long long i, double alpha) {
+__device__ __forceinline__ T qnt_weight(const T* W, const T* ref, long long i, double alpha, double den) {
     if (!MIX) return W[i];
-    // Keep the materialized f64 expression's separate multiply/add rounding.
-    return (T)__dadd_rn(__dmul_rn(1.0-alpha, (double)ref[i]),
-                       __dmul_rn(alpha, (double)W[i]));
+    // Keep the materialized f64 expression's separate multiply/add/divide rounding.
+    return (T)(__dadd_rn((double)ref[i], __dmul_rn(alpha, (double)W[i])) / den);
 }
 
 // Explicit FP32 mixing avoids double arithmetic in the low-precision daily path.
 template<>
 __device__ __forceinline__ float qnt_weight<float,true>(const float* W, const float* ref,
-                                                       long long i, double alpha) {
+                                                       long long i, double alpha, double den) {
     float a = (float)alpha;
-    return __fadd_rn(__fmul_rn(1.0f-a,ref[i]),__fmul_rn(a,W[i]));
+    return __fadd_rn(ref[i],__fmul_rn(a,W[i])) / (float)den;
 }
 
 template<typename T, bool MIX = false, typename A = double>
@@ -430,12 +439,14 @@ __device__ void qnt_bt_core(const T* __restrict__ W,
                             int Tn, int S, int B, long long i0, double ppy,
                             double* __restrict__ rr_out, double* __restrict__ stats_out,
                             const T* ref = nullptr, const int* owners = nullptr,
-                            const double* weights = nullptr) {
+                            const double* weights = nullptr,
+                            const double* eref = nullptr, const double* eown_all = nullptr) {
     const int lane = threadIdx.x & 31;
     const long long b = (long long)blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
     if (b >= B) return;                                    /* b 为 warp 一致量 → 整 warp 退出 */
     const T* Wb = W + (MIX ? owners[b] : b) * (long long)Tn * S;
     const double alpha = MIX ? weights[b] : 0.0;
+    const double* eown = MIX ? eown_all + owners[b] * (long long)Tn : nullptr;
     double* rr = rr_out + b * (long long)Tn;
     A wt[QNT_LANE_A], shares[QNT_LANE_A], off_prev[QNT_LANE_A];
     /* 每日串行链是延迟束缚(整批耗时不随 B 变):① W 行双缓冲预取(day+1 生效的是 W[day],
@@ -447,12 +458,13 @@ __device__ void qnt_bt_core(const T* __restrict__ W,
     for (int j = 0; j < QNT_LANE_A; j++) {
         const int a = lane + 32 * j;
         wt[j] = A(0); shares[j] = A(0); off_prev[j] = A(0);
-        wcur[j] = (a < S) ? qnt_weight<T,MIX>(Wb,ref,a,alpha) : (T)0;
+        wcur[j] = (a < S) ? qnt_weight<T,MIX>(Wb,ref,a,alpha,qnt_den<MIX>(eref,eown,0,alpha)) : (T)0;
     }
 
     A eq_after = A(0), prev_tonight = A(1);
     for (int day = 0; day < Tn; day++) {
         const long long r0 = (long long)day * S;
+        const double den = qnt_den<MIX>(eref, eown, day, alpha);
         A oraw[QNT_LANE_A], pcl[QNT_LANE_A], off[QNT_LANE_A], cff[QNT_LANE_A], sl[QNT_LANE_A];
         bool ul[QNT_LANE_A];
         T wnext[QNT_LANE_A];
@@ -466,7 +478,7 @@ __device__ void qnt_bt_core(const T* __restrict__ W,
             cff[j]  = in ? (A)close_ff0[r0 + a] : A(0);
             sl[j]   = in ? (A)slip[r0 + a] : A(0);
             ul[j]   = in ? (unlocked[r0 + a] != 0) : false;
-            wnext[j] = (in && day + 1 < Tn) ? qnt_weight<T,MIX>(Wb,ref,r0+a,alpha) : (T)0;
+            wnext[j] = (in && day + 1 < Tn) ? qnt_weight<T,MIX>(Wb,ref,r0+a,alpha,den) : (T)0;
         }
 
         /* --- 当日生效权重:shift-1 → normalize → open 调整 → normalize --- */
@@ -616,12 +628,13 @@ extern "C" __global__ void k_qnt_bt_f64(const double* W, const double* o_raw, co
 }
 extern "C" __global__ void k_qnt_combo_f64(const double* W, const double* ref,
                                         const int* owners, const double* weights,
+                                        const double* eref, const double* eown,
                                         const double* o_raw, const double* pcl,
                                         const double* off, const double* cff, const double* sl,
                                         const unsigned char* ul, int T, int S, int B, long long i0,
                                         double ppy, double* rr, double* st) {
     qnt_bt_core<double,true>(W, o_raw, pcl, off, cff, sl, ul, T, S, B, i0, ppy, rr, st,
-                            ref, owners, weights);
+                            ref, owners, weights, eref, eown);
 }
 extern "C" __global__ void k_qnt_bt_f32(const float* W, const float* o_raw, const float* pcl,
                                         const float* off, const float* cff, const float* sl,
@@ -640,9 +653,10 @@ extern "C" __global__ void k_qnt_bt_mixed(const float* W, const float* o_raw, co
 }
 extern "C" __global__ void k_qnt_combo_mixed(const float* W, const float* ref,
                                         const int* owners, const double* weights,
+                                        const double* eref, const double* eown,
                                         const float* o_raw, const float* pcl,
                                         const float* off, const float* cff, const float* sl,
                                         const unsigned char* ul, int T, int S, int B, long long i0,
                                         double ppy, double* rr, double* st) {
-    qnt_bt_core<float,true,float>(W,o_raw,pcl,off,cff,sl,ul,T,S,B,i0,ppy,rr,st,ref,owners,weights);
+    qnt_bt_core<float,true,float>(W,o_raw,pcl,off,cff,sl,ul,T,S,B,i0,ppy,rr,st,ref,owners,weights,eref,eown);
 }

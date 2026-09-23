@@ -77,6 +77,18 @@ class Q25ComboConfig:
     recent_halflife_days: int = ini('q25_combo', 'recent_halflife_days', 1095)
     submission_sharpe: float = ini('q25_combo', 'submission_sharpe', 1.58)
     max_members: int = ini('q25_combo', 'max_members', 40)
+    sharpe_scale: float = ini('q25_combo', 'sharpe_scale', 0.1)
+    growth_scale: float = ini('q25_combo', 'growth_scale', 0.02)
+    violation_scale_wsharpe: float = ini('q25_combo', 'violation_scale_wsharpe', 0.1)
+    violation_scale_sharpe: float = ini('q25_combo', 'violation_scale_sharpe', 0.1)
+    violation_scale_cagr: float = ini('q25_combo', 'violation_scale_cagr', 0.02)
+    violation_scale_growth: float = ini('q25_combo', 'violation_scale_growth', 0.02)
+
+    def __post_init__(self):
+        if not all(math.isfinite(x) and x > 0 for x in (
+                self.sharpe_scale, self.growth_scale, self.violation_scale_wsharpe, self.violation_scale_sharpe,
+                self.violation_scale_cagr, self.violation_scale_growth)):
+            raise ValueError('Portfolio utility and violation scales must be positive and finite')
 
 
 @dataclass
@@ -95,6 +107,67 @@ class Q25CudaConfig:
         if (not math.isfinite(self.mixed_return_atol) or not math.isfinite(self.mixed_error_safety)
                 or self.mixed_return_atol <= 0 or self.mixed_error_safety < 1):
             raise ValueError('Q25 precision error budgets must be positive with safety >= 1')
+
+
+@dataclass
+class Q25SingleConfig:
+    calibration_sample: int = ini('q25_single', 'calibration_sample', 8192)
+    anchor_correlation: float = ini('q25_single', 'anchor_correlation', .7)
+    anchor_sharpe: float = ini('q25_single', 'anchor_sharpe', 1.5)
+    recent_years: int = ini('q25_single', 'recent_years', 2)
+    recent_year_sharpe: float = ini('q25_single', 'recent_year_sharpe', 1.)
+    weight_sharpe: float = ini('q25_single', 'weight_sharpe', .6)
+    weight_drawdown: float = ini('q25_single', 'weight_drawdown', .2)
+    weight_return: float = ini('q25_single', 'weight_return', .2)
+    sharpe_scale: float = ini('q25_single', 'sharpe_scale', 2.)
+    drawdown_full: float = ini('q25_single', 'drawdown_full', .6)
+    return_scale: float = ini('q25_single', 'return_scale', 1.)
+    violation_scale_sharpe: float = ini('q25_single', 'violation_scale_sharpe', 1.)
+    violation_scale_year: float = ini('q25_single', 'violation_scale_year', 1.)
+
+    def __post_init__(self):
+        weights = (self.weight_sharpe, self.weight_drawdown, self.weight_return)
+        if not (64 <= self.calibration_sample <= 65536 and 0 <= self.anchor_correlation < 1 and self.anchor_sharpe > 0
+                and self.recent_years >= 0 and min(weights) >= 0
+                and abs(sum(weights)-1) < 1e-9 and self.weight_sharpe >= max(weights)
+                and min(self.sharpe_scale, self.drawdown_full, self.return_scale,
+                        self.violation_scale_sharpe, self.violation_scale_year) > 0):
+            raise ValueError('Invalid Q25 single-alpha configuration')
+
+
+@dataclass
+class Q25MonitorConfig:
+    frame_seconds: float = ini('q25_monitor', 'frame_seconds', .1)
+    push_seconds: float = ini('q25_monitor', 'push_seconds', 2.)
+
+
+@dataclass
+class Q25SearchConfig:
+    seed: int = ini('q25_search', 'seed', 25)
+    epochs: int = ini('q25_search', 'epochs', 20)
+    batch_size: int = ini('q25_search', 'batch_size', 128)
+    probes: int = ini('q25_search', 'probes', 2)
+    max_tokens: int = ini('q25_search', 'max_tokens', 13)
+    max_cost: int = ini('q25_search', 'max_cost', 25)
+    max_ts_depth: int = ini('q25_search', 'max_ts_depth', 2)
+    train_steps: int = ini('q25_search', 'train_steps', 4)
+    learning_rate: float = ini('q25_search', 'learning_rate', .002)
+    opd_strength: float = ini('q25_search', 'opd_strength', .1)
+    rho_max: float = ini('q25_search', 'rho_max', .9)
+    archive_size: int = ini('q25_search', 'archive_size', 32)
+    reweight_iterations: int = ini('q25_search', 'reweight_iterations', 3)
+    reweight_batch: int = ini('q25_search', 'reweight_batch', 32)
+    reweight_every: int = ini('q25_search', 'reweight_every', 5)
+
+    def __post_init__(self):
+        if not (1 <= self.batch_size <= 8192 and 0 <= self.probes <= self.batch_size
+                and self.epochs > 0 and 3 <= self.max_tokens <= 64 and 3 <= self.max_cost <= 25
+                and 0 <= self.max_ts_depth <= 64
+                and 1 <= self.train_steps <= 100 and 0 <= self.archive_size <= 128
+                and 0 <= self.reweight_iterations <= 100 and 2 <= self.reweight_batch <= 8192 and self.reweight_every > 0
+                and self.seed >= 0 and 0 < self.learning_rate <= .1
+                and 0 <= self.opd_strength <= 10 and 0 < self.rho_max <= 1):
+            raise ValueError('Invalid Q25 native search configuration')
 
 
 @dataclass
