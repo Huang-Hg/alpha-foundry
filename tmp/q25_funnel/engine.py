@@ -11,6 +11,12 @@ from config.config import FactorMiningConfig, Q25CudaConfig
 from backtest import ops_cuda as oc
 PPY=365.0
 CUDA=Q25CudaConfig()
+# 噪声对照(只由 `python -m search.portfolio --null-shift` 打开,该模式禁止入库):每条候选的信号整体推迟
+# NULL_LAG 范围内的固定天数(由表达式决定)后再成书。信号只含 ≥1 年前的信息、与当期行情脱钩,
+# 而在场比例、换手与成本结构原样保留 ⇒ 同一条挖掘链在它上面挖到的增益 = 纯挑选效应。
+# 只向后推(不循环移位):把样本末段的信号卷到样本初,会把含当日收益的长窗统计量带进来。
+NULL_SHIFT=False
+NULL_LAG=(365,1095)
 _D=None
 _BM={}
 
@@ -49,18 +55,14 @@ def load(force=False):
     valid=cp.asnumpy(cp.stack([~cp.isinf(panels[k]).any() for k in vocab])).tolist()
     assert all(valid), 'dataset features contain infinity'
     row0=int(np.searchsorted(dates,np.datetime64(fm.train_start)))
-    train_end=int(np.searchsorted(dates,np.datetime64(fm.train_end),side='right'))
     val_end=int(np.searchsorted(dates,np.datetime64(fm.val_end),side='right'))
-    val_start=int(np.searchsorted(dates,np.datetime64(fm.val_start)))
     static=prepare_static(o,h,l,c)
     def window(end,start,span):
         return dict(panels={k:cp.ascontiguousarray(p[:end]) for k,p in panels.items()},
                     liquid=liquid[:end],static={k:cp.ascontiguousarray(p[:end]) for k,p in static.items()},
                     row0=start,dates=dates[:end],span=span)
     _D=dict(dates=dates,assets=assets,liquid=liquid,vocab=vocab,windows={
-        'is':window(val_end,row0,(fm.train_start,fm.val_end)),
-        'train':window(train_end,row0,(fm.train_start,fm.train_end)),
-        'val':window(val_end,val_start,(fm.val_start,fm.val_end))})
+        'is':window(val_end,row0,(fm.train_start,fm.val_end))})
     # Bound the configured maxima by available device memory. This estimates
     # live books, AST intermediates and trial reductions, leaving 35% headroom.
     free,_=cp.cuda.runtime.memGetInfo()
@@ -92,9 +94,9 @@ def benchmark(window='is'):
         _BM[window]=_metrics(g.dliq/g.nliq,win)
     return _BM[window]
 
-def simulate_many(exprs,window='is'):
+def simulate_many(exprs,window='is',report=True):
     from combo_gpu import simulate_many as device_simulate
-    return device_simulate(exprs,window)
+    return device_simulate(exprs,window,report=report)
 
 def simulate(expr,window='is'):return simulate_many([expr],window)[0]
 

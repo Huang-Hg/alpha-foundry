@@ -8,7 +8,7 @@ from config.config import Q25ComboConfig
 import engine
 CFG=Q25ComboConfig()
 DEVICE='cuda'
-PROTOCOL='combo-cuda-v4'
+PROTOCOL='combo-cuda-v6'     # v6: 候选与组合相加、仅超过满仓的日子整体归一(v5 及以前为凸混合)
 
 def g1_causality(expr):
     if not expr:return None
@@ -24,15 +24,19 @@ def g1_causality(expr):
     if bad:return f'非因果算子:ts_rank 窗口 {bad}>31，历史 bucket 实现使用全样本桶边界'
     return None
 
-def make_ref(W,win,n,seed=False):
+def make_ref(U,win,n,seed=False):
+    """U = 成员书按权重直接相加的原始和;实际持仓 W = capped(U)。试探在 U 上加候选再归一,
+    与入库后的组合逐位同构。"""
     import cupy as cp
-    m=engine._metrics(W.copy(),win)
+    from combo_gpu import capped
+    U=U.copy();U[:win['row0']]=0          # 与回测口径一致:预热段不持仓,否则 a=0 的试探不等于参照
+    m=engine._metrics(capped(U),win)
     dates=cp.asarray(win['dates'][win['row0']:].astype('int64'))
     p=cp.power(0.5,(dates[-1]-dates)/CFG.recent_halflife_days);p/=p.sum()
     rr=m['rr'];mu=cp.sum(rr*p);var=cp.sum((rr-mu)**2*p)
     ws=cp.where(var>0,mu/cp.sqrt(cp.where(var>0,var,1))*365**0.5,0)
     vals=cp.asnumpy(cp.stack((ws,cp.sum(cp.log1p(rr)*p)*365))).tolist()
-    return dict(**m,p=p,wsharpe=vals[0],n=n,seed=seed,win=win,recent_growth=vals[1])
+    return dict(**m,U=U,p=p,wsharpe=vals[0],n=n,seed=seed,win=win,recent_growth=vals[1])
 
 def seed_ref(window):
     from combo_gpu import device_window
@@ -81,7 +85,7 @@ def run_batch(rows,ref):
     return results
 
 def explain(g):
-    if g['passed']:return '结构有效；加入后组合 Sharpe 提升且全期/近期收益不下降'
+    if g['passed']:return '结构有效；加入后组合 Sharpe 提升且全期/近期收益抵得过回撤变化'
     return '; '.join(str(v) for layer in g['layers'].values() for v in layer.get('vetoes',[]))
 
 def reject_row(expr,error,stop='G1'):

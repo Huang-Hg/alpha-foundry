@@ -21,6 +21,9 @@ worker 是唯一的计算者 ⇒ 任一时刻只有一个 GPU 批在飞。多客
     python tmp/q25_funnel/daemon.py stop
 
 正常情况下**不用手动起** —— `run.py` 首次调用会自动拉起并托管(见 client.py)。
+
+面板:服务把状态写进 `.q25d_status.json`(有变化才写,空闲时 10s 一次心跳),由 `python -m monitoring`
+显示;云端服务的这个文件由 `scripts/mirror_q25_status.py` 经一条 SSH 长连接按变化推到本地。
 """
 from __future__ import annotations
 
@@ -33,7 +36,7 @@ import sys
 import threading
 import time
 import traceback
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional
 
 HERE = Path(__file__).resolve().parent
@@ -42,11 +45,14 @@ sys.path.insert(0, str(HERE))
 
 PORTFILE = HERE / '.q25d.json'
 LOGFILE = HERE / '.q25d.log'
+STATUSFILE = HERE / '.q25d_status.json'
 HOST = '127.0.0.1'
 
 COALESCE_WAIT = 0.005     # 秒:只合并同时到达的请求，避免等待超过计算时间
 COALESCE_MAX = 512        # 单个 GPU 批的表达式上限
 SLOW_JOB = 120.0          # 秒:超过则在日志里点名(排查队头阻塞)
+PUBLISH_SECONDS = 0.5     # 秒:状态文件检查间隔
+HEARTBEAT_SECONDS = 10.0  # 秒:状态没变也重写一次,面板据此区分"空闲"和"失联"
 
 
 class Job:
@@ -75,12 +81,11 @@ class Server:
         self.stop_flag = False
         self._combo = None
         self._combo_mtime = -1.0
-        # ---- 面板状态(dash.py 通过 op=stats 读)。只由 worker 单线程写 ⇒ 无需加锁。
-        self.funnel: 'collections.Counter[str]' = collections.Counter()
-        self.lanes: 'collections.Counter[str]' = collections.Counter()
-        self.best: Optional[Dict] = None      # {'sharpe','expr'} —— 全程最高
-        self.events: 'collections.deque[Dict]' = collections.deque(maxlen=64)
-        self.cur: Optional[Dict] = None       # 在飞批次 {'n','t0','op','clients'}
+        # ---- 面板状态(写进 STATUSFILE)。worker 线程是唯一写者;jobs / sources 整体替换或 deque 追加,
+        # 发布线程只做一次引用读取 + C 层拷贝 ⇒ 无需加锁。
+        self.jobs: 'collections.deque[Dict]' = collections.deque(maxlen=32)   # 最近完成的作业
+        self.sources: Dict[str, Dict] = {}    # 提交文件所在目录(一个 agent 一个)→ 累计轮数/公式/变体/判决
+        self.cur: Optional[Dict] = None       # 在飞作业 {'op','n','source','t0','clients', 'stage','done','total'}
         self.clients = 0                      # 活跃连接数(handler 线程数)
         self.t_busy = 0.0                     # 累计计算耗时 ⇒ 真实吞吐 = n_expr/t_busy
         self.phase = 'warm'                   # warm | serve
@@ -88,23 +93,9 @@ class Server:
 
     # ------------------------------------------------------------ 生命周期
     def run(self):
-        """**一个进程、一个窗口**:服务在这儿算,面板也在这儿画。
-
-        ⚠️ 第一件事永远是无条件打一段横幅。以前这里先判 `isatty` 再决定要不要起面板线程,
-        而面板线程内部又把异常只写进日志文件 —— 两条路都通向**一个永远全黑的窗口**,
-        服务却在正常跑。窗口是黑的时候人唯一能得到的信息就是"没信息",无法诊断。
-        横幅无条件打 ⇒ "窗口全黑"这个现象从此只可能意味着"进程根本没起来"。"""
-        banner = (f'Q25 回测服务  pid={os.getpid()}  port={self.port}\n'
-                  f'  预热中(装载面板 + CUDA context + 上传显存,首次约 20-60s)…\n'
-                  f'  日志 {LOGFILE}')
-        print(banner, flush=True)
-        _con = self._out()                  # 横幅必须也进控制台窗口:否则预热那 20-60s
-        if _con is not sys.stdout:          # 它还是全黑的,而这正是用户最需要反馈的一段
-            try:
-                _con.write(banner + '\n')
-            except Exception:
-                pass
-        threading.Thread(target=self._display, daemon=True).start()
+        print(f'Q25 回测服务  pid={os.getpid()}  port={self.port}  预热中(首次约 20-60s)…\n'
+              f'  日志 {LOGFILE}\n  面板数据 {STATUSFILE}', flush=True)
+        threading.Thread(target=self._publish, daemon=True).start()
         self._warm()
         PORTFILE.write_text(json.dumps(
             dict(port=self.port, pid=os.getpid(), started=self.t0,
@@ -120,94 +111,24 @@ class Server:
             PORTFILE.unlink(missing_ok=True)
             _log('stopped')
 
-    def _out(self):
-        """面板往哪写。**优先 `CONOUT$`(那个黑窗口),而不是 stdout。**
-
-        2026-08-13 实测,推翻了之前的结论:
-          · WSL interop 起的 Windows 进程**一律有控制台窗口** —— `GetConsoleWindow()≠0`,
-            连 `DETACHED_PROCESS` 也一样(interop 压根不理会 `creationflags`)。
-            用户看到的那个黑框就是它。
-          · 但进程的 stdout 被接回 WSL 管道 ⇒ `sys.stdout.isatty()` 是 **False**,
-            而且写进去的东西跑到 WSL/日志文件里,**永远不会出现在那个窗口上**。
-            这就是"黑窗口什么都不显示"的全部原因。
-          · `CONOUT$` 绕开 stdout 重定向直写控制台,实测 `isatty()` 是 **True**
-            ⇒ 那个窗口支持 `rich.Live` 原地重绘。
-
-        ⚠️ 之前我用 `MainWindowHandle == 0` 判定"拿不到窗口"是**错的**:控制台窗口属于
-        `conhost.exe`,不属于本进程,所以任何控制台程序的 `MainWindowHandle` 都是 0。
-        判有没有控制台只能用 `GetConsoleWindow()`。
-        """
-        if sys.platform == 'win32':
-            try:
-                f = open('CONOUT$', 'w', encoding='utf-8', buffering=1)
-                if f.isatty():
-                    return f
-                f.close()
-            except Exception:
-                pass
-        return sys.stdout
-
-    def _mode(self, out=None) -> str:
-        """面板模式:live(原地重绘)| frames(定时整帧)| off。命令行 `--panel <mode>` 覆盖。
-
-        ⚠️ **覆盖开关必须走 `sys.argv`,不能走环境变量。** 本机是 WSL 调 Windows python,
-        `FOO=bar win_python.exe` 里的 `FOO` **根本到不了子进程**(实测 `os.environ` 里是
-        None)。用环境变量做开关会静默失效 —— 开关像是没生效,实际是压根没传进来。
-
-        自动判断按 `_out()` 选出的目标来:CONOUT$ 是真终端 ⇒ live(画进那个黑窗口)。
-        只有连控制台都没有(纯管道 / Linux 重定向)才退到 off,`--panel frames` 可强制出帧。"""
-        a = sys.argv
-        for i, x in enumerate(a):
-            if x == '--panel' and i + 1 < len(a):
-                m = a[i + 1].strip().lower()
-                if m in ('live', 'frames', 'off'):
-                    return m
-            elif x.startswith('--panel='):
-                m = x.split('=', 1)[1].strip().lower()
-                if m in ('live', 'frames', 'off'):
-                    return m
-        out = out if out is not None else sys.stdout
-        return 'live' if out.isatty() else 'off'
-
-    def _display(self):
-        """面板线程。渲染失败绝不能拖垮服务 ⇒ 整体兜底。
-
-        兜底**不能只写日志文件**:窗口是给人看的,rich 挂了就退化成纯文本状态行,
-        让窗口继续有东西。以前这里失败即静默,于是"面板没出来"变成了不可诊断的现象。"""
-        out = self._out()
-        mode = self._mode(out)
-        _log(f'panel  target={"CONOUT$" if out is not sys.stdout else "stdout"} '
-             f'isatty={out.isatty()} mode={mode}')
-        if mode == 'off':
-            return
-        try:
-            import dash
-            from rich.console import Console
-            if mode == 'live':
-                from rich.live import Live
-                console = Console(file=out, highlight=False)
-                with Live(dash.render(self._stats(), dash.fit(console, out), owner=True), console=console,
-                          refresh_per_second=4, screen=False) as live:
-                    while not self.stop_flag:
-                        live.update(dash.render(self._stats(), dash.fit(console, out), owner=True))
-                        time.sleep(0.25)
-            else:
-                console = Console(file=out, width=84, highlight=False)
-                while not self.stop_flag:
-                    console.print(dash.render(self._stats(), owner=True))
-                    time.sleep(5.0)
-        except Exception:
-            _log('面板渲染失败,退化为纯文本状态行\n' + traceback.format_exc())
-            print('[panel] rich 渲染失败,退化为纯文本(详见日志)', flush=True)
-            while not self.stop_flag:
-                s = self._stats()
-                cur = s.get('cur')
-                print(f"[{time.strftime('%H:%M:%S')}] "
-                      + (f"计算中 {cur['n']} 条 {cur['elapsed']:.0f}s "
-                         f"{cur.get('stage', '')} {cur.get('done', 0)}/{cur.get('total', 0)}"
-                         if cur else '空闲')
-                      + f" · 队列 {s['queue']} · 已算 {s['exprs']:,} · {s['vram']}", flush=True)
-                time.sleep(5.0)
+    def _publish(self):
+        """状态有变化(或满 HEARTBEAT_SECONDS)就原子重写 STATUSFILE。`now` 与累计时长每次都变,不算变化。"""
+        last, written = None, 0.0
+        while not self.stop_flag:
+            st = self._status()
+            key = json.dumps({k: v for k, v in st.items() if k not in ('now', 'elapsed_seconds', 'busy_seconds')},
+                             ensure_ascii=False)
+            if key != last or time.time() - written >= HEARTBEAT_SECONDS:
+                temp = STATUSFILE.with_suffix('.tmp')
+                temp.write_text(json.dumps(st, ensure_ascii=False), encoding='utf-8')
+                while True:
+                    try:
+                        os.replace(temp, STATUSFILE)
+                        break
+                    except PermissionError:      # Windows:面板此刻正打开着它
+                        time.sleep(0.02)
+                last, written = key, time.time()
+            time.sleep(PUBLISH_SECONDS)
 
     def _warm(self):
         """预热:装载面板 + 建 CUDA context + 上传显存。全部只此一次。"""
@@ -240,13 +161,11 @@ class Server:
                            uptime=round(time.time() - self.t0, 1), served=self.served,
                            exprs=self.n_expr, batches=self.n_batch,
                            queue_depth=self.q.qsize() + len(self.pending))
-            elif op == 'stats':
-                res = self._stats()
             elif op == 'stop':
                 res = dict(ok=True, stopping=True)
                 self.stop_flag = True
                 threading.Timer(0.2, self._selfpoke).start()
-            elif op in ('eval', 'python'):
+            elif op in ('eval', 'python', 'family'):
                 from gates import PROTOCOL
                 assert req.get('protocol') == PROTOCOL, '客户端 gate 协议过期;请同步代码'
                 job = Job(op, req)
@@ -292,8 +211,8 @@ class Server:
             if job.op == 'eval' and not job.req.get('accept'):
                 batch += self._coalesce(job)
             t = time.time()
-            self.cur = dict(op=job.op, clients=len(batch), t0=t, funnel=collections.Counter(), best=None,
-                            n=sum(len(j.req.get('exprs', [])) for j in batch))
+            self.cur = dict(op=job.op, clients=len(batch), t0=t, source=job.req.get('source') or job.req.get('path'),
+                            n=sum(len(j.req.get('exprs', j.req.get('seeds', []))) for j in batch))
             try:
                 self._run(batch)
             except Exception:
@@ -316,54 +235,41 @@ class Server:
                 _log(f'slow   {dt:.0f}s  ops={[j.op for j in batch]}')
 
     def _log_job(self, batch: List[Job], dt: float) -> None:
-        """把一个作业的结果**并入面板状态**,并在服务端终端打一行紧凑摘要。
+        """作业结果并入面板状态(jobs 逐作业一行、sources 按提交目录累计),日志打一行摘要。"""
+        for j in batch:
+            res, source = j.result or {}, j.req.get('source') or j.req.get('path')
+            job = dict(t=time.time(), op=j.op, source=source, dt=round(dt, 1), ok=bool(res.get('ok')))
+            if j.op == 'family' and res.get('ok'):
+                verdicts = dict(collections.Counter(f['verdict'] for f in res['families']))
+                job.update(n=len(j.req['seeds']), variants=res['variants'], verdicts=verdicts)
+                _log(f'族{self.n_batch + 1:<4d} {job["n"]:3d} 条公式 {res["variants"]:6d} 个变体  {dt:5.1f}s  '
+                     + ' '.join(f'{k} {v}' for k, v in verdicts.items()) + f'  {source or ""}')
+            else:
+                rows = res.get('rows', [])
+                verdicts = dict(collections.Counter('通过' if r.get('passed') else '未过' for r in rows))
+                job.update(n=len(rows), variants=len(rows), verdicts=verdicts)
+                _log(f'{j.op:<6s}{self.n_batch + 1:<4d} {len(rows):5d} 条  {dt:5.1f}s  过 {verdicts.get("通过", 0)}  {source or ""}')
+            self.jobs.append(job)
+            if source:                            # 一个提交目录 = 一个 agent;整体替换,发布线程读到的永远是完整的一份
+                key = PurePosixPath(source.replace('\\', '/')).parent.name
+                old = self.sources.get(key, dict(rounds=0, formulas=0, variants=0, verdicts={}))
+                merged = collections.Counter(old['verdicts']) + collections.Counter(job['verdicts'])
+                self.sources = dict(self.sources, **{key: dict(
+                    rounds=old['rounds'] + 1, formulas=old['formulas'] + job['n'],
+                    variants=old['variants'] + job['variants'], verdicts=dict(merged), last=job['t'])})
 
-        分工:详细的漏斗/吞吐/峰值留给 `dash.py`(它按 op=stats 拉结构化状态,能重绘、
-        能排版);这里只打一行"发生了什么",够在服务端终端确认没堵、没崩即可。
-        以前把 12 个字段挤在一行里 —— 信息全在,但没人读得下去。"""
-        rows = [r for j in batch for r in (j.result or {}).get('rows', [])]
-        if not rows:
-            _log(f'{batch[0].op} 无产出  {dt:.1f}s')
-            return
-        for r in rows:
-            self.funnel[r.get('stopped_at') or 'PASS'] += 1
-            self.lanes[f'{r.get("lane", "?")}/{r.get("backend", "cpu")}'] += 1
-        n_pass = sum(1 for r in rows if r.get('passed'))
-        best = max(((r['sharpe'], r['expr']) for r in rows
-                    if r.get('sharpe') is not None), default=None)
-        if best and (self.best is None or best[0] > self.best['sharpe']):
-            self.best = dict(sharpe=best[0], expr=best[1], t=time.time())
-        self.events.append(dict(
-            t=time.time(), n=len(rows), dt=round(dt, 1), n_pass=n_pass,
-            clients=len(batch), best=(round(best[0], 4) if best else None),
-            stop={k: v for k, v in collections.Counter(
-                r.get('stopped_at') or 'PASS' for r in rows).items()}))
-        _log(f'批{self.n_batch + 1:<4d} {len(rows):5d} 条  {dt:5.1f}s  '
-             f'过 {n_pass:<5d} 队列 {self.q.qsize() + len(self.pending)}')
-
-    def _stats(self) -> Dict:
-        """面板的唯一数据源。**只给数,不排版** —— 版面全在 dash.py。"""
+    def _status(self) -> Dict:
+        """面板的唯一数据源:只给数,不排版(版面在 monitoring/service.py)。时刻一律是本机时钟。"""
+        ref = self._combo._ref.get('is') if self._combo is not None else None
         cur = self.cur
-        funnel, best = collections.Counter(self.funnel), self.best
-        if cur:                                  # 在飞批次的**已判部分**并进来:漏斗是实时的,不等整批结束
-            funnel.update(dict(cur['funnel']))   # dict():worker 线程正在写它,先原子拷贝再迭代
-            cb = cur['best']
-            if cb and (best is None or cb['sharpe'] > best['sharpe']):
-                best = cb
-            cur = dict({k: v for k, v in cur.items() if k not in ('funnel', 'best')},
-                       elapsed=time.time() - cur['t0'],
-                       stage_elapsed=time.time() - cur.get('stage_t0', cur['t0']))
-        ref=self._combo._ref.get('is') if self._combo is not None else None
-        portfolio={k:ref[k] for k in ('n','sharpe','wsharpe','cagr','maxdd')} if ref else None
         return dict(
-            ok=True, pid=os.getpid(), port=self.port, t=time.time(),
-            phase=self.phase, warm=self.warm, log=list(_LINES)[-8:],
-            uptime=time.time() - self.t0, busy=self.t_busy,
-            served=self.served, exprs=self.n_expr, batches=self.n_batch,
+            kind='service', phase=self.phase, warm=self.warm, pid=os.getpid(), now=time.time(),
+            elapsed_seconds=time.time() - self.t0, busy_seconds=self.t_busy,
+            device=_device() if self.phase == 'serve' else None, vram=_vram(),
             queue=self.q.qsize() + len(self.pending), clients=self.clients,
-            vram=_vram(), device=(_device() if self.phase == 'serve' else '…'),
-            funnel=dict(funnel), lanes=dict(self.lanes), best=best, events=list(self.events),
-            cur=cur,portfolio=portfolio)
+            served=self.served, exprs=self.n_expr, batches=self.n_batch,
+            portfolio={k: ref[k] for k in ('n', 'sharpe', 'cagr', 'maxdd')} if ref else None,
+            cur=dict(cur) if cur else None, jobs=list(self.jobs), sources=self.sources)
 
     def _coalesce(self, first: Job) -> List[Job]:
         """收拢同窗 eval 作业。遇到不可合并的作业放回 pending,**不改变其顺序**。"""
@@ -390,6 +296,12 @@ class Server:
         return got
 
     def _run(self, batch: List[Job]) -> None:
+        if batch[0].op == 'family':                  # never coalesced: one round of one agent is already thousands of variants
+            import family
+            j = batch[0]
+            j.result = dict(ok=True, served_by='daemon', **family.expand(j.req['seeds'], self._combo_fresh().ref('is'), self._tick))
+            self.n_expr += j.result['variants']
+            return
         if batch[0].op == 'python':
             j = batch[0]
             j.result = dict(ok=True, rows=self._eval_python(j.req), served_by='daemon',
@@ -427,16 +339,6 @@ class Server:
             cur['stage_t0'] = time.time()        # 剩余时间按**本阶段**的速度估,不能拿 GPU 段的耗时去摊 CPU 段
         cur['stage'], cur['done'], cur['total'] = stage, done, total
 
-    def _judged(self, rows: Dict[str, Dict], row: Dict) -> None:
-        """一条候选判完:记进本批结果,同时并入在飞批次的漏斗 / 峰值 ⇒ 面板随批内进度实时长
-        (批末由 `_log_job` 并入累计)。"""
-        rows[row['expr']] = row
-        cur = self.cur
-        cur['funnel'][row.get('stopped_at') or 'PASS'] += 1
-        sh = row.get('sharpe')
-        if sh is not None and (cur['best'] is None or sh > cur['best']['sharpe']):
-            cur['best'] = dict(sharpe=sh, expr=row['expr'])
-
     def _eval_exprs(self, exprs: List[str], window: str, accept: bool) -> List[Dict]:
         import engine
         import gates
@@ -451,8 +353,7 @@ class Server:
                 self._tick('GPU 自适应精度组合批量',lo,len(uniq))
                 batch = engine.simulate_many(uniq[lo:lo+engine.CUDA.candidate_batch],window)
                 for r,g in zip(batch,gates.run_batch(batch,ref)):
-                    row = gates.rowify(r,g)
-                    self._judged(rows,row)
+                    rows[r['expr']] = gates.rowify(r,g)
             self._tick('收尾',len(uniq),len(uniq))
             return [rows[s] for s in exprs]
         for k,s in enumerate(uniq):
@@ -463,7 +364,7 @@ class Server:
             if g['passed']:
                 row.update(accepted=True,weight=combo.add(r,g))
                 ref=combo.ref(window)
-            self._judged(rows,row)
+            rows[s]=row
         n_surv=len(uniq)
         self._tick('收尾', n_surv, n_surv)
         if accept and any(rows[s]['accepted'] for s in uniq):
@@ -522,16 +423,11 @@ def _free_gpu() -> None:
 
 
 _LOG_FH = None
-_LINES: 'collections.deque[str]' = collections.deque(maxlen=200)
 
 
 def _log(msg: str) -> None:
-    """全量落 LOGFILE + 进内存环,由**同一个窗口**的面板显示。
-
-    绝不写 stderr:那个窗口正被 rich.Live 占着原地重绘,插一行原始文本就会把画面撕开。"""
     global _LOG_FH
     line = f'[{time.strftime("%H:%M:%S")}] {msg}'
-    _LINES.append(line)
     if _LOG_FH is None:
         _LOG_FH = open(LOGFILE, 'a', encoding='utf-8', buffering=1)
     _LOG_FH.write(line + '\n')
@@ -543,7 +439,7 @@ def main() -> None:
     if cmd == 'serve':
         try:
             port = next((int(x) for x in argv[1:] if x.isdigit()), 0)
-            Server(port).run()   # 只认纯数字为端口,其余是开关(如 --panel)
+            Server(port).run()
         except BaseException:
             # stderr 就是那个控制台窗口,窗口一关 traceback 也没了 ⇒ 显式落盘。
             _log('CRASH\n' + traceback.format_exc())
@@ -556,7 +452,7 @@ def main() -> None:
     elif cmd == 'stop':
         print(client.request(dict(op='stop'), timeout=5.0) or '未运行')
     else:
-        sys.exit(f'未知命令 {cmd!r}(serve | dash | status | stop)')
+        sys.exit(f'未知命令 {cmd!r}(serve | status | stop)')
 
 
 if __name__ == '__main__':

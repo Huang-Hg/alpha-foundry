@@ -13,6 +13,7 @@ import cupy as cp
 import gates
 import combolib
 from combolib import ComboLib,STORE
+from combo_gpu import capped
 
 
 class ComboGateTests(unittest.TestCase):
@@ -40,10 +41,10 @@ class ComboGateTests(unittest.TestCase):
         self.assertTrue(g['passed'],gates.explain(g))
         json.dumps(gates.rowify(r,g),allow_nan=False)
         weight=lib.add(r,g);after=lib.ref()
-        expected=engine._metrics((1-weight)*ref['W']+weight*r['_W'],ref['win'])
+        expected=engine._metrics(capped(ref['U']+weight*r['_W']),ref['win'])
         cp.testing.assert_allclose(after['rr'],expected['rr'],atol=1e-12,rtol=1e-12)
         self.assertAlmostEqual(after['wsharpe'],g['combo']['sharpe_after'],places=10)
-        self.assertAlmostEqual(sum(m['weight'] for m in lib.members),1)
+        self.assertAlmostEqual(sum(m['weight'] for m in lib.members),1+weight)      # additive scales, not shares
         with self.assertRaises(AssertionError):lib.add(r,g)
         clone=dict(r,expr='duplicate',_W=after['W'].copy(),_rr=after['rr'].copy())
         self.assertFalse(gates.run(clone,after)['passed'])
@@ -54,7 +55,6 @@ class ComboGateTests(unittest.TestCase):
         from daemon import Server
         server=Server.__new__(Server);lib=ComboLib.load()
         server._combo_fresh=lambda:lib;server._tick=lambda *a:None
-        server._judged=lambda rows,row:rows.update({row['expr']:row})
         with patch.object(cpu,'run_bt',side_effect=AssertionError('CPU production execution')):
             rows=server._eval_exprs([self.expr,'gt(ma_dist_20,0)'],'is',False)
         self.assertEqual(len(rows),2)
@@ -102,29 +102,6 @@ class ComboGateTests(unittest.TestCase):
         verdict['layers']['G2_performance']['backend']='cuda-mixed'
         with self.assertRaises(AssertionError):lib.add(r,verdict)
         self.assertEqual(STORE.read_bytes(),self.stored)
-
-    def test_fused_patterns_preserve_domains(self):
-        import fusion
-        from gpu import eval_node
-        from fastexpr import validate
-        x=cp.asarray([cp.nan,cp.inf,-cp.inf,-2.,-0.,0.,1e-308,1e-7,1.,2.])[:,None]
-        panels=dict(x=x,y=x[::-1].copy(),z=cp.ones_like(x))
-        unary=['abs','neg','square','tanh','sign','log','sqrt','inv','s_log_1p','not','is_nan']
-        binary=['add','sub','mul','div','max','min','gt','lt','and','or','equal','not_equal',
-                'greater_equal','less_equal']
-        terms=[f'{op}(x)' for op in unary]+[f'{op}(x,y)' for op in binary]+[
-            'pow_const(x,-0.5)','add_const(x,0.5)','mul_const(x,2)',
-            'left_tail(x,0.5)','right_tail(x,0.5)','if_else(x,y,z)']
-        previous=fusion.ENABLED
-        try:
-            for term in terms:
-                v=validate(f'neg({term})',list(panels))
-                self.assertTrue(v['ok'],v)
-                fusion.ENABLED=False;a=eval_node(v['tree'].root,panels,{})
-                fusion.ENABLED=True;b=eval_node(v['tree'].root,panels,{})
-                cp.testing.assert_array_equal(cp.isnan(a),cp.isnan(b))
-                cp.testing.assert_allclose(a,b,atol=0,rtol=1e-14)
-        finally:fusion.ENABLED=previous
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

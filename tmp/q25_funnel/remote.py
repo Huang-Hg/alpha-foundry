@@ -1,19 +1,18 @@
 """云端回测服务的接入层 —— 本地客户端经 SSH 通道直连云端 daemon,**协议一字不改**。
 
     run.py --daemon attach [host]     把本工作区接到云端服务(没在跑就拉起),默认 quant-server
-    run.py "表达式"                    照常用:回测在云端 GPU 上算,实时面板照样画在本终端
-    run.py --daemon dash              只看面板
+    run.py "表达式"                    照常用:回测在云端 GPU 上算
     run.py --daemon detach            断开(云端服务留着);stop = 连云端服务一起停
+    面板:scripts/mirror_q25_status.py 把云端 .q25d_status.json 推到本地,python -m monitoring 显示
 
 通信方式 = paramiko `direct-tcpip` 通道(等价 `ssh -L`,但在进程内,没有常驻隧道进程要管):
   · 云端 daemon 照旧只监听 127.0.0.1 —— AutoDL 只放行 ssh 口,也不该把无鉴权的 JSON 口放上公网
   · 鉴权 / 加密复用 ssh-bridge 那把 key;登录信息单源 = `mcp-ssh/hosts.json`(控制台登录指令原样)
   · 每个请求开一条通道:发一行 JSON、收一行 JSON,与本地 TCP 同形 ⇒ daemon 无感
-  · 一个进程一条 SSH 连接;面板轮询(op=stats)与作业(op=eval)是同一连接上的不同通道,
-    所以作业在飞的时候面板照样查得动(daemon 侧 stats 由 handler 线程直接应答,不排队)
+  · 一个进程一条 SSH 连接;同一进程的多个请求是同一连接上的不同通道
 
 "接到哪儿"是**状态**不是配置:attach 把 `{host, port}` 写进 `.q25d.json`(本来就是"服务在哪"
-的那个文件),此后 client / dash / 各 agent 的 run.py 全部自动走云端,不需要任何开关。
+的那个文件),此后 client / 各 agent 的 run.py 全部自动走云端,不需要任何开关。
 
 attach 先做**代码对账**(md5,本地 ↔ 云端):云端跑的是旧代码时读数静默不一致,比连不上糟得多。
 不一致直接拒绝并点名文件 —— 部署走 tar + scp_upload(本地是唯一编辑源),这里不代劳。
@@ -45,7 +44,7 @@ BOOT_BUDGET = 240.0                         # 秒:云端预热(装载面板 + CU
 PARITY = ['tmp/q25_funnel/daemon.py', 'tmp/q25_funnel/engine.py', 'tmp/q25_funnel/gates.py',
           'tmp/q25_funnel/combo_gpu.py',
           'tmp/q25_funnel/alpha_cuda.py', 'backtest/ops_cuda/q25.py', 'backtest/ops_cuda/q25_native.cu',
-          'tmp/q25_funnel/gpu.py', 'tmp/q25_funnel/fusion.py', 'tmp/q25_funnel/fastexpr.py', 'tmp/q25_funnel/combolib.py',
+          'tmp/q25_funnel/gpu.py', 'tmp/q25_funnel/fastexpr.py', 'tmp/q25_funnel/combolib.py', 'tmp/q25_funnel/family.py',
           'backtest/ops_cuda/__init__.py', 'backtest/ops_cuda/kernels.cu',
           'evaluation/ast.py', 'evaluation/grammar.py', 'markets/profile.py', 'markets/vocabulary.py',
           'config/config.ini', 'config/config.py']
@@ -148,7 +147,7 @@ def attach(name: str = DEFAULT_HOST, quiet: bool = False) -> Dict:
     PORTFILE.write_text(json.dumps(dict(host=name, port=d['port'], pid=d['pid'],
                                         started=d['started'], python=d['python']),
                                    ensure_ascii=False), encoding='utf-8')
-    say(f'[remote] 已接到 {name}(pid {d["pid"]} · 云端 :{d["port"]})。此后 run.py / dash 全走云端。')
+    say(f'[remote] 已接到 {name}(pid {d["pid"]} · 云端 :{d["port"]})。此后 run.py 全走云端。')
     return d
 
 

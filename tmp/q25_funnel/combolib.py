@@ -14,6 +14,7 @@ import json
 import hashlib
 import sys
 import time
+import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -26,20 +27,43 @@ STORE = HERE / 'combo_library.json'     # 引擎 / 门延迟导入:remote.py 只
 SEED = dict(expr='__equal_weight__', lane='benchmark', weight=1.0)
 
 
-def member_book(m: Dict, window: str):
+_STATES: Dict = {}     # (expr, lane, window) -> (持仓书, 净日收益):常驻显存,成员一经算出不再重算
+
+
+def member_states(members: List[Dict], window: str) -> List:
+    """成员的 (持仓书, 净日收益),常驻显存。未缓存的表达式成员合成一批一次算完。
+    2026-09-21 实测(V100S,空库起步 60 轮):此前每轮为每个成员单独重跑"解析→求值→回测→报表",
+    占整轮墙钟 67%(`Evaluator()` 0.66 s/次),成员越多越慢;成员的书只取决于表达式与数据,无须重算。"""
     import engine
-    win=engine.load()['windows'][window]
-    if m['lane']=='benchmark':
-        from combo_gpu import device_window
-        g=device_window(win)
-        return g.dliq/g.nliq
-    if m['lane']=='python':
-        from alpha_cuda import load_source
-        rel,name=m['expr'].rsplit(':',1)
-        path=HERE/rel
-        ns=load_source(path.read_text(encoding='utf-8'),str(path))
-        return engine.simulate_python(ns[name],window,check_lookahead=False)['_W']
-    return engine.simulate(m['expr'],window)['_W']
+    win = engine.load()['windows'][window]                                # 同时按显存定下 candidate_batch
+    missing = [m for m in members if (m['expr'], m['lane'], window) not in _STATES]
+    exprs = [m for m in missing if m['lane'] not in ('benchmark', 'python')]
+    for lo in range(0, len(exprs), engine.CUDA.candidate_batch):          # 批上限来自显存,不是成员数
+        part = exprs[lo:lo+engine.CUDA.candidate_batch]
+        for m, r in zip(part, engine.simulate_many([m['expr'] for m in part], window)):
+            _STATES[(m['expr'], m['lane'], window)] = (r['_W'], r['_rr'])
+    for m in missing:
+        if m['lane'] == 'benchmark':
+            from combo_gpu import device_window
+            g = device_window(win)
+            book = g.dliq/g.nliq
+            _STATES[(m['expr'], m['lane'], window)] = (book, engine._metrics(book, win)['rr'])
+        elif m['lane'] == 'python':
+            from alpha_cuda import load_source
+            rel, name = m['expr'].rsplit(':', 1)
+            path = HERE/rel
+            r = engine.simulate_python(load_source(path.read_text(encoding='utf-8'), str(path))[name], window, check_lookahead=False)
+            _STATES[(m['expr'], m['lane'], window)] = (r['_W'], r['_rr'])
+    return [_STATES[(m['expr'], m['lane'], window)] for m in members]
+
+
+def member_book(m: Dict, window: str):
+    return member_states([m], window)[0][0]
+
+
+def remember(expr: str, lane: str, window: str, book, rr) -> None:
+    """准入时书与收益已经算出:直接入缓存,入库后不再重算。"""
+    _STATES[(expr, lane, window)] = (book, rr)
 
 
 def evaluate_python_source(source: str, path: str, window: str, combo, accept=False, names=None):
@@ -72,16 +96,32 @@ class ComboLib:
     def __init__(self, members: List[Dict]):
         self.members = members                    # [dict(expr, lane, weight)]
         self._ref: Dict[str, Dict] = {}
+        self._disk_snapshot = None
 
     @classmethod
     def load(cls) -> 'ComboLib':
-        if not STORE.exists():
-            return cls([])
-        return cls(json.loads(STORE.read_text(encoding='utf-8'))['members'])
+        content = STORE.read_bytes() if STORE.exists() else b''
+        lib = cls(json.loads(content)['members'] if content else [])
+        lib._disk_snapshot = content
+        return lib
 
     def save(self) -> None:
-        STORE.write_text(json.dumps(dict(updated=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                                         members=self.members), ensure_ascii=False, indent=1), encoding='utf-8')
+        lock = STORE.with_suffix('.lock')
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        temp = STORE.with_suffix(f'.{os.getpid()}.tmp')
+        try:
+            os.close(fd)
+            current = STORE.read_bytes() if STORE.exists() else b''
+            if self._disk_snapshot is not None and current != self._disk_snapshot:
+                raise RuntimeError('Portfolio changed on disk; refusing stale search update')
+            content = json.dumps(dict(updated=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                                      members=self.members), ensure_ascii=False, indent=1).encode('utf-8')
+            temp.write_bytes(content)
+            os.replace(temp, STORE)
+            self._disk_snapshot = content
+        finally:
+            temp.unlink(missing_ok=True)
+            lock.unlink()
 
     def ref(self, window: str = 'is') -> Optional[Dict]:
         """精算参照包含实际持仓 W;空库返回等权种子,不写磁盘。"""
@@ -92,9 +132,9 @@ class ComboLib:
             win = engine.load()['windows'][window]
             members = self.members or [SEED]
             import cupy as cp
-            W=cp.sum(cp.stack([member_book(x,window) for x in members])*
+            U=cp.sum(cp.stack([book for book,_ in member_states(members,window)])*
                      cp.asarray([x['weight'] for x in members])[:,None,None],axis=0)
-            self._ref[window] = gates.make_ref(W, win, len(members), seed=not self.members)
+            self._ref[window] = gates.make_ref(U, win, len(members), seed=not self.members)
             self._ref[window]['member_keys'] = {(m['expr'],m['lane']) for m in members}
         return self._ref[window]
 
@@ -106,9 +146,10 @@ class ComboLib:
         assert verdict['passed'] and proposal['_ref'] is ref and verdict['expr'] == r['expr']
         w = proposal['weight']
         assert 0 < w <= 1
-        members = self.members or [SEED]
-        self.members = [dict(m, weight=m['weight'] * (1.0 - w)) for m in members if w < 1.0]
+        # 权重是各成员书的相加倍数(不是份额):新成员直接加入,已有成员原样不动。
+        self.members = [dict(m) for m in self.members or [SEED]]
         lane = r.get('lane', 'fastexpr')
+        remember(r['expr'], lane, r['window'], r['_W'], r['_rr'])
         for m in self.members:
             if m['expr'] == r['expr'] and m['lane'] == lane:
                 m['weight'] += w

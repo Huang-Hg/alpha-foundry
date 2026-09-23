@@ -4,6 +4,7 @@ Factors stay FP64 across discontinuous signal operators. Trial daily state is
 FP32; statistics, calibration and ambiguous/possibly feasible trials are FP64.
 Calibration envelopes are conservative empirical guards, not interval proofs.
 """
+import hashlib
 import numpy as np
 import cupy as cp
 from backtest.ops_cuda import _MOD
@@ -61,6 +62,12 @@ def device_window(win):
     return _WINDOWS[key][1]
 
 
+def capped(U):
+    """Additive books share one exposure budget: a day is shrunk only when it is above full exposure.
+    Books are nonnegative, so exposure is the plain row sum (the trial kernel relies on that too)."""
+    return U/cp.maximum(1,U.sum(-1,keepdims=True))
+
+
 def stack_books(books):
     return cp.ascontiguousarray(books if isinstance(books,cp.ndarray) else
                                 cp.stack([cp.asarray(w,dtype=cp.float64) for w in books]))
@@ -101,7 +108,19 @@ def metrics_many(books,win,result=None,precision='f64'):
     return result
 
 
-def simulate_many(exprs,window='is',precision='f64'):
+def returns_many(books,win,precision='f64'):
+    """Search path: books -> (zeroed books, net daily returns, sound-return flags, max drawdowns), all on the device.
+    The report reductions of metrics_many (yearly table, turnover, top-day sort, per-row dicts) are skipped."""
+    W = stack_books(books)
+    W[:,:win['row0']] = 0
+    rr,stats = launch(W,static_device(win),win['row0'],precision)
+    rt = rr[:,win['row0']:]
+    return W,rt,cp.isfinite(rt).all(1)&(rt>-1).all(1),stats[:,3]
+
+
+def simulate_many(exprs,window='is',precision='f64',report=True):
+    """report=False is the mining path: rows carry only what admission reads (_W, _rr, _valid_rr)
+    and the batch crosses to the host once."""
     import engine
     import gates
     from fastexpr import validate
@@ -131,6 +150,18 @@ def simulate_many(exprs,window='is',precision='f64'):
     for stream in g._streams: stream.synchronize()
     if ids:
         values=cp.stack(values)
+        if engine.NULL_SHIFT:
+            lo,hi=engine.NULL_LAG
+            lag=cp.asarray([lo+int.from_bytes(hashlib.sha256(rows[i]['expr'].encode()).digest()[:8],'big')%(hi-lo+1) for i in ids])
+            at=cp.arange(values.shape[1])[None,:]-lag[:,None]
+            values=cp.where((at>=0)[:,:,None],values[cp.arange(len(ids))[:,None],cp.maximum(at,0)],cp.nan)
+    if ids and not report:
+        finite=(~cp.isinf(values).any(axis=(1,2)))&cp.isfinite(values).any(axis=(1,2))
+        W,rt,sound,maxdd=returns_many(_book(values,g.dliq,g.nliq),win,precision)
+        for i,j,(ok,good) in zip(ids,range(len(ids)),cp.asnumpy(cp.stack((finite,sound),axis=1)).tolist()):
+            rows[i].update(ok=ok,error=None if ok else 'G1 数值无效:含无穷值或全为缺失',
+                           _rr=rt[j],_W=W[j],_maxdd=maxdd[j],_valid_rr=good)
+    elif ids:
         valid=cp.asnumpy((~cp.isinf(values).any(axis=(1,2)))&cp.isfinite(values).any(axis=(1,2))).tolist()
         W=_book(values,g.dliq,g.nliq)
         metrics=metrics_many(W,win,precision=precision)
@@ -180,6 +211,10 @@ def static_device(win):
 
 
 def launch(mixed,st,row0,precision='f64'):
+    """One backtest dispatch. The kernel walks the days in order, so a launch has a latency floor that does not
+    depend on the batch: V100S, T=4262 x S=73 (scripts/profile_q25_search_chain.py, 2026-09-21) f64 31 ms for
+    1..256 books, 39 ms for 1024, 161 ms for 4096 (mixed 25 / 33 / 100 ms). Callers therefore batch books into
+    as few launches as possible; a loop of single-book launches costs 31 ms per book."""
     mixed,st = precision_inputs(mixed,st,precision)
     B,T,S = mixed.shape
     assert S <= 128
@@ -193,8 +228,10 @@ def launch(mixed,st,row0,precision='f64'):
 
 
 def trial_returns(W,qW,owners,weights,st,row0,precision):
-    """One reusable CUDA dispatch for main trials and precision calibration."""
+    """One reusable CUDA dispatch for main trials and precision calibration.
+    Trial n = capped(qW + weights[n]*W[owners[n]]); qW is the portfolio's raw additive sum."""
     from engine import CUDA
+    eref=cp.ascontiguousarray(qW.sum(1),dtype=cp.float64);eown=cp.ascontiguousarray(W.sum(2),dtype=cp.float64)
     W,st=precision_inputs(W,st,precision)
     if precision=='mixed':qW=qW.astype(cp.float32)
     kernel=COMBO_KERNEL if precision=='f64' else MIXED_COMBO_KERNEL
@@ -204,7 +241,7 @@ def trial_returns(W,qW,owners,weights,st,row0,precision):
     for lo in range(0,N,CUDA.trial_batch):
         n=min(CUDA.trial_batch,N-lo)
         kernel(((n+3)//4,),(128,),
-            (W,qW,owners[lo:lo+n],weights[lo:lo+n],st['open_raw'],st['prev_close'],
+            (W,qW,owners[lo:lo+n],weights[lo:lo+n],eref,eown,st['open_raw'],st['prev_close'],
              st['open_ff0'],st['close_ff0'],st['slippage'],st['unlocked'],
              np.int32(T),np.int32(S),np.int32(n),np.int64(row0),np.float64(365),rr[lo:lo+n],stats[lo:lo+n]))
     return rr[:,row0:],stats
@@ -216,10 +253,22 @@ def sharpe_upper(mean,sd,error):
     return cp.where(lo<=0,cp.inf,cp.where(m>=0,m/cp.maximum(lo,1e-30),m/hi)*365**0.5)
 
 
-def precision_refine(W,qW,R,weights,owners,st,rr,stats,ref):
+def return_requirements(dd,ref):
+    """Minimum change of (recent-weighted Sharpe, full Sharpe, CAGR, recent log growth) for a portfolio whose max
+    drawdown becomes dd (both drawdowns negative). Sharpe is the primary dimension: it must rise, never traded.
+    Return and drawdown trade against each other: each return measure must change relatively at least as much as
+    the drawdown depth, |x_ref|*(|dd|/|dd_ref|-1). An unchanged drawdown keeps the plain "return must not fall";
+    a drawdown 10% deeper needs 10% more return; a shallower one pays for a proportional return loss."""
+    from gates import CFG
+    deeper=dd/ref['maxdd']-1
+    zero=cp.zeros_like(dd)
+    return cp.stack((zero+CFG.min_sharpe_gain,zero,abs(ref['cagr'])*deeper,abs(ref['recent_growth'])*deeper),axis=-1)
+
+
+def precision_refine(W,qW,weights,owners,st,rr,stats,ref):
     """Calibrate every candidate, then refine all potentially feasible trials.
 
-The two observed error probes (interior mix and candidate endpoint) plus the
+The two observed FP64 error probes (interior and largest weight) plus the
 reference endpoint determine a safety-expanded numerical envelope. This is
 not a formal global error bound between probes. No approximate passing result
 can reach the library. Tiny variance, invalid arithmetic and out-of-budget
@@ -230,12 +279,12 @@ calibration all escalate automatically rather than silently reject.
     B,K=weights.shape;row0=ref['win']['row0'];ix=cp.arange(B)
     cube=rr.reshape(B,K,-1)
     mid=cp.argmin(cp.abs(weights-.5),axis=1)
-    probe,_=trial_returns(W,qW,ix.astype(cp.int32),weights[ix,mid],st,row0,'f64')
+    probe,_=trial_returns(W,qW,cp.tile(ix.astype(cp.int32),2),cp.concatenate((weights[ix,mid],weights[:,-1])),st,row0,'f64')
     if '_mixed_reference_error' not in ref:
         qr,_=launch(qW[None],st,row0,'mixed')
         ref['_mixed_reference_error']=cp.max(cp.abs(qr[0,row0:]-ref['rr']))
-    error=cp.maximum(cp.max(cp.abs(probe-cube[ix,mid]),axis=1),
-                     cp.max(cp.abs(R-cube[:,-1]),axis=1))
+    error=cp.maximum(cp.max(cp.abs(probe[:B]-cube[ix,mid]),axis=1),
+                     cp.max(cp.abs(probe[B:]-cube[:,-1]),axis=1))
     error=cp.maximum(error,ref['_mixed_reference_error'])
     budget=cp.maximum(CUDA.mixed_return_atol,CUDA.mixed_error_safety*error)
     e=cp.repeat(budget,K)
@@ -244,18 +293,16 @@ calibration all escalate automatically rather than silently reject.
     fullsd=rr.std(1)
     upper_ws=sharpe_upper(mu,wsd,e)
     upper_sh=sharpe_upper(rr.mean(1),fullsd,e)
-    lg_hi=cp.log1p(cp.maximum(rr+e[:,None],-1+1e-15))
-    upper_cagr=cp.expm1(lg_hi.mean(1)*365)
-    upper_growth=cp.sum(lg_hi*p,axis=1)*365
+    # Return requirements move with the approximate drawdown (return_requirements), so only the Sharpe bounds screen.
     possible=((upper_ws>=ref['wsharpe']+CFG.min_sharpe_gain-1e-10)&
-              (upper_sh>=ref['sharpe']-1e-10)&(upper_cagr>=ref['cagr']-1e-10)&
-              (upper_growth>=ref['recent_growth']-1e-10)).reshape(B,K).any(1)
+              (upper_sh>=ref['sharpe']-1e-10)).reshape(B,K).any(1)
     invalid=((~cp.isfinite(rr)).any(1)|(rr<=-1).any(1)|
              (wsd<=e)|(fullsd<=e)).reshape(B,K).any(1)
     outside=(~cp.isfinite(error))|(error>CUDA.mixed_return_atol)
-    # The calibrated search domain is a liquid, nonnegative, unlevered book.
+    # The calibrated search domain is a liquid, nonnegative, unlevered candidate; the portfolio's
+    # raw additive sum may exceed full exposure, the trial book is capped.
     domain=(W<0).any(axis=(1,2))|(W.sum(2)>1+1e-10).any(1)
-    qbad=(qW<0).any()|(qW.sum(1)>1+1e-10).any()
+    qbad=(qW<0).any()
     refine=possible|invalid|outside|domain|qbad
     selected=cp.flatnonzero(refine)
     if len(selected):
@@ -292,9 +339,11 @@ def proposal_many(rows,ref,precision=None):
     va=cp.sum((R-ma[:,None])**2*p,axis=1); vq=cp.sum((q-mq)**2*p)
     cov=cp.sum((R-ma[:,None])*(q-mq)*p,axis=1)
     v_a=ma*vq-mq*cov; v_p=mq*va-ma*cov
+    # Tangency of the additive pair P + aA is a* = v_a/v_p. A dominating candidate gets the largest
+    # weight; one with nothing to add repeats grid point 1 and is dropped as a duplicate trial.
     both=(v_a>0)&(v_p>0)
-    suggestion=cp.where(v_a<=0,0,cp.where(v_p<=0,1,v_a/cp.where(both,v_a+v_p,1)))
-    suggestion=cp.where((suggestion>0)&(suggestion<=1),suggestion,1)
+    suggestion=cp.where(both,v_a/cp.where(both,v_p,1),1)
+    suggestion=cp.where(suggestion<=1,suggestion,1)
     B=len(rows); K=CFG.weight_steps+1
     grid=cp.broadcast_to(cp.arange(1,K,dtype=cp.float64)/(K-1),(B,K-1))
     weights=cp.sort(cp.concatenate((grid,suggestion[:,None]),axis=1),axis=1)
@@ -302,10 +351,10 @@ def proposal_many(rows,ref,precision=None):
     owners=cp.repeat(cp.arange(B,dtype=cp.int32),K)
     flat=weights.ravel()
     st=static_device(ref['win'])
-    qW=cp.asarray(ref['W'],dtype=cp.float64)
+    qW=cp.asarray(ref['U'],dtype=cp.float64)
     rr,stats=trial_returns(W,qW,owners,flat,st,ref['win']['row0'],
                            'mixed' if precision=='auto' else precision)
-    diagnostics=precision_refine(W,qW,R,weights,owners,st,rr,stats,ref) if precision=='auto' else None
+    diagnostics=precision_refine(W,qW,weights,owners,st,rr,stats,ref) if precision=='auto' else None
     valid=cp.isfinite(rr).all(1)&(rr>-1).all(1)
     lg=cp.log1p(rr)
     mw=cp.sum(rr*p,axis=1); vw=cp.sum((rr-mw[:,None])**2*p,axis=1)
@@ -316,18 +365,24 @@ def proposal_many(rows,ref,precision=None):
     growth=(cp.sum(lg*p,axis=1)*365).reshape(B,K)
     dd=stats[:,3].reshape(B,K)
     delta=cp.stack((ws-ref['wsharpe'],sh-ref['sharpe'],cagr-ref['cagr'],growth-ref['recent_growth']),axis=2)
-    checks=delta>=cp.asarray([CFG.min_sharpe_gain-1e-10,-1e-10,-1e-10,-1e-10])
+    required=return_requirements(dd,ref)
+    checks=delta>=required-1e-10
     valid=valid.reshape(B,K)&unique
     new=cp.asarray([(r['expr'],r.get('lane','fastexpr')) not in ref.get('member_keys',set()) for r in rows])
-    capacity=~((ref['n']>=CFG.max_members)&new[:,None]&(weights<1))
+    # Adding never replaces the portfolio, so a full library has no room for a new member at any weight.
+    capacity=cp.broadcast_to(~((ref['n']>=CFG.max_members)&new)[:,None],weights.shape)
     feasible=checks.all(2)&valid&capacity
     passed=feasible.any(1)
-    score=cp.where(feasible,ws,-cp.inf)
-    best_ws=score.max(1)
-    tie=feasible&(ws==best_ws[:,None])
+    utility=.5*cp.tanh(delta[:,:,0]/CFG.sharpe_scale)+.5*cp.tanh(delta[:,:,3]/CFG.growth_scale)
+    score=cp.where(feasible,utility,-cp.inf)
+    best_score=score.max(1)
+    tie=feasible&(utility==best_score[:,None])
     best_cagr=cp.where(tie,cagr,-cp.inf).max(1)
     best=cp.argmax(tie&(cagr==best_cagr[:,None]),axis=1)
-    near=cp.argmax(cp.where(valid,ws,-cp.inf),axis=1)
+    margins=delta-required
+    scales=cp.asarray([CFG.violation_scale_wsharpe,CFG.violation_scale_sharpe,CFG.violation_scale_cagr,CFG.violation_scale_growth])
+    violation=cp.maximum(-margins/scales,0).sum(2)+cp.where(capacity,0.,1.)
+    near=cp.argmin(cp.where(valid,violation,cp.inf),axis=1)
     chosen=cp.where(passed,best,near); ix=cp.arange(B)
     mine=cp.where(va>0,ma/cp.sqrt(cp.where(va>0,va,1))*365**0.5,0)
     rho=cp.where((va>0)&(vq>0),cov/cp.sqrt(cp.where((va>0)&(vq>0),va*vq,1)),0)
@@ -335,11 +390,12 @@ def proposal_many(rows,ref,precision=None):
     report=cp.stack((passed,valid.any(1),weights[ix,chosen],ws[ix,chosen],sh[ix,chosen],
                      cagr[ix,chosen],growth[ix,chosen],dd[ix,chosen],unique.sum(1),capacity[ix,chosen],
                      mine,rho,need),axis=1)
-    report=cp.concatenate((report,delta[ix,chosen],checks[ix,chosen]),axis=1)
+    report=cp.concatenate((report,delta[ix,chosen],checks[ix,chosen],
+                           utility[ix,chosen,None],violation[ix,chosen,None],required[ix,chosen]),axis=1)
     host=cp.asnumpy(report).tolist()
     result=[]
     keys=('sharpe','full_sharpe','cagr','recent_growth')
-    labels=('近期加权 Sharpe 增量不足','全期 Sharpe 下降','全期 CAGR 下降','近期加权对数增长下降')
+    labels=('近期加权 Sharpe 增量不足','全期 Sharpe 下降','全期 CAGR 不足以抵偿回撤变化','近期加权对数增长不足以抵偿回撤变化')
     for row,v in zip(rows,host):
         row['_gpu_view']=(v[10],v[12],v[11])
         if not v[1]:
@@ -348,16 +404,17 @@ def proposal_many(rows,ref,precision=None):
             continue
         ck={key:(bool(v[17+j]),v[13+j]) for j,key in enumerate(keys)}
         if not v[9]: ck['capacity']=(False,float(CFG.max_members-ref['n']-1))
-        vetoes=[f'{label} ({v[13+j]:+.6f})' for j,label in enumerate(labels) if not v[17+j]]
+        vetoes=[f'{label} ({v[13+j]:+.6f},要求 ≥ {v[23+j]:+.6f})' for j,label in enumerate(labels) if not v[17+j]]
         if not v[9]: vetoes.append('组合成员数超过上限')
-        if not v[0]: vetoes.insert(0,f'{int(v[8])} 个权重点未找到可行组合;以下为最高 Sharpe 试探点')
+        if not v[0]: vetoes.insert(0,f'{int(v[8])} 个权重点未找到可行组合;以下为约束违反最小的试探点')
         result.append(dict(passed=bool(v[0]),checks=ck,vetoes=vetoes,weight=v[2],wsharpe=v[3],sharpe=v[4],
-                           cagr=v[5],recent_growth=v[6],maxdd=v[7],trials=int(v[8]),cpu_trials=0,backend=f'cuda-{precision}',_ref=ref))
+                           cagr=v[5],recent_growth=v[6],maxdd=v[7],trials=int(v[8]),cpu_trials=0,
+                           utility=v[21],violation=v[22],backend=f'cuda-{precision}',_ref=ref))
     if diagnostics is not None:
         for result_row,d in zip(result,diagnostics):
             result_row.update(backend='cuda-f64' if d[0] else 'cuda-mixed',
                 precision=dict(mode='auto',refined=bool(d[0]),calibration_error=d[1],return_envelope=d[2],
-                               over_budget=bool(d[3]),unstable=bool(d[4]),fp64_trials=K*int(d[0])+1,
+                               over_budget=bool(d[3]),unstable=bool(d[4]),fp64_trials=K*int(d[0])+2,
                                fp32_trials=K))
             assert not result_row['passed'] or d[0], 'Approximate pass escaped precision refinement'
     return result

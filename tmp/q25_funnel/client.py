@@ -36,13 +36,13 @@ def request(req: Dict, timeout: float = 900.0) -> Optional[Dict]:
     d = info()
     if not d:
         return None
-    if req.get('op') in ('eval', 'python'):
+    if req.get('op') in ('eval', 'python', 'family'):
         status = request(dict(op='ping'), timeout=10.0)
         if status is None:
             return None
-        if status.get('protocol') != 'combo-cuda-v4':
+        if status.get('protocol') != 'combo-cuda-v6':
             raise RuntimeError('回测服务仍是旧 gate 协议;请部署本地新代码并重启服务后再评估/入库')
-        req = dict(req, protocol='combo-cuda-v4')
+        req = dict(req, protocol='combo-cuda-v6')
     if d.get('host'):
         import remote
         try:
@@ -50,7 +50,7 @@ def request(req: Dict, timeout: float = 900.0) -> Optional[Dict]:
         except Exception:
             return None
         if res is not None:
-            res['via'] = d['host']                 # 面板标题用:这份读数来自哪台机器
+            res['via'] = d['host']                 # 这份读数来自哪台机器(--accept 据此拉回组合库)
         return res
     try:
         with socket.create_connection((HOST, d['port']), timeout=10.0) as s:
@@ -84,26 +84,6 @@ def ensure(autostart: bool = True, quiet: bool = False) -> bool:
     return _wait_ready(quiet)
 
 
-def _panel(on: bool):
-    """等结果的这段时间把实时面板画在**本进程的终端**里。
-
-    面板归客户端而不归服务端:服务端是 DETACHED 拉起的、没有窗口,它画什么都没人看得见
-    (详见 `dash.Feed` 的说明)。
-
-    ⚠️ `panel` 与 `quiet` 是**两件事**,不要合并:`quiet` 管的是结果文本的详略,
-    `panel` 管的是有没有可视化。把可视化捆在 `quiet` 上,会导致"想少打点结果"
-    连带把进度显示也关掉 —— 那正是之前跑起来一片空白的原因之一。
-    rich 不可用时退化成空上下文:面板永远不该影响回测本身。"""
-    import contextlib
-    if not on:
-        return contextlib.nullcontext()
-    try:
-        import dash
-        return dash.Feed()
-    except Exception:
-        return contextlib.nullcontext()
-
-
 def _cloud_failed(res: Optional[Dict]) -> None:
     """云端已接上却拿不到结果 ⇒ 大声崩,绝不退回本机计算(模块说明:以为在云端算、实际在本机爬)。"""
     d = info()
@@ -114,13 +94,11 @@ def _cloud_failed(res: Optional[Dict]) -> None:
 
 
 def evaluate(exprs: List[str], window: str = 'is', accept: bool = False,
-             autostart: bool = True, quiet: bool = False,
-             panel: bool = True) -> Optional[List[Dict]]:
+             autostart: bool = True, quiet: bool = False, source: Optional[str] = None) -> Optional[List[Dict]]:
+    """source = 表达式文件路径(面板按它的目录归到提交者名下)。"""
     if not ensure(autostart, quiet):
         return None
-    with _panel(panel):
-        res = request(dict(op='eval', exprs=list(exprs), window=window,
-                           accept=bool(accept)))
+    res = request(dict(op='eval', exprs=list(exprs), window=window, accept=bool(accept), source=source))
     _cloud_failed(res)
     if not res or not res.get('ok'):
         return None
@@ -133,13 +111,22 @@ def evaluate(exprs: List[str], window: str = 'is', accept: bool = False,
     return res['rows']
 
 
-def evaluate_python(path: Path, window: str = 'is', autostart: bool = True,
-                    quiet: bool = False, panel: bool = True, accept: bool = False) -> Optional[List[Dict]]:
+def evaluate_family(seeds: List[Dict], source: str, autostart: bool = True, quiet: bool = False) -> Optional[Dict]:
+    """seeds [{expr, hypothesis}] -> family.expand() result, computed by the service (thousands of variants per round:
+    the queue may hold other agents' rounds ahead of this one, hence the long timeout). source = the hypothesis file."""
     if not ensure(autostart, quiet):
         return None
-    with _panel(panel):
-        res = request(dict(op='python', src=Path(path).read_text(encoding='utf-8'),
-                           path=str(path), window=window, accept=accept))
+    res = request(dict(op='family', seeds=list(seeds), source=source), timeout=3600.0)
+    _cloud_failed(res)
+    return res if res and res.get('ok') else None
+
+
+def evaluate_python(path: Path, window: str = 'is', autostart: bool = True,
+                    quiet: bool = False, accept: bool = False) -> Optional[List[Dict]]:
+    if not ensure(autostart, quiet):
+        return None
+    res = request(dict(op='python', src=Path(path).read_text(encoding='utf-8'),
+                       path=str(path), window=window, accept=accept))
     _cloud_failed(res)
     if accept and res and res.get('via') and any(r['accepted'] for r in res.get('rows',[])):
         import remote
@@ -175,13 +162,11 @@ def _spawn(quiet: bool) -> None:
     进程再用 `CREATE_NEW_CONSOLE` 拉子进程,**不会得到可见的 conhost 窗口**(全部
     `HasWin=False`)。所以"让服务自带一个终端"在本环境里做不到,别再试。
 
-    ⇒ 唯一存在的终端是**用户自己那个**。两种用法,都只占那一个终端:
-       · 用户自己起服务:`run.py --daemon serve`  —— 服务 + 实时面板都在该终端里
-       · 服务已被脚本自动拉起:`run.py --daemon dash` —— 面板接上去(只读,不碰服务)
+    ⇒ 服务不画任何东西,只写状态文件;实时面板是 `python -m monitoring --source tmp/q25_funnel/.q25d_status.json`。
     """
     if not quiet:
         print('[daemon] 未运行,正在拉起(装载面板 + 上传显存,首次约 20-60s)…\n'
-              '          它没有窗口 —— 看实时面板:run.py --daemon dash', flush=True)
+              '          它没有窗口 —— 实时面板:python -m monitoring --source tmp/q25_funnel/.q25d_status.json', flush=True)
     kw: Dict = {'cwd': str(HERE.parents[1]), 'stdin': subprocess.DEVNULL}
     if sys.platform == 'win32':
         kw['creationflags'] = DETACHED | subprocess.CREATE_NEW_PROCESS_GROUP

@@ -13,23 +13,26 @@
     # Python 车道:文件里定义 alpha(data, liquid) -> (T,S) 敞口
     python tmp/q25_funnel/run.py --python my_alpha.py
 
+    # 假设族:每条公式在 GPU 上展开成窗口/阈值网格 + 同类字段替换 + 噪声孪生,判整片邻域(family.py)
+    python tmp/q25_funnel/run.py --family hyp.txt --json out.json   # `# 假设` 注释行管到下一条注释为止
+
     # 产物
     python tmp/q25_funnel/run.py --file e.txt --json out.json   # 机读结果
     python tmp/q25_funnel/run.py --file e.txt --accept          # 全过者按最优权并入组合库(主控专用)
 
-候选直接参与当前组合优化:权重网格上的实际合成持仓扣成本回测。组合近期 Sharpe 提升,
-全期 Sharpe 和全期/近期收益不下降才接受;单条年度表现和相关仅作诊断。
+候选直接参与当前组合优化:权重网格上的实际合成持仓扣成本回测。组合近期 Sharpe 提升、全期 Sharpe 不下降,
+且全期/近期收益的相对变化不小于回撤深度的相对变化才接受;单条年度表现和相关仅作诊断。
 每次 --accept 使用已精算通过的权重,下一条对更新后的组合判定。空库从等权基准开始。
 
-    python tmp/q25_funnel/run.py --daemon serve       # 服务跑在本终端(自带实时面板)
+    python tmp/q25_funnel/run.py --daemon serve       # 服务跑在本终端
     python tmp/q25_funnel/run.py --daemon status | stop
 
-    # 云端 GPU(remote.py):接上之后上面所有命令原样用,回测在云端算,面板照样画在本终端
+    # 云端 GPU(remote.py):接上之后上面所有命令原样用,回测在云端算
     python tmp/q25_funnel/run.py --daemon attach [host]   # host = mcp-ssh/hosts.json 的名字,默认 quant-server
     python tmp/q25_funnel/run.py --daemon detach          # 断开,云端服务留着(stop = 连云端服务一起停)
 
-首次调用可自动启动服务；独立 Shell 中运行 --daemon dash 展示只读实时面板。
-关闭只读面板不会停止云端服务。
+首次调用可自动启动服务。实时面板 = `python -m monitoring`,数据源是服务写的 `.q25d_status.json`
+(云端的由 scripts/mirror_q25_status.py 推到本地);面板按提交文件所在目录把各轮归到提交者名下。
 
 回测由**常驻服务**执行(daemon.py):面板与 CUDA context 只装载一次,所有客户端的请求在
 服务端排成单队列逐个算。CUDA 是唯一计算后端；本机直算也要求 CUDA。
@@ -92,7 +95,7 @@ def _report(row, verbose=True):
     if (c := row.get('combo')):
         print(f'    当前组合 K={c["n"]} · 候选与组合 ρ={c["rho"]:.3f}(仅诊断)')
         if 'sharpe_after' in c:
-            label = '可行权重' if c['feasible'] else '最高 Sharpe 试探点(未通过)'
+            label = '可行权重' if c['feasible'] else '约束违反最小的试探点(未通过)'
             print(f'    {label} {c["w"]:.3f}:近期 Sharpe {c["sharpe"]:.3f} → {c["sharpe_after"]:.3f}; '
                   f'全期 Sharpe {c["full_sharpe"]:.3f} → {c["full_sharpe_after"]:.3f}; '
                   f'CAGR {c["cagr"]:.1%} → {c["cagr_after"]:.1%}; '
@@ -137,13 +140,50 @@ def _local_eval(exprs, accept=False, window='is'):
     return [rows[s] for s in exprs]
 
 
+def _seeds(path):
+    """Expression file -> [{expr, hypothesis}]: a `#` line is the hypothesis of every formula below it."""
+    seeds, hypothesis = [], ''
+    for line in Path(path).read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if line.startswith('#'):
+            hypothesis = line.lstrip('#').strip()
+        elif line:
+            seeds.append(dict(expr=line, hypothesis=hypothesis))
+    return seeds
+
+
+def _family_report(res):
+    num = lambda x, spec='+.3f': '—' if x is None else format(x, spec)
+    delta = lambda r: f'组合 ΔSharpe {num(r["gain"])}  ΔCAGR {num(r["d_cagr"], "+.1%")}  Δ回撤 {num(r["d_maxdd"], "+.1%")}'
+    spread = lambda r: (f'ΔSharpe 中位 {num(r["median"])}(p25 {num(r["p25"])}, p75 {num(r["p75"])})  '
+                        f'ΔCAGR 中位 {num(r["median_cagr"], "+.1%")}  Δ回撤 中位 {num(r["median_maxdd"], "+.1%")}')
+    marks = {'成立': '✅', '稀疏': '⚠️', '尖峰': '⚠️', '无效': '❌'}
+    print('Δ = 加入后组合 − 加入前组合;Sharpe 为主维度;Δ回撤 > 0 = 回撤变浅')
+    for f in res['families']:
+        s, g, t, c = f['seed'], f['grid'], f['twins'], f['centre']
+        print(f'{marks[f["verdict"]]} {f["verdict"]}  {f["hypothesis"]}')
+        print(f'    种子  {"过" if s["passed"] else "未过"}  {delta(s)}  自身 Sharpe {num(s["sharpe"], ".2f")}  '
+              f'持仓日 {num(s["attend"], ".1%")}  ρ {num(s["rho"], ".2f")}  在自己邻域里排 {num(f["seed_rank"], ".0%")}   {s["expr"]}')
+        print(f'    邻域  {g["n"]:4d} 点  通过 {num(g["pass_rate"], ".1%")}  {spread(g)}')
+        print(f'    孪生  {t["n"]:4d} 点  通过 {num(t["pass_rate"], ".1%")}  {spread(t)}   ← 同样结构、信号推迟 1-3 年:噪声下的水平')
+        if c:
+            print(f'    中心  一格邻居 ΔSharpe 中位 {num(c["neighbourhood_median"])}  {"过" if c["passed"] else "未过"}  {delta(c)}  '
+                  f'持仓日 {num(c["attend"], ".1%")}   {c["expr"]}')
+        for name, x in f['fields'].items():
+            print(f'    字段  {name} → 换成同类其余 {x["substitutes"]} 个:ΔSharpe 中位 {num(x["median_gain"])},通过 {x["passed"]}')
+    for s in res['skipped']:
+        print(f'❌ 未展开  {s["expr"]}\n    {s["error"]}')
+    verdicts = [f['verdict'] for f in res['families']]
+    print(f'\n汇总:{len(verdicts)} 条假设公式,成立 {verdicts.count("成立")},稀疏 {verdicts.count("稀疏")},尖峰 {verdicts.count("尖峰")},'
+          f'无效 {verdicts.count("无效")};本轮共评价 {res["variants"]:,} 个变体(多重检验计数)')
+
+
 def _local_python(path, window='is', accept=False):
     from combolib import ComboLib, evaluate_python_source
     return evaluate_python_source(Path(path).read_text(encoding='utf-8'),str(path),window,ComboLib.load(),accept)
 
 
 def _daemon_cmd(cmd, host=None):
-    """面板永远只占**你这一个终端**:自己起服务用 serve,服务已被脚本拉起用 dash。"""
     import daemon as D
     if cmd == 'attach':                   # 接到云端服务:先停本地那份(显存让出来),再写端口文件
         import remote
@@ -155,10 +195,6 @@ def _daemon_cmd(cmd, host=None):
     if cmd == 'detach':                   # 只忘掉云端,不停它 —— 别的工作区可能还接着
         client.PORTFILE.unlink(missing_ok=True)
         print('已断开;云端服务未动(要停用 --daemon stop)')
-        return
-    if cmd == 'dash':                     # 只读 op=stats,不碰服务 —— 随时开关
-        import dash
-        dash.main()
         return
     if cmd == 'serve':                    # 服务跑在**本终端**:先停掉既有的,避免两份显存
         d = client.info()
@@ -180,16 +216,15 @@ def main():
     ap.add_argument('exprs', nargs='*', help='FastExpr 表达式(可多条)')
     ap.add_argument('--file', help='表达式文件,一行一条,# 开头为注释')
     ap.add_argument('--python', help='Python alpha 文件(定义 alpha(data, liquid))')
+    ap.add_argument('--family', help='假设文件:`# 假设` 注释 + 公式;每条公式展开成邻域判整片(family.py)')
     ap.add_argument('--fields', action='store_true', help='列出词表与字段实测统计')
     ap.add_argument('--ops', action='store_true', help='列出算子/窗口/常数池/敞口语义')
     ap.add_argument('--json', help='机读结果输出路径')
     ap.add_argument('--accept', action='store_true', help='把全过者按最优权并入组合库(主控专用)')
-    ap.add_argument('--quiet', action='store_true', help='结果只打一行摘要(不影响面板)')
-    ap.add_argument('--no-panel', action='store_true', help='关掉实时面板')
+    ap.add_argument('--quiet', action='store_true', help='结果只打一行摘要')
     ap.add_argument('--no-daemon', action='store_true', help='强制进程内直算,不用常驻服务')
-    ap.add_argument('--daemon', choices=['serve', 'dash', 'status', 'stop', 'attach', 'detach'],
-                    help='serve=服务跑在本终端(自带面板);dash=把面板接到已在跑的服务上;'
-                         'attach [host]=接到云端 GPU 服务;detach=断开')
+    ap.add_argument('--daemon', choices=['serve', 'status', 'stop', 'attach', 'detach'],
+                    help='serve=服务跑在本终端;attach [host]=接到云端 GPU 服务;detach=断开')
     a = ap.parse_args()
 
     if a.daemon:
@@ -205,9 +240,22 @@ def main():
         _ops()
         return
 
+    if a.family:
+        seeds = _seeds(a.family)
+        if not seeds:
+            ap.error(f'{a.family} 里没有公式')
+        res = None if a.no_daemon else client.evaluate_family(seeds, Path(a.family).as_posix(), quiet=a.quiet)
+        if res is None:
+            import family
+            from combolib import ComboLib
+            res = family.expand(seeds, ComboLib.load().ref('is'))
+        _family_report(res)
+        if a.json:
+            Path(a.json).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')
+        return
+
     if a.python:
-        rows = None if a.no_daemon else client.evaluate_python(
-            Path(a.python), quiet=a.quiet, panel=not a.no_panel, accept=a.accept)
+        rows = None if a.no_daemon else client.evaluate_python(Path(a.python), quiet=a.quiet, accept=a.accept)
         if rows is None:
             rows = _local_python(a.python, accept=a.accept)
     else:
@@ -218,7 +266,7 @@ def main():
         if not exprs:
             ap.error('没有输入:给表达式、--file 或 --python')
         rows = None if a.no_daemon else client.evaluate(
-            exprs, accept=a.accept, quiet=a.quiet, panel=not a.no_panel)
+            exprs, accept=a.accept, quiet=a.quiet, source=a.file and Path(a.file).as_posix())
         if rows is None:
             rows = _local_eval(exprs, accept=a.accept)
 

@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cupy as cp
 import numpy as np
 
+from engine import PPY  # before ops_cuda: engine sets Q25_CUDA_FP64, which ops_cuda reads once at import
 from backtest import ops_cuda as oc
-from engine import PPY
 from evaluation.grammar import (BinaryOp, ConstBinaryOp, LogicalBinaryOp, LogicalUnaryOp,
                                 PairOp, PairParamOp, ParamOp, TernaryOp, TsInjOp, TsOp,
                                 TsParamOp, UnaryOp)
@@ -310,11 +310,6 @@ def eval_node(n, dp: Dict[str, cp.ndarray], cache: Dict[int, cp.ndarray]) -> cp.
     h = n.hash
     if h in cache:
         return cache[h]
-    from fusion import evaluate as compose
-    fused=compose(n,dp,cache,eval_node)
-    if fused is not None:
-        cache[h]=fused
-        return fused
     k = n.kind
     if k == 'operand':
         return dp[n.op]                                   # panels 视图,不入 cache
