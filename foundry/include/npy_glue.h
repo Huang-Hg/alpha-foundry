@@ -1,14 +1,17 @@
 /* foundry/include/npy_glue.h
  *
- * 共享 numpy↔C 胶水层 + Python 模块样板 —— 各扩展的 binding(foundry/ops/src/module.cpp、
- * foundry/backtest/src/module.cpp)共用一份 as_2d / import_array / PyModuleDef。
+ * Shared numpy <-> C glue + Python module boilerplate — extension bindings
+ * (foundry/ops/src/module.cpp, foundry/backtest/src/module.cpp) share one copy of
+ * as_2d / import_array / PyModuleDef.
  *
- * 仅在**做 import_array 的 binding 文件**里 include(numpy PyArray_API 是 per-TU 指针表;
- * 每个扩展模块恰有一个 numpy TU = 其 binding 文件)。纯算子/内核 .cpp(只碰 double*)
- * 不 include 本头。所有 helper 为 static inline(内部链接,无 ODR 冲突)。
+ * Include ONLY in the binding file that calls import_array() (numpy's PyArray_API is a
+ * per-TU pointer table; each extension module has exactly one numpy TU = its binding file).
+ * Pure operator/kernel .cpp files (touching double* only) do not include this header.
+ * All helpers are static inline (internal linkage, no ODR collisions).
  *
- * 约定(严禁防御性编程):内核假设输入合规,只校验 numpy 不能直接 reinterpret 的硬约束
- * (dtype / ndim / shape / 步长 / 可写)—— 这些是 segfault 边界。
+ * Convention (no defensive programming): kernels assume well-formed inputs; bindings validate
+ * only hard constraints that numpy cannot reinterpret directly (dtype / ndim / shape /
+ * strides / writeability) — i.e., the segfault boundary.
  */
 #ifndef BT_COMMON_NPY_GLUE_H
 #define BT_COMMON_NPY_GLUE_H
@@ -22,7 +25,7 @@
 #include <stdint.h>
 
 
-/* ---------- (T,S) C-连续 float64(cs 算子 / 回测面板用)---------- */
+/* ---------- (T,S) C-contiguous float64 (for cross-sectional ops / backtest panels) ---------- */
 static inline PyArrayObject* bt_as_2d(PyObject* obj) {
     return (PyArrayObject*)PyArray_FROMANY(
         obj, NPY_DOUBLE, 2, 2, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
@@ -33,7 +36,7 @@ static inline PyArrayObject* bt_as_2d_or_none(PyObject* obj) {
     return bt_as_2d(obj);
 }
 
-/* ---------- (k,) 1D C-连续 float64 / int64 ---------- */
+/* ---------- (k,) 1D C-contiguous float64 / int64 ---------- */
 static inline PyArrayObject* bt_as_1d_f64(PyObject* obj) {
     return (PyArrayObject*)PyArray_FROMANY(
         obj, NPY_DOUBLE, 1, 1, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
@@ -44,9 +47,10 @@ static inline PyArrayObject* bt_as_1d_i64(PyObject* obj) {
         obj, NPY_INT64, 1, 1, NPY_ARRAY_C_CONTIGUOUS | NPY_ARRAY_ALIGNED);
 }
 
-/* ---------- (T,S) float64 行步长视图(零拷贝)----------
- * f64 + 2D + 列步长==8B + 行步长 ≥ S·8B(正、行不重叠)→ 借引用,*ld=行步长(元素数);
- * 其余形态 FROMANY 物化 C-连续拷贝(ld=S)。列块切片直通,免拷贝。 */
+/* ---------- (T,S) float64 row-strided view (zero-copy) ----------
+ * f64 + 2D + col stride == 8B + row stride >= S*8B (positive, non-overlapping rows)
+ * -> borrow reference, *ld = row stride in elements; otherwise FROMANY materialises a
+ * C-contiguous copy (ld = S). Column-block slices pass straight through without copying. */
 static inline PyArrayObject* bt_as_panel_ld(PyObject* obj, int64_t* ld_out) {
     if (PyArray_Check(obj)) {
         PyArrayObject* a = (PyArrayObject*)obj;
@@ -64,7 +68,7 @@ static inline PyArrayObject* bt_as_panel_ld(PyObject* obj, int64_t* ld_out) {
     return arr;
 }
 
-/* out= 目标:可写 float64 (T,S) 列连续视图。shape/dtype/步长是 segfault 边界,必须校验。 */
+/* out= target: writable float64 (T,S) view with contiguous columns. shape/dtype/strides are the segfault boundary and must be checked. */
 static inline PyArrayObject* bt_as_out_ld(PyObject* obj, npy_intp T, npy_intp S, int64_t* ld_out) {
     PyArrayObject* a = (PyArrayObject*)obj;
     if (!PyArray_Check(obj) || PyArray_TYPE(a) != NPY_DOUBLE || PyArray_NDIM(a) != 2 ||
@@ -93,9 +97,9 @@ static inline PyArrayObject* bt_alloc_1d(npy_intp n, int typenum) {
 }
 
 
-/* ---------- 模块样板:PyModuleDef + PyInit(含 import_array)----------
- * 用法(binding 文件末尾):  BT_MODULE(_bt, methods, "Backtest C/C++ kernel.")
- * C++ binding 自动加 extern "C" 链接(PyInit 必须 C ABI)。 */
+/* ---------- Module boilerplate: PyModuleDef + PyInit (with import_array) ----------
+ * Usage (at the end of a binding file):  BT_MODULE(_bt, methods, "Backtest C/C++ kernel.")
+ * C++ bindings automatically get extern "C" linkage (PyInit requires C ABI). */
 #ifdef __cplusplus
 #define BT_MODULE_EXTERN_C extern "C"
 #else

@@ -1,26 +1,27 @@
-/* foundry/ops/src/module.cpp —— _ops 扩展:把 ops.hpp 的全部算子暴露为 _ops.<name>。
+/* foundry/ops/src/module.cpp — _ops extension: exposes all operators from ops.hpp as _ops.<name>.
  *
- * 约定:
- *   - elementwise / ts / pair 接受 (T,S) float64 行步长视图(列连续即可,行步长任意正)
- *     → 零拷贝直通 C 内核(列块切片不必拷贝);其余形态(f32 / 列不连续)由
- *     PyArray_FROMANY 物化成 C 连续拷贝。cs 要求 C 连续全宽面板。
- *   - elementwise / ts / pair 末尾可选 out= 位置参数:可写 float64 (T,S) 列连续视图,
- *     内核直写(列块结果直接落进全宽数组,免回拷);返回 out 本身。
- *     缺省时返回新 C 连续数组。
- *   - 内部假设输入合规;只校验 numpy 不能直接 reinterpret 的硬约束(dtype、ndim、shape 一致性)。
+ * Conventions:
+ *   - elementwise / ts / pair accept (T,S) float64 row-strided views (contiguous columns, arbitrary positive row stride)
+ *     -> zero-copy pass-through into C kernels (column-block slices need no copy); other layouts (f32 / non-contiguous
+ *     columns) are materialised into C-contiguous copies via PyArray_FROMANY. cs requires C-contiguous full-width panels.
+ *   - elementwise / ts / pair accept an optional trailing positional out= argument: writable float64 (T,S) view with
+ *     contiguous columns, written directly by the kernel (column-block results land straight in the full-width array
+ *     without copying back) and returned as-is; allocates a fresh C-contiguous array when omitted.
+ *   - Assumes well-formed inputs internally; checks only hard constraints that numpy cannot reinterpret directly
+ *     (dtype, ndim, matching shapes).
  */
 
 #include "npy_glue.h"
 #include "ops.hpp"
 
-/* 共享胶水(foundry/include/npy_glue.h)的本地短名:C 连续 / 零拷贝行步长视图 / out 视图 / 分配。 */
+/* Local aliases for shared glue (foundry/include/npy_glue.h): C-contiguous / zero-copy row-strided view / out view / alloc. */
 #define as_panel     bt_as_2d
 #define as_panel_ld  bt_as_panel_ld
 #define as_out_ld    bt_as_out_ld
 #define alloc_panel  bt_alloc_panel
 
 
-/* ---------- Elementwise unary 通用模板 ---------- */
+/* ---------- Elementwise unary generic macro ---------- */
 
 #define DEF_UNARY(py_name, c_fn)                                                   \
 static PyObject* py_##py_name(PyObject* self, PyObject* args) {                    \
@@ -83,7 +84,7 @@ DEF_BINARY(max_b, fm_max_b)
 DEF_BINARY(min_b, fm_min_b)
 DEF_BINARY(gt,    fm_gt)
 DEF_BINARY(lt,    fm_lt)
-/* logical 族:greater/less 即 gt/lt。 */
+/* Logical family: greater/less are gt/lt. */
 DEF_BINARY(and_,          fm_and)
 DEF_BINARY(or_,           fm_or)
 DEF_BINARY(equal,         fm_equal)
@@ -92,7 +93,7 @@ DEF_BINARY(greater_equal, fm_greater_equal)
 DEF_BINARY(less_equal,    fm_less_equal)
 
 
-/* ---------- Ternary(三 panel 入参,bool 组合子) ---------- */
+/* ---------- Ternary (three panel inputs, bool combinators) ---------- */
 
 #define DEF_TERNARY(py_name, c_fn)                                                    \
 static PyObject* py_##py_name(PyObject* self, PyObject* args) {                       \
@@ -123,7 +124,7 @@ DEF_TERNARY(if_else,    fm_if_else)
 DEF_TERNARY(trade_when, fm_trade_when)
 
 
-/* ---------- Elementwise binary_const(panel ⊕ scalar k)---------- */
+/* ---------- Elementwise binary_const (panel op scalar k) ---------- */
 
 #define DEF_BIN_CONST(py_name, c_fn)                                                \
 static PyObject* py_##py_name(PyObject* self, PyObject* args) {                     \
@@ -151,10 +152,10 @@ DEF_BIN_CONST(hump,       fm_hump)
 
 /* ---------- Rolling unary ---------- */
 
-/* 所有 ts unary 绑定统一接受可选尾参 (out, vlo, vhi)(每列有效行区间,int64×S):
- * 非裁剪核(DEF_TS_UNARY)解析后忽略 vlo/vhi;裁剪核(DEF_TS_UNARY_CLIP)传给 c_fn
- * (None → 核内扫描)。统一签名让调用方对所有 ts op 一致传参。
- * vlo/vhi 须 int64 C 连续(调用方保证);直接借数据指针不管引用(调用期有效)。*/
+/* All ts unary bindings uniformly accept optional trailing (out, vlo, vhi) (per-column valid row range, int64 x S):
+ * non-trimming kernels (DEF_TS_UNARY) parse and ignore vlo/vhi; trimming kernels (DEF_TS_UNARY_CLIP) forward them to
+ * c_fn (None -> in-kernel scan). Uniform signature lets callers pass arguments identically across all ts ops.
+ * vlo/vhi must be int64 C-contiguous (caller invariant); data pointers are borrowed directly for the call duration. */
 #define _AS_I64_OR_NULL(o) \
     ((o) && (o) != Py_None ? (const int64_t*)PyArray_DATA((PyArrayObject*)(o)) : NULL)
 
@@ -163,7 +164,7 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyObject* o_x; long long w; PyObject* o_out = NULL;                              \
     PyObject* o_lo = NULL; PyObject* o_hi = NULL;                                     \
     if (!PyArg_ParseTuple(args, "OL|OOO", &o_x, &w, &o_out, &o_lo, &o_hi)) return NULL; \
-    (void)o_lo; (void)o_hi;                          /* 非裁剪核忽略范围 */          \
+    (void)o_lo; (void)o_hi;                          /* non-trimming kernel ignores range */ \
     int64_t ldx, ldo;                                                                 \
     PyArrayObject* x = as_panel_ld(o_x, &ldx);                                        \
     if (!x) return NULL;                                                              \
@@ -211,14 +212,14 @@ DEF_TS_UNARY(ts_arg_min, fm_ts_arg_min)
 DEF_TS_UNARY_CLIP(ts_skew,    fm_ts_skew)
 DEF_TS_UNARY_CLIP(ts_kurt,    fm_ts_kurt)
 DEF_TS_UNARY_CLIP(ts_mad,     fm_ts_mad)
-DEF_TS_UNARY(ts_slope,   fm_ts_slope)        /* 增量值随起点漂移 → 留扫描裁剪保 bit-identity */
+DEF_TS_UNARY(ts_slope,   fm_ts_slope)        /* incremental sum drifts with start row -> scan own range for bitwise identity */
 DEF_TS_UNARY_CLIP(ts_chanpos, fm_ts_chanpos)
 DEF_TS_UNARY_CLIP(ts_ddown,   fm_ts_ddown)
 DEF_TS_UNARY_CLIP(ts_zscore,  fm_ts_zscore)
 DEF_TS_UNARY_CLIP(ts_snr,     fm_ts_snr)
 
 
-/* ---------- Rolling pair（corr/cov 均裁剪,统一收 vlo/vhi）---------- */
+/* ---------- Rolling pair (both corr and cov trim, uniformly accepting vlo/vhi) ---------- */
 
 #define DEF_TS_PAIR(py_name, c_fn)                                                  \
 static PyObject* py_##py_name(PyObject* self, PyObject* args) {                     \
@@ -247,14 +248,14 @@ DEF_TS_PAIR(ts_corr, fm_ts_corr)
 DEF_TS_PAIR(ts_cov,  fm_ts_cov)
 
 
-/* ---------- BRAIN time_series 族 ----------
- * 前三个复用 DEF_TS_UNARY(签名与既有 ts 算子一致);其后的多带一个连续标量 k。 */
+/* ---------- BRAIN time_series family ----------
+ * First three reuse DEF_TS_UNARY (same signature as standard ts ops); the rest take an extra continuous scalar k. */
 
 DEF_TS_UNARY(ts_backfill, fm_ts_backfill)
 DEF_TS_UNARY(ts_median,   fm_ts_median)
 DEF_TS_UNARY(ts_av_diff,  fm_ts_av_diff)
 
-/* panel + window + 标量:f(x, w, k, out=None) */
+/* panel + window + scalar: f(x, w, k, out=None) */
 #define DEF_TS_PARAM(py_name, c_fn)                                                 \
 static PyObject* py_##py_name(PyObject* self, PyObject* args) {                     \
     PyObject* o_x; long long w; double k; PyObject* o_out = NULL;                    \
@@ -277,7 +278,7 @@ DEF_TS_PARAM(ts_decay_exp_window, fm_ts_decay_exp_window)
 DEF_TS_PARAM(ts_scale,            fm_ts_scale)
 DEF_TS_PARAM(ts_quantile,         fm_ts_quantile)
 
-/* panel + panel + window + 标量:f(y, x, w, k, out=None) */
+/* panel + panel + window + scalar: f(y, x, w, k, out=None) */
 static PyObject* py_ts_regression(PyObject* self, PyObject* args) {
     PyObject *o_y, *o_x; long long w; double k; PyObject* o_out = NULL;
     PyObject* o_lo = NULL; PyObject* o_hi = NULL;
