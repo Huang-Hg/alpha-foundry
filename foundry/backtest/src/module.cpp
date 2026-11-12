@@ -1,8 +1,9 @@
-/* foundry/backtest/src/module.cpp —— _bt 扩展:唯一导出 simulate(语义见 kernel.hpp)。
+/* foundry/backtest/src/module.cpp — _bt extension: exports simulate (see kernel.hpp for semantics).
  *
  * simulate(w, open_raw, prev_close, open_ff0, close_ff0, cost_buy, cost_sell, live, block, carry) -> rr (T,)
- *   价格/成本/权重面板为 (T,S) float64;live、block 为 (T,S) uint8;cost_sell / block / carry 可传 None。
- * 只校验 numpy 不能直接 reinterpret 的硬约束(dtype、形状一致)—— 这是内核越界读的边界。
+ *   Price/cost/weight panels are (T,S) float64; live and block are (T,S) uint8; cost_sell / block / carry may be None.
+ * Validates only hard constraints that numpy cannot reinterpret directly (dtype, matching shapes) — the kernel's
+ * out-of-bounds read boundary.
  */
 #include "npy_glue.h"
 

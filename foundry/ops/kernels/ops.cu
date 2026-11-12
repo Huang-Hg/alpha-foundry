@@ -9,7 +9,7 @@
  *     the column (skew/kurt, matching the CPU degenerate-window threshold).
  */
 
-/* 动态 shared 的 typed 视图:模板 T 下避开多个 extern __shared__ 同名异型冲突 */
+/* Typed view over dynamic shared memory: avoids conflicting extern __shared__ declarations across template T. */
 template<typename T> __device__ __forceinline__ T* shmem() {
     extern __shared__ __align__(8) unsigned char smem[];
     return reinterpret_cast<T*>(smem);
@@ -17,7 +17,7 @@ template<typename T> __device__ __forceinline__ T* shmem() {
 
 
 /* ============================================================================
- * 滑窗矩核:op 0=sum 1=mean 2=std 3=skew 4=kurt 5=mad
+ * Rolling moment kernel: op 0=sum 1=mean 2=std 3=skew 4=kurt 5=mad
  * ========================================================================== */
 template<typename T>
 __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
@@ -66,10 +66,11 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
         T mean = Sx / wd, var = (Sxx - mean * Sx) / (wd - (T)1);
         if (var < 0) var = 0;
         res = sqrt(var);
-    } else {                                                      /* skew/kurt:窗内两遍中心矩 */
-        /* pass1 窗均值 → pass2 直接中心矩 Σ(v-mean)^p(消 e2−mu² 抵消)。与 C fm_ts_skew/kurt
-         * 同算法同顺序(窗最旧→最新)→ 逐位一致(替旧增量幂和:真盘 f64 与 GPU 分叉 kurt~40%,
-         * m2<=1e-8·e2 floor 证伪;两遍稳定后近常数窗也产同一(大)值 → 不再分叉)。 */
+    } else {                                                      /* skew/kurt: two-pass central moments per window */
+        /* Pass 1 window mean -> pass 2 direct central moments sum(v - mean)^p (eliminates e2 - mu^2 cancellation).
+         * Same algorithm and oldest->newest order as CPU fm_ts_skew/kurt -> bitwise match (replaces incremental power
+         * sums, which diverged from GPU on real f64 panels on ~40% of kurt cells; two-pass keeps near-constant windows
+         * identical too). */
         T mean = 0;
         for (int k = 0; k < w; k++) mean += sh[(ty + k) * SS + sx];
         mean /= wd;
@@ -79,7 +80,7 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
             m2 += d2; m3 += d2 * d; m4 += d2 * d2;
         }
         m2 /= wd; m3 /= wd; m4 /= wd;
-        if (m2 <= (T)0) { out[o] = (T)nan(""); return; }            /* 常数窗 → NaN */
+        if (m2 <= (T)0) { out[o] = (T)nan(""); return; }            /* constant window -> NaN */
         res = (op == 3) ? m3 / pow(m2, (T)1.5) : m4 / (m2 * m2) - (T)3;
     }
     out[o] = res;
@@ -87,8 +88,8 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
 
 
 /* ============================================================================
- * 滑窗扩展核:op 0=max 1=min 2=wma 3=slope 4=rank 5=arg_max 6=arg_min
- *   arg_*:emit (w-1)-argk = 距今多少 bar(∈[0,w-1]),ties→最近(>= / <=,贴 C deque)。
+ * Extended rolling kernel: op 0=max 1=min 2=wma 3=slope 4=rank 5=arg_max 6=arg_min
+ *   arg_*: emit (w-1)-argk = bars since extremum in [0, w-1]; ties -> most recent (>= / <=, matching C deque).
  * ========================================================================== */
 template<typename T>
 __device__ void ext_core(const T* __restrict__ x, T* __restrict__ out,
@@ -108,7 +109,7 @@ __device__ void ext_core(const T* __restrict__ x, T* __restrict__ out,
     long long o = (long long)t * S + s;
     int bad = 0;
     if (op == 0 || op == 1) {                                    /* max / min */
-        T m = sh[ty * SS + sx];                                  /* 窗口最旧播种(避 NVRTC 无 INFINITY) */
+        T m = sh[ty * SS + sx];                                  /* seed from oldest bar in window (NVRTC lacks INFINITY) */
         if (isnan(m)) { out[o] = (T)nan(""); return; }
         for (int k = 1; k < w; k++) { T v = sh[(ty + k) * SS + sx];
             if (isnan(v)) { bad = 1; break; } m = (op == 0) ? fmax(m, v) : fmin(m, v); }
@@ -143,7 +144,7 @@ __device__ void ext_core(const T* __restrict__ x, T* __restrict__ out,
 }
 
 
-/* ts_corr / ts_cov:成对 tile;op 0=corr 1=cov;任一侧 NaN→NaN。shared=2*rows*SS*sizeof(T)。 */
+/* ts_corr / ts_cov: paired tile; op 0=corr 1=cov; NaN on either side -> NaN. shared = 2*rows*SS*sizeof(T). */
 template<typename T>
 __device__ void pair_core(const T* __restrict__ a, const T* __restrict__ b,
                          T* __restrict__ out, int Tt, int S, int w, int op) {
@@ -162,8 +163,8 @@ __device__ void pair_core(const T* __restrict__ a, const T* __restrict__ b,
     int sx = threadIdx.x, ty = threadIdx.y, s = strip_s0 + sx, t = tile_t0 + ty;
     if (s >= S || t >= Tt) return;
     long long o = (long long)t * S + s;
-    /* K-centering(窗口最旧值,平移不变 → cov/var 不变):压住大幅值(如 close~1e2 vs vol~1e6)
-     * 的乘积 Σab 灾难性抵消,这是 f32 下 corr/cov 数值稳定的关键(同 moment 核 std 思路)。*/
+    /* K-centering on the window's oldest values (shift-invariant -> cov/var unchanged): prevents catastrophic
+     * cancellation in sum(a*b) on large-magnitude inputs (e.g. close ~1e2 vs vol ~1e6), critical for f32 stability. */
     T Ka = sha[ty * SS + sx], Kb = shb[ty * SS + sx];
     T Sa = 0, Sb = 0, Sab = 0, Saa = 0, Sbb = 0; int bad = 0;
     for (int k = 0; k < w; k++) {
@@ -180,7 +181,7 @@ __device__ void pair_core(const T* __restrict__ a, const T* __restrict__ b,
 }
 
 
-/* ts_ema:pandas ewm(span,adjust=False,min_periods=span)。序列递推 → 一线程一列(沿 T 串行)。 */
+/* ts_ema: pandas ewm(span, adjust=False, min_periods=span). Sequential recurrence -> one thread per column along T. */
 template<typename T>
 __device__ void ema_core(const T* __restrict__ x, T* __restrict__ out, int Tt, int S, int span) {
     int s = blockIdx.x * blockDim.x + threadIdx.x;
@@ -199,7 +200,7 @@ __device__ void ema_core(const T* __restrict__ x, T* __restrict__ out, int Tt, i
 
 
 /* ============================================================================
- * cross-sectional warp-shuffle 核:op 0=zscore 1=demean 2=scale(L1)
+ * Cross-sectional warp-shuffle kernel: op 0=zscore 1=demean 2=scale (L1)
  * ========================================================================== */
 template<typename T> __device__ __forceinline__ T warp_reduce_sum(T v) {
     for (int off = warpSize >> 1; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffff, v, off);
@@ -254,7 +255,7 @@ __device__ void cs_core(const T* __restrict__ x, T* __restrict__ out, int S, int
 }
 
 
-/* cs_rank:逐 t 截面平均-rank ∈[0,1];n<2 整行 NaN。一 block 一 t,行入 shared,O(n²) count。 */
+/* cs_rank: per-row cross-sectional average rank in [0, 1]; full row NaN if n < 2. One block per row in shared, O(n^2) count. */
 template<typename T>
 __device__ void cs_rank_core(const T* __restrict__ x, T* __restrict__ out, int S) {
     T* r = shmem<T>();

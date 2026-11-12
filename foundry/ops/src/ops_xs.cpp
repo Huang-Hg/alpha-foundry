@@ -1,19 +1,19 @@
-/* foundry/ops/src/ops_xs.cpp — 逐元素算子(无窗口)与截面算子
+/* foundry/ops/src/ops_xs.cpp — elementwise (windowless) and cross-sectional operators
  *
- * unary:fm_abs / fm_neg / fm_sign / fm_log / fm_sqrt_ / fm_square / fm_tanh / fm_inv / fm_s_log_1p / fm_not / fm_is_nan
- * binary:fm_add / fm_sub / fm_mul / fm_div / fm_max_b / fm_min_b / fm_gt / fm_lt / logical 族
- * binary_const:fm_add_const / fm_mul_const / fm_pow_const(signed_power)/ fm_left_tail / fm_right_tail / fm_hump
- * ternary:fm_if_else / fm_trade_when
- * cross-sectional:fm_cs_rank / fm_cs_zscore / fm_cs_demean / fm_cs_scale
+ * unary:        fm_abs / fm_neg / fm_sign / fm_log / fm_sqrt_ / fm_square / fm_tanh / fm_inv / fm_s_log_1p / fm_not / fm_is_nan
+ * binary:       fm_add / fm_sub / fm_mul / fm_div / fm_max_b / fm_min_b / fm_gt / fm_lt / logical family
+ * binary_const: fm_add_const / fm_mul_const / fm_pow_const (signed_power) / fm_left_tail / fm_right_tail / fm_hump
+ * ternary:      fm_if_else / fm_trade_when
+ * cross-sectional: fm_cs_rank / fm_cs_zscore / fm_cs_demean / fm_cs_scale
  *
- * 设计原则:
- *   - 算术 ops (add/sub/mul,unary 的 abs/neg/square/tanh):IEEE 754 NaN 隐式传播,
- *     无显式 isnan 分支 → -O3 -march=native 自动 SIMD vectorize。
- *   - 比较/选择 ops (max/min/log/sqrt/inv/sign):NaN 比较恒 false 会"吞 NaN"成
- *     0/选错值,必须显式 isnan 检查。
- *   - div/pow_const:特殊值(b==0,base==0)显式分支,其余靠 IEEE 自然传播。
- *   - build.sh 须保留 -fno-finite-math-only;否则 GCC ≥ 14 会优化掉 isnan/isfinite。
- *   - 2D strided 寻址(ldx/ldo 行步长):逐元素表达式与 ld 无关,ld == S 即 C 连续。
+ * Design principles:
+ *   - Arithmetic ops (add/sub/mul, unary abs/neg/square/tanh): IEEE 754 NaN propagates implicitly without explicit
+ *     isnan branches -> auto-vectorised under -O3 -march=native.
+ *   - Comparison/selection ops (max/min/log/sqrt/inv/sign): NaN comparisons evaluate to false and would swallow NaN
+ *     into 0 or the wrong branch, so explicit isnan checks are required.
+ *   - div/pow_const: explicit branches for special values (b == 0, base == 0); IEEE propagates NaN elsewhere.
+ *   - build.sh must retain -fno-finite-math-only; otherwise GCC >= 14 optimises away isnan/isfinite.
+ *   - 2D strided addressing (ldx/ldo row strides): elementwise expressions are independent of ld; ld == S is C-contiguous.
  */
 
 #include "ops.hpp"
@@ -49,7 +49,7 @@ FM_UNARY(fm_sqrt_,  (isnan(v) || v < 0.0) ? NAN : sqrt(v))
 FM_UNARY(fm_square, isnan(v) ? NAN : v * v)
 FM_UNARY(fm_tanh,   isnan(v) ? NAN : tanh(v))
 FM_UNARY(fm_inv,    (isnan(v) || v == 0.0) ? NAN : (1.0 / v))
-/* s_log_1p: sign(x) · log(1 + |x|),压缩重尾保留符号,定义域全实数。 */
+/* s_log_1p: sign(x) * log(1 + |x|), compresses heavy tails while preserving sign; defined on all reals. */
 FM_UNARY(fm_s_log_1p, isnan(v) ? NAN : (v >= 0.0) ? log1p(v) : -log1p(-v))
 
 
@@ -88,19 +88,19 @@ void name(const double* a, const double* b, double* out, int64_t T, int64_t S, \
 FM_BIN_ARITH(fm_add, va + vb)
 FM_BIN_ARITH(fm_sub, va - vb)
 FM_BIN_ARITH(fm_mul, va * vb)
-/* div:vb == 0.0 须显式检查(IEEE 754 div-by-0 → ±Inf,而我们要 NaN);NaN 由 va/vb 自然传播。 */
+/* div: vb == 0.0 must be checked explicitly (IEEE 754 div-by-0 yields +-Inf, whereas we require NaN); NaN in va/vb propagates naturally. */
 FM_BIN_ARITH(fm_div, (vb == 0.0) ? NAN : (va / vb))
 
 FM_BIN_NAN(fm_max_b, (va > vb) ? va : vb)
 FM_BIN_NAN(fm_min_b, (va < vb) ? va : vb)
-/* 条件门:输出 0/1 指示,NaN 传播。 */
+/* Conditional gates: 0/1 indicator output, NaN propagates. */
 FM_BIN_NAN(fm_gt,    (va > vb) ? 1.0 : 0.0)
 FM_BIN_NAN(fm_lt,    (va < vb) ? 1.0 : 0.0)
 
 
-/* ---------- Ternary bool 组合子(事件驱动的进出场) ---------- */
+/* ---------- Ternary bool combinators (event-driven entry/exit) ---------- */
 
-/* if_else:cond NaN → NaN;cond>0 → a,否则 b(a/b 的 NaN 自然传播)。 */
+/* if_else: cond NaN -> NaN; cond > 0 -> a, else b (NaN in the selected branch propagates naturally). */
 void fm_if_else(const double* c, const double* a, const double* b, double* out,
                 int64_t T, int64_t S, int64_t ldc, int64_t lda, int64_t ldb, int64_t ldo) {
     #pragma omp parallel for schedule(static)
@@ -116,9 +116,9 @@ void fm_if_else(const double* c, const double* a, const double* b, double* out,
     }
 }
 
-/* trade_when(WorldQuant 语义,逐列时序状态机,因果:仅依赖 ≤t):
- *   exit>0 → 0;否则 entry>0 → alpha[t];否则持有前值(t=0 前值=0)。
- *   entry/exit NaN 比较恒 false → 持有;alpha NaN 在进场时自然传播(exit 可清除)。 */
+/* trade_when (WorldQuant semantics, per-column state machine, causal: depends only on <= t):
+ *   exit > 0 -> 0; else if entry > 0 -> alpha[t]; else hold previous value (0 before t = 0).
+ *   NaN in entry/exit evaluates > 0 as false -> holds; NaN in alpha propagates on entry (cleared on exit). */
 void fm_trade_when(const double* e, const double* a, const double* x, double* out,
                    int64_t T, int64_t S, int64_t lde, int64_t lda, int64_t ldx, int64_t ldo) {
     #pragma omp parallel for schedule(static)
@@ -134,9 +134,9 @@ void fm_trade_when(const double* e, const double* a, const double* x, double* ou
 }
 
 
-/* ---------- BRAIN logical 族(完整条件逻辑) ----------
- * NaN 约定与 gt/lt 一致(任一侧 NaN → NaN);唯一例外 fm_is_nan —— 它就是用来测 NaN 的,
- * 传播 NaN 会让它永远返回不了 1。 */
+/* ---------- BRAIN logical family (complete conditional logic) ----------
+ * NaN convention matches gt/lt (NaN on either side -> NaN), except fm_is_nan — whose purpose is testing for NaN,
+ * so propagating NaN would prevent it from ever returning 1. */
 
 FM_UNARY(fm_not,    isnan(v) ? NAN : ((v > 0.0) ? 0.0 : 1.0))
 FM_UNARY(fm_is_nan, isnan(v) ? 1.0 : 0.0)
@@ -149,7 +149,7 @@ FM_BIN_NAN(fm_greater_equal, (va >= vb) ? 1.0 : 0.0)
 FM_BIN_NAN(fm_less_equal,    (va <= vb) ? 1.0 : 0.0)
 
 
-/* ----- binary_const(panel ⊕ scalar k,1 SIMD pass) ----- */
+/* ----- binary_const (panel op scalar k, 1 SIMD pass) ----- */
 
 #define FM_BIN_CONST(name, expr) \
 void name(const double* x, double k, double* out, int64_t T, int64_t S, \
@@ -168,15 +168,15 @@ void name(const double* x, double k, double* out, int64_t T, int64_t S, \
 FM_BIN_CONST(fm_add_const, v + k)
 FM_BIN_CONST(fm_mul_const, v * k)
 
-/* panel⊕连续标量(BRAIN transformational 族):尾部截断。NaN 自然保持 NaN
- * (isnan 比较恒 false ⇒ 走 else 分支返回 v,即 NaN)。 */
-FM_BIN_CONST(fm_left_tail,  (v > k) ? NAN : v)   /* > maximum 全置 NaN,保左尾 */
-FM_BIN_CONST(fm_right_tail, (v < k) ? NAN : v)   /* < minimum 全置 NaN,保右尾 */
+/* panel op continuous scalar (BRAIN transformational family): tail truncation. NaN stays NaN naturally
+ * (NaN comparisons are false -> takes the else branch and returns v = NaN). */
+FM_BIN_CONST(fm_left_tail,  (v > k) ? NAN : v)   /* NaN above maximum, keeping the left tail */
+FM_BIN_CONST(fm_right_tail, (v < k) ? NAN : v)   /* NaN below minimum, keeping the right tail */
 
-/* hump(x, k)(BRAIN time_series 族):|x[t] − out[t−1]| > k 才更新,否则持有前值 ⇒ 压换手。
- * 逐列时序状态机,因果(仅依赖 ≤t),列间独立 ⇒ 按列 OMP(同 fm_trade_when 的并行轴)。
- * 前值未定义时首个有限值直接进入;x[t]=NaN 不构成"变化",持有前值。
- * k<0 时每步都更新(退化为恒等),不做特判 —— 交由调用方语义。 */
+/* hump(x, k) (BRAIN time_series family): update only when |x[t] - out[t-1]| > k, else hold previous value -> dampens turnover.
+ * Per-column state machine, causal (depends only on <= t), independent across columns -> OpenMP over columns (like fm_trade_when).
+ * When previous state is undefined, the first finite value seeds it; x[t] == NaN is not a move and holds previous value.
+ * k < 0 updates every step (degenerates to identity with forward-fill on NaN), left to caller semantics. */
 void fm_hump(const double* x, double k, double* out, int64_t T, int64_t S,
              int64_t ldx, int64_t ldo) {
     #pragma omp parallel for schedule(static)
@@ -190,8 +190,8 @@ void fm_hump(const double* x, double k, double* out, int64_t T, int64_t S,
     }
 }
 
-/* signed_power 内循环模板:0→0(防 0^k=inf/NaN @ k<0);其他 sign(v)·P(av),av=|v|。
- * NaN 由 fabs/P 自然传播(fabs(NaN)=NaN);0 检查不可省。P 表达式按 k 特化。 */
+/* signed_power inner loop macro: 0 -> 0 (prevents 0^k = inf/NaN when k < 0); otherwise sign(v)*P(av), av = |v|.
+ * NaN propagates naturally through fabs/P (fabs(NaN) = NaN); the zero check cannot be omitted. P is specialised per k. */
 #define FM_SIGNED_POW_LOOP(P) \
     _Pragma("omp parallel for schedule(static)") \
     for (int64_t t = 0; t < T; t++) { \
@@ -208,9 +208,9 @@ void fm_hump(const double* x, double k, double* out, int64_t T, int64_t S,
 
 void fm_pow_const(const double* x, double k, double* out, int64_t T, int64_t S,
                   int64_t ldx, int64_t ldo) {
-    /* 常用 k ∈ {±2, ±0.5} 用 mul/sqrt 替 libm pow(~5-11×)。与 pow 版逐位等价:
-     * av*av = pow(av,2) 精确;sqrt = pow(av,.5) IEEE 正确舍入;负指数同式取倒。
-     * 其余 k 走通用 pow。 */
+    /* Specialise common exponents k in {+-2, +-0.5} with mul/sqrt instead of libm pow (~5-11x faster). Bitwise identical:
+     * av*av == pow(av, 2) exactly; sqrt == pow(av, 0.5) under IEEE rounding; negative exponents take the reciprocal.
+     * All other k fall back to generic pow. */
     if      (k ==  2.0) { FM_SIGNED_POW_LOOP(av * av) }
     else if (k == -2.0) { FM_SIGNED_POW_LOOP(1.0 / (av * av)) }
     else if (k ==  0.5) { FM_SIGNED_POW_LOOP(sqrt(av)) }
@@ -219,12 +219,12 @@ void fm_pow_const(const double* x, double k, double* out, int64_t T, int64_t S,
 }
 
 /* ---------- Cross-sectional ----------
- * 每 t 一行截面运算,跨 t OMP 并行(每 t 独立)。
- * cs_rank:有效值 compaction 后 std::sort 按值升序 + 等值组平均-rank。
- * tie-invariant:组内顺序不影响输出(等值组赋同一 avg-rank)→ value-only 比较即逐位一致。
+ * One cross-sectional reduction per row t, OpenMP-parallel across independent rows t.
+ * cs_rank: compact finite values, std::sort ascending by value, assign average rank to equal-value runs.
+ * Tie-invariant: intra-group order does not affect output (all ties receive the same average rank) -> value-only compare is bitwise deterministic.
  */
 
-/* (value, orig_s) 对;std::sort 按 value 升序(tie 顺序未定但输出 tie-invariant)。 */
+/* (value, orig_s) pair; std::sort ascending by value (tie order unspecified, output tie-invariant). */
 typedef std::pair<double, int64_t> _vi_pair;
 
 static void cs_rank_one_row(const double* row, double* out_row, int64_t S, _vi_pair* buf) {
@@ -239,7 +239,7 @@ static void cs_rank_one_row(const double* row, double* out_row, int64_t S, _vi_p
     }
     std::sort(buf, buf + n_valid,
               [](const _vi_pair& a, const _vi_pair& b) { return a.first < b.first; });
-    /* 同值组取平均 rank(组内顺序无关 → bit-identical) */
+    /* Average rank across tied runs (independent of intra-tie order -> bit-identical). */
     int64_t i = 0;
     while (i < n_valid) {
         int64_t j = i;
@@ -248,7 +248,7 @@ static void cs_rank_one_row(const double* row, double* out_row, int64_t S, _vi_p
         for (int64_t k = i; k <= j; k++) out_row[buf[k].second] = avg_norm;
         i = j + 1;
     }
-    /* NaN 位置回填 */
+    /* Restore NaN positions. */
     for (int64_t s = 0; s < S; s++) {
         if (isnan(row[s])) out_row[s] = NAN;
     }
@@ -257,7 +257,7 @@ static void cs_rank_one_row(const double* row, double* out_row, int64_t S, _vi_p
 void fm_cs_rank(const double* x, double* out, int64_t T, int64_t S) {
     #pragma omp parallel
     {
-        std::vector<_vi_pair> buf(S);            /* per-thread scratch(RAII) */
+        std::vector<_vi_pair> buf(S);            /* per-thread scratch (RAII) */
         #pragma omp for schedule(static)
         for (int64_t t = 0; t < T; t++)
             cs_rank_one_row(&x[t * S], &out[t * S], S, buf.data());
@@ -314,7 +314,7 @@ void fm_cs_demean(const double* x, double* out, int64_t T, int64_t S) {
 }
 
 
-/* cs_scale: 横截面 L1 归一化 = x[t,s] / sum_s |x[t,s]|(dollar-neutral 信号的常用归一)。 */
+/* cs_scale: cross-sectional L1 normalisation = x[t,s] / sum_s |x[t,s]| (standard scaling for dollar-neutral signals). */
 void fm_cs_scale(const double* x, double* out, int64_t T, int64_t S) {
     #pragma omp parallel for schedule(static)
     for (int64_t t = 0; t < T; t++) {

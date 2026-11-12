@@ -1,9 +1,10 @@
-/* foundry/backtest/src/kernel.cpp —— 日频执行内核,语义见 kernel.hpp。
+/* foundry/backtest/src/kernel.cpp — daily execution kernel; see kernel.hpp for semantics.
  *
- * 可选输入按"是否提供"展开成模板实参:未提供的推广在编译期整段消失,基底实例的循环与 qnt 复刻逐字相同。
- * 这是逐位一致的前提 —— -ffast-math 允许向量化器重排归约的结合顺序,顺序随循环形状与编译器版本而变;
- * 故推广部分只加独立的循环或逐元素的选择,不改动基底归约循环的形状。逐位比对只在同一工具链内成立
- * (跨 GCC 版本、或与 numpy pairwise-sum 相比,差异在 1e-16 级)。 */
+ * Optional inputs expand into template bools by presence: unused generalisations vanish at compile time, leaving the
+ * base instantiation's loops identical to the qnt reproduction verbatim. That is required for bitwise agreement —
+ * -ffast-math lets the vectoriser reassociate reductions depending on loop shape and compiler version, so the
+ * generalisations add separate loops or elementwise selects without altering the base reduction loops. Bitwise parity
+ * holds within the same toolchain (across GCC versions or vs numpy pairwise-sum, differences are ~1e-16). */
 #include "kernel.hpp"
 
 #include <cmath>
@@ -33,7 +34,7 @@ static void run(const double* w,
         const double*  sl    = cost_buy   + day * S;
         const uint8_t* ul    = live       + day * S;
 
-        /* --- 当日生效权重:shift-1 → normalize → open 调整 → normalize --- */
+        /* --- Effective weights for today: shift-1 -> normalize -> open adjustment -> normalize --- */
         if (day == 0) {
             for (int64_t a = 0; a < S; a++) wt[a] = 0.0;
         } else {
@@ -48,7 +49,7 @@ static void run(const double* w,
             if (s1 < 1.0) s1 = 1.0;
             double s2 = 0.0;
             for (int64_t a = 0; a < S; a++) {
-                double v = (wt[a] / s1) * o_raw[a] / p_cl[a];   // NaN 价 → NaN → 0(含 0×NaN)
+                double v = (wt[a] / s1) * o_raw[a] / p_cl[a];   // NaN price -> NaN -> 0 (including 0 * NaN)
                 if (!std::isfinite(v)) v = 0.0;
                 wt[a] = v;
                 s2 += std::fabs(v);
@@ -57,7 +58,7 @@ static void run(const double* w,
             for (int64_t a = 0; a < S; a++) wt[a] /= s2;
         }
 
-        /* --- equity 递推(calc_relative_return_np 逐行对照)--- */
+        /* --- Equity recurrence (line-by-line match with calc_relative_return_np) --- */
         double eq_before;
         if (day == 0) {
             eq_before = 1.0;
@@ -68,8 +69,9 @@ static void run(const double* w,
             eq_before = eq_after + mtm;
         }
 
-        /* 冻结判定在分配之前:被冻结的资产与 live==0 一样退出当日分配(市值锁定、权重不参与),
-         * 只是份额不清零。首轮按"全部可交易"时的目标市值判方向。 */
+        /* Freeze check precedes allocation: frozen assets leave today's allocation just like live == 0 (notional
+         * locked, weight excluded), except their shares are not zeroed after close. Pass 1 tests direction against
+         * target notional assuming all assets are tradable. */
         const uint8_t* tr = ul;
         if constexpr (BLOCK) {
             const uint8_t* bk = block + day * S;
@@ -100,9 +102,9 @@ static void run(const double* w,
             if constexpr (!BLOCK) {
                 break;
             } else {
-                /* 冻结改变了可操作权益与权重之比,仍可交易的受限资产的实际分配可能越过当前持仓、
-                 * 朝被禁方向成交。这些资产同样冻结后重算,直到无人朝被禁方向成交
-                 * (冻结集单调增长,至多 S 轮;无受限资产时一轮即出)。 */
+                /* Freezing alters the operable equity-to-weight ratio, so a restricted asset still marked tradable
+                 * could now cross its current position into the forbidden direction. Freeze those too and recompute
+                 * until none does (the frozen set grows monotonically, at most S rounds; 1 round when unrestricted). */
                 if (w_operable < QNT_EPS) break;
                 const uint8_t* bk = block + day * S;
                 bool refrozen = false;
@@ -136,8 +138,9 @@ static void run(const double* w,
         double mtm2 = 0.0;
         for (int64_t a = 0; a < S; a++) mtm2 += (c[a] - o[a]) * shares[a];
         if constexpr (CARRY) {
-            /* 记入逐日递推的状态量 eq_after(与成交成本同处),当晚权益随之扣减且持续;
-             * 只扣 eq_tonight 的话,次日 eq_before 从 eq_after 起算,这笔成本会在次日 rr 里原样退回。 */
+            /* Deducted from the recurrent state eq_after (alongside trading costs) so tonight's equity drops
+             * permanently; deducting from eq_tonight alone would be refunded in tomorrow's rr because tomorrow's
+             * eq_before starts from eq_after. */
             const double* cr = carry + day * S;
             double financing = 0.0;
             for (int64_t a = 0; a < S; a++)
@@ -152,7 +155,7 @@ static void run(const double* w,
         prev_tonight = eq_tonight;
 
         for (int64_t a = 0; a < S; a++)
-            if (!ul[a]) shares[a] = 0.0;                       // 不可交易资产份额清零(tonight 之后)
+            if (!ul[a]) shares[a] = 0.0;                       // zero untradable shares (after tonight's mark)
     }
 }
 
