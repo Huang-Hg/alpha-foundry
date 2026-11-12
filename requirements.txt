@@ -1,0 +1,8 @@
+# Research runtime. Native extensions are built with ./build.sh (needs numpy headers and g++; msys2 ucrt64 on Windows).
+numpy>=2.0
+pandas>=2.0
+pyarrow>=17
+rich>=13             # terminal dashboard
+paramiko>=3          # cloud evaluation service over SSH
+cupy-cuda12x>=13.6   # GPU backend; NVRTC comes from the CUDA toolkit or the nvidia-cuda-nvrtc-cu12 wheel
+# The Quantiacs venue (venues/quantiacs, local only) runs in its own environment with qnt, xarray, nbformat, nbclient.

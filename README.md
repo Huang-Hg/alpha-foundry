@@ -1,85 +1,85 @@
-# alpha-foundry — Formulaic Alpha Mining + Backtest Kernels
+# alpha-foundry — portfolio-first formulaic alpha research
 
 [![CI](https://github.com/Huang-Hg/alpha-foundry/actions/workflows/ci.yml/badge.svg)](https://github.com/Huang-Hg/alpha-foundry/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **English** | [中文](README.zh-CN.md)
 
-Search formulaic alphas with strongly-typed genetic programming (GP), evaluate them through pure C++ / OpenMP backtest kernels, and fuse them into portfolio weights via deterministic sizing. Three markets are supported: crypto perpetuals, US daily equities, and China A-share daily equities.
+Formulaic alphas are written (by people, language models or a search policy), evaluated on the GPU in batches, and
+judged only by what they add to a portfolio: every candidate is tried as an addition to the current portfolio on a
+grid of weights, with real blended holdings and trading costs. One execution kernel serves every market; a market is
+a plugin that declares its data fields and compiles its trading rules into arrays.
 
----
+## Architecture
 
-## How it works
+```
+foundry/
+  core/        Panel (fields as components) and the one set of return statistics
+  ops/         the operator table (registry.py) + backends: CPU C++ reference, CUDA, portable numpy
+  expr/        formula trees, the FastExpr parser/validator, evaluation on any backend
+  backtest/    ExecutionSpec + the execution kernel (C++ reference, CUDA batch mirror)
+  market/      crypto (Quantiacs daily), us_equity, a_share: fields, execution rules, universe, calendar
+  engine.py    a market's research window resident on the GPU: formula -> book -> backtest -> statistics
+  portfolio/   library, reference portfolio, admission, hypothesis families
+  search/      portfolio-conditioned GFlowNet (C++ extension) and the mining loop
+  service/     resident evaluation service (local or over SSH) and its client
+  monitor/     terminal dashboard: typed status schema, components, layouts; HTML preview from the same frames
+  __main__.py  python -m foundry <command>
+config/config.ini   the single source of tunable parameters (one section per dataclass in foundry/config.py)
+tests/              CPU tests run in CI; data and GPU tests run locally
+```
 
-End to end, the system is one pipeline — *formula search → backtest evaluation → pool building → sizing fusion* — and every layer is search-engine agnostic:
+Dependencies point one way: `core ← ops ← expr ← backtest/market ← engine ← portfolio ← search/service ← CLI`;
+the dashboard reads status files only.
 
-1. **DSL (`evaluation/`)** — Formulaic alphas are represented as strongly-typed ASTs. A context-free grammar (CFG + α-Sem-k cost budget) constrains the search space and guarantees syntactic/semantic validity. The operand vocabulary is **built automatically from parquet column names** (auto-classified into price / volume / feature), so switching markets just means switching columns. The evaluator compiles whole token trees to C (and optionally CUDA) for batch evaluation, with a subtree-hash cache reusing common subtrees.
+### One kernel, many markets
 
-2. **Search (`search/`)** — `gp/`: strongly-typed GP on DEAP with two NSGA-II objectives (net Sharpe + behavioral diversity), mining formulaic alphas on the train split. `alphasage/`: structure-aware GFlowNet mining (sampling P(α)∝reward; TB loss + entropy regularization, RGCN structural encoder, composite R_IC/R_SA/R_NOV reward). `tail_diversity/`: a prototype for tail-conditional diversity search (true vs. spurious diversity, implemented in isolation).
+The execution kernel trades yesterday's target weights at today's open and marks to today's close (the Quantiacs
+`calc_relative_return` recursion). Markets differ only in the arrays it reads:
 
-3. **Evaluation + pooling (`rl/`)** — The evaluator computes rank-IC and portfolio backtest returns; candidates pass a series of admission gates (|IC| / orthogonal contribution Δ / OOS holdout) into a `LinearAlphaPool`. The pool holds no fixed weights.
+| rule | crypto (Quantiacs) | US equities | A-shares |
+|---|---|---|---|
+| cost per share (buy / sell) | ATR14 × 0.04 / same | fee × open / same | (commission + transfer) × open / + stamp tax |
+| blocked direction | – | – | limit-up open: no buy; limit-down open: no sell; suspension: neither |
+| financing (`carry`) | – | borrow on shorts | – |
+| Sharpe | arithmetic, 365 days | geometric, 252 | geometric, 242 |
 
-4. **Backtest kernels (`backtest/`)** — Pure C++ / OpenMP: `engine/` runs portfolio-level (T,S) continuous target-position backtests (fees / funding / trailing stop / liquidation); `ops/` is the C++ factor-operator library, `ops_cuda/` holds CUDA kernels (compiled at runtime via cupy NVRTC). The order book is not modeled.
+With symmetric costs and no blocks or carry, the kernel reduces exactly to the Quantiacs recursion; the CUDA kernel
+runs that case in batches (up to 128 assets), the CPU kernel runs every case.
 
-5. **Sizing (`rl/sizing.py`)** — Deterministic fusion: z-score pool members → AFF causal rolling least-squares fusion → top-K long-short construction → portfolio-level vol-target scalar leverage.
+### Panel components
 
-6. **Market abstraction (`markets/`)** — `MarketProfile` isolates calendar / annualization / price-adjustment conventions from the engine; crypto / US equity / A-share are three profiles, with vocabulary and profile auto-detected from the data.
-
-Module overview:
-
-| Module | Responsibility |
-|---|---|
-| `evaluation/` | Formula DSL (AST / CFG / C+CUDA evaluation) + panel adapter + subtree-hash cache |
-| `search/` | `gp` (strongly-typed GP on DEAP) + `alphasage` (GFlowNet) + `tail_diversity` (tail-diversity prototype) |
-| `rl/` | Evaluator + LinearAlphaPool + sizing fusion |
-| `backtest/` | C++/OpenMP backtest kernels (engine) + factor operators (ops C++ / ops_cuda CUDA) |
-| `markets/` | MarketProfile abstraction (calendar / annualization / adjustment / vocabulary) |
-| `config/` | Single source of tunable parameters (INI ↔ dataclass) |
-| `main.py` | Research-side CLI |
-
----
+A `Field` declares a name, a category, whether formulas may read it, and — if derived — its dependencies and how
+to compute it with the panel's operator backend (numpy or cupy). A market composes its source fields with shared
+derived ones (price/volume primitives, trend); new data is a new field definition.
 
 ## Usage
 
-### Install + build extensions
-
 ```bash
-pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirement.txt   # numpy/pandas/pyarrow/torch/deap
+pip install -r requirements.txt
+bash build.sh                        # native extensions: ops/_ops, backtest/_bt, search/_gfn (Linux .so, WSL/msys2 .pyd)
 
-bash backtest/build.sh           # build C++ extensions: backtest._bt (engine) + backtest.ops._ops (operators); Linux→.so / WSL→Windows .pyd
-bash backtest/ops_cuda/build.sh  # CUDA operators: cupy NVRTC runtime compilation + verification against numpy golden reference (needs cupy + GPU)
+python -m foundry fields             # the active market's formula vocabulary
+python -m foundry eval "gt(ma_dist_20, 0)" --file ideas.txt     # admission against the current portfolio
+python -m foundry family hypotheses.txt                          # judge each formula's neighbourhood
+python -m foundry mine runs/gfn_01                               # machine mining (portfolio objective)
+python -m foundry monitor                                        # dashboard
 ```
 
-The GPU research path (`[evaluator] device=cuda`) additionally requires `cupy`; for CPU set `device=cpu`.
+The market in use is `[market] name` in `config/config.ini`. Market data (parquet panels) is not part of this
+repository.
 
-### Mine alphas / materialize
-
-`main.py` takes positional arguments only (output paths); everything else is read from `config/config.ini`:
+## Tests
 
 ```bash
-python main.py gp-baseline output/pool.json                       # strongly-typed GP on DEAP (NSGA-II) — crypto perpetual mining
-python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto perpetual mining (independent baseline)
-python main.py materialize output/pool.json output/materialized/  # alpha JSON → monthly per-alpha parquet
+python -m unittest tests.test_expr tests.test_native tests.test_policy tests.test_monitor   # CPU (CI)
+python -m unittest tests.test_markets tests.test_portfolio tests.test_production tests.test_search   # data + GPU
 ```
 
-Mining output = a deploy-bundle JSON (`{"pool": [{tree, ...}, ...]}`) plus snapshots under `logs/`.
+## References
 
-> This repository is a public snapshot: mining requires your own parquet panel matching the format read by `evaluation/crypto_adapter.py` (the data-collection pipeline is not included). `main.py` also has `gp-equity` / `gp-ashare` subcommands, which depend on equity data loaders not included in this snapshot.
-
----
-
-## References / Acknowledgments
-
-This project builds on the following work, gratefully acknowledged:
-
-- **Alpha Discovery via Grammar-Guided Learning and Search** — the CFG grammar and α-Sem-k cost budget in `evaluation/grammar.py` are inspired by it.
-- **FACT** (arXiv:2604.26666) — the operator fusion in `backtest/ops_cuda/` adopts its compositional kernel-synthesis paradigm.
-- **NSGA-II** (Deb et al., 2002) + **DEAP** (Fortin et al., 2012) — the multi-objective strongly-typed GP in `search/gp`.
-- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** — the method behind the GFlowNet mining implementation in `search/alphasage`.
-- **torchgfn** (Lahlou et al.) — the GFlowNet foundation library (TB loss / DiscreteEnv / Sampler).
-
-References for the `search/tail_diversity/` prototype:
-- Mallela & Leonelli, 2026 (arXiv:2606.16840) — lower-tail dependence graphs under crashes.
-- Engelke & Taeb, JMLR 2025 (arXiv:2403.09604) — eglatent for removing common factors.
-- Dominated Novelty Search, GECCO 2025 (arXiv:2502.00593) — unbounded-archive diversity.
-- Campbell et al., 2026 (arXiv:2603.15963) — external coordinates for return tails.
+- Malkin et al., *Trajectory balance: improved credit assignment in GFlowNets* (NeurIPS 2022) — the policy's loss.
+- Treynor & Black (1973) — the appraisal-ratio frontier behind the single-alpha objective.
+- Heidari & Nikolopoulos, **FACT** (arXiv:2604.26666) — subgraph identification and verified composition, applied
+  to the fused element-wise operators and the fused portfolio blending in the backtest kernel.
+- Quantiacs — the crypto daily execution and scoring conventions the kernel reproduces.

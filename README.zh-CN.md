@@ -1,85 +1,77 @@
-# alpha-foundry — 公式化 Alpha 因子挖掘 + 回测内核
+# alpha-foundry —— 组合优先的公式化 alpha 研究
 
 [![CI](https://github.com/Huang-Hg/alpha-foundry/actions/workflows/ci.yml/badge.svg)](https://github.com/Huang-Hg/alpha-foundry/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English](README.md) | **中文**
 
-用强类型遗传规划(GP)搜索公式化 alpha,经纯 C++ / OpenMP 回测内核评估,确定性 sizing 融合成组合权重。支持 crypto 永续 / 美股日线 / A 股日线三市场。
+公式化 alpha 由人、语言模型或搜索策略写出,在 GPU 上批量评价,并且只按它给组合带来的变化来评判:每条候选都作为当前组合的"加项",
+在一组权重上用真实的合成持仓并扣除交易成本回测。所有市场共用同一个执行内核;市场是插件,声明自己的数据字段,并把交易规则编译成数组。
 
----
+## 架构
 
-## 代码逻辑
-
-端到端是「公式 alpha 搜索 → 回测评估 → 建池 → sizing 融合」一条流水线,各层搜索引擎无关:
-
-1. **DSL(`evaluation/`)** — 公式 alpha 表示为强类型 AST;上下文无关文法(CFG + α-Sem-k 成本预算)约束搜索空间,保证语法/语义合法。operand 词表**由 parquet 列名自动构建**(自动分类 价/量/特征),换市场即换列。求值器把整棵 token 树编译到 C(及可选 CUDA)上批量求值,subtree-hash 缓存复用公共子树。
-
-2. **搜索(`search/`)** — `gp/`:DEAP 强类型 GP,NSGA-II 双目标(净 Sharpe + 行为多样性),在 train 段挖公式 alpha。`alphasage/`:GFlowNet 结构感知挖矿(P(α)∝reward 采样;TB loss + 熵正则,RGCN 结构编码器,R_IC/R_SA/R_NOV 复合 reward)。`tail_diversity/`:尾部条件多样性搜索原型(真多样 vs 伪多样,隔离实现)。
-
-3. **评估 + 建池(`rl/`)** — evaluator 算 rank-IC 与组合回测收益,经多道准入门(|IC| / 正交贡献 Δ / OOS holdout)收进 `LinearAlphaPool`,池不定权。
-
-4. **回测内核(`backtest/`)** — 纯 C++ / OpenMP:`engine/` 做组合级 (T,S) 连续 target-position 回测(fee / funding / trailing-stop / 强平);`ops/` 是 C++ 因子算子,`ops_cuda/` 是 CUDA kernels(cupy NVRTC 运行时编译)。不建模订单簿。
-
-5. **sizing(`rl/sizing.py`)** — 确定性融合:池成员 z-score → AFF 因果滚动 lstsq 融合 → top-K 多空构造 → 组合级 vol-target 标量杠杆。
-
-6. **市场抽象(`markets/`)** — `MarketProfile` 把日历 / 年化 / 复权口径隔离在引擎外;crypto / 美股 / A 股为三种模式,词表与画像由数据自动识别。
-
-模块速览:
-
-| 模块 | 职责 |
-|---|---|
-| `evaluation/` | 公式 DSL(AST / CFG / C+CUDA 求值)+ panel adapter + subtree-hash 缓存 |
-| `search/` | `gp`(DEAP 强类型 GP)+ `alphasage`(GFlowNet)+ `tail_diversity`(尾部多样性原型) |
-| `rl/` | evaluator + LinearAlphaPool + sizing 融合 |
-| `backtest/` | C++/OpenMP 回测内核(engine)+ 因子算子(ops C++ / ops_cuda CUDA) |
-| `markets/` | MarketProfile 市场画像抽象(日历 / 年化 / 复权 / 词表) |
-| `config/` | INI ↔ dataclass 单一参数源 |
-| `main.py` | 训练侧 CLI |
-
----
-
-## 使用方法
-
-### 安装 + 构建扩展
-
-```bash
-pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirement.txt   # numpy/pandas/pyarrow/torch/deap
-
-bash backtest/build.sh           # 编 C++ 扩展:backtest._bt(引擎)+ backtest.ops._ops(算子);Linux→.so / WSL→Win .pyd
-bash backtest/ops_cuda/build.sh  # CUDA 算子:cupy NVRTC 运行时编译 + 对 numpy 黄金参考验证(需 cupy + GPU)
+```
+foundry/
+  core/        Panel(字段即组件)与唯一一套收益统计
+  ops/         算子表(registry.py)+ 后端:CPU C++ 参考实现、CUDA、可移植 numpy
+  expr/        公式树、FastExpr 解析/校验、任意后端求值
+  backtest/    ExecutionSpec + 执行内核(C++ 参考、CUDA 批量镜像)
+  market/      crypto(Quantiacs 日线)、us_equity、a_share:字段、执行规则、可持有集合、日历
+  engine.py    一个市场的研究窗口常驻 GPU:公式 → 持仓书 → 回测 → 统计
+  portfolio/   组合库、参照组合、准入、假设族邻域评判
+  search/      组合条件 GFlowNet(C++ 扩展)与挖矿循环
+  service/     常驻评价服务(本机或经 SSH 的云端)及客户端
+  monitor/     终端面板:类型化状态 schema、组件、布局;HTML 预览与终端同帧绘制
+  __main__.py  python -m foundry <命令>
+config/config.ini   唯一的可调参数源(每个 section 对应 foundry/config.py 里的一个 dataclass)
+tests/              CPU 测试进 CI;数据与 GPU 测试在本机跑
 ```
 
-GPU 研究路径(`[evaluator] device=cuda`)需另装 `cupy`;CPU 路径设 `device=cpu`。
+依赖单向:`core ← ops ← expr ← backtest/market ← engine ← portfolio ← search/service ← CLI`;面板只读状态文件。
 
-### 挖因子 / 物化
+### 一个内核,多个市场
 
-`main.py` 只接位置参数(输出路径),其余全读 `config/config.ini`:
+执行内核用昨日目标权重在今日开盘成交、按今日收盘盯市(Quantiacs `calc_relative_return` 递推)。市场之间的差别只在内核读取的数组:
+
+| 规则 | 加密(Quantiacs) | 美股 | A 股 |
+|---|---|---|---|
+| 每股成本(买 / 卖) | ATR14 × 0.04 / 相同 | 费率 × 开盘价 / 相同 | (佣金 + 过户费) × 开盘价 / 再加印花税 |
+| 方向冻结 | – | – | 涨停开盘不可买;跌停开盘不可卖;停牌双向冻结 |
+| 融资成本(`carry`) | – | 空头借券费 | – |
+| Sharpe | 算术,365 天 | 几何,252 | 几何,242 |
+
+成本对称、无冻结无 carry 时,内核就是 Quantiacs 递推本身;CUDA 内核批量运行这种情形(至多 128 个资产),CPU 内核运行全部情形。
+
+### Panel 组件
+
+`Field` 声明名字、类目、公式能否读取,以及(派生字段)依赖哪些字段、如何用面板的算子后端(numpy 或 cupy)计算。
+市场把自己的源字段与共享的派生字段(量价原语、趋势)组合成面板;新数据就是新的字段定义。
+
+## 使用
 
 ```bash
-python main.py gp-baseline output/pool.json                       # DEAP 强类型 GP(NSGA-II)— crypto 永续挖矿
-python main.py alphasage   output/pool.json                       # AlphaSAGE GFlowNet — crypto 永续挖矿(独立 baseline)
-python main.py materialize output/pool.json output/materialized/  # alpha JSON → 月级 per-alpha parquet
+pip install -r requirements.txt
+bash build.sh                        # 原生扩展:ops/_ops、backtest/_bt、search/_gfn(Linux .so,WSL/msys2 .pyd)
+
+python -m foundry fields             # 当前市场的公式词表
+python -m foundry eval "gt(ma_dist_20, 0)" --file ideas.txt     # 对当前组合做准入
+python -m foundry family hypotheses.txt                          # 按邻域评判每条公式
+python -m foundry mine runs/gfn_01                               # 机器挖矿(组合目标)
+python -m foundry monitor                                        # 面板
 ```
 
-挖矿产物 = deploy bundle JSON(`{"pool": [{tree, ...}, ...]}`)+ `logs/` 快照。
+当前市场由 `config/config.ini` 的 `[market] name` 指定。市场数据(parquet 面板)不在本仓库中。
 
-> 本仓为公开快照:挖矿需自备符合 `evaluation/crypto_adapter.py` 读取格式的 parquet 面板(数据采集管线未含)。`main.py` 另有 `gp-equity` / `gp-ashare` 子命令,依赖本快照未含的权益数据加载器。
+## 测试
 
----
+```bash
+python -m unittest tests.test_expr tests.test_native tests.test_policy tests.test_monitor   # CPU(CI)
+python -m unittest tests.test_markets tests.test_portfolio tests.test_production tests.test_search   # 数据 + GPU
+```
 
-## 参考论文 / 致谢
+## 参考
 
-本项目站在以下工作之上,谨致谢:
-
-- **Alpha Discovery via Grammar-Guided Learning and Search** —— `evaluation/grammar.py` 的 CFG 文法与 α-Sem-k 成本预算受其启发。
-- **FACT**(arXiv:2604.26666)—— `backtest/ops_cuda/` 的算子融合吸收其 compositional kernel synthesis 范式。
-- **NSGA-II**(Deb et al., 2002)+ **DEAP**(Fortin et al., 2012)—— `search/gp` 的多目标强类型 GP。
-- **AlphaSAGE: Structure-Aware Alpha Mining via GFlowNets** —— `search/alphasage` GFlowNet 挖矿实现所依据的方法。
-- **torchgfn**(Lahlou et al.)—— GFlowNet 基础库(TB loss / DiscreteEnv / Sampler)。
-
-`search/tail_diversity/` 原型参考:
-- Mallela & Leonelli, 2026(arXiv:2606.16840)—— 崩盘下尾依赖图。
-- Engelke & Taeb, JMLR 2025(arXiv:2403.09604)—— eglatent 剥离共因。
-- Dominated Novelty Search, GECCO 2025(arXiv:2502.00593)—— 无界 archive 多样性。
-- Campbell et al., 2026(arXiv:2603.15963)—— 收益尾部外部坐标。
+- Malkin et al., *Trajectory balance: improved credit assignment in GFlowNets*(NeurIPS 2022)—— 策略的损失。
+- Treynor & Black(1973)—— 单 alpha 目标的 appraisal ratio 前沿。
+- Heidari & Nikolopoulos, **FACT**(arXiv:2604.26666)—— 子图识别与验证后组合,用于融合的逐元素算子与回测核内的组合融合。
+- Quantiacs —— 内核复现的加密日线执行与计分口径。
