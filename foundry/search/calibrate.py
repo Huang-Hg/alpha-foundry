@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from foundry.config import PortfolioConfig
+
 
 RULES = (.5, .75, .9, .99)
 MAX_CAPPED = .10
@@ -33,20 +33,20 @@ def saturation(rows, scales):
     return totals, sum(t >= 4 for t in totals) / len(totals)
 
 
-def report(run_dir: Path):
-    cfg = PortfolioConfig()
+def report(run_dir: Path, cfg):
     gain = (cfg.min_sharpe_gain, 0., 0., 0.)
     seen, rows, cash = set(), [], 0
     with (run_dir / 'epochs.jsonl').open(encoding='utf-8') as f:
         for line in f:
             for r in json.loads(line)['reports']:
-                if not r.get('g1') or not r.get('delta') or r['expr'] in seen:
+                if not r['g1'] or not r['delta'] or r['expr'] in seen:
                     continue
                 seen.add(r['expr'])
                 if r['rho'] == 0:               # undefined correlation = all-cash / constant book
                     cash += 1
                     continue
-                rows.append([max(0., g - r['delta'][k]) for k, g in zip(KEYS, gain)])
+                deltas = {check['name']: check['delta'] for check in r['delta']}
+                rows.append([max(0., g - deltas[k]) for k, g in zip(KEYS, gain)])
     print(f'{len(rows):,} distinct valid non-cash candidates ({cash:,} cash books left out)')
     print(f'{"violation of":16s} {"share>0":>8s} {"p25":>9s} {"p50":>9s} {"p75":>9s} {"p90":>9s} {"p99":>9s}')
     for j, key in enumerate(KEYS):

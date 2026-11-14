@@ -1,6 +1,6 @@
 /* foundry/backtest/src/kernel.hpp — market-agnostic daily execution kernel (CPU reference).
  *
- * Base semantics reproduce Quantiacs qnt stats.calc_relative_return(per_asset=False) step by step:
+ * Daily execution semantics:
  * yesterday's weights -> rebalance to target notional at today's open (cost per traded share) -> mark to market at
  * close. Three generalisations let the same recurrence cover multiple markets:
  *   cost_sell  separate per-share cost for sells (share reductions, e.g. sell-only stamp duty); nullptr = symmetric
@@ -14,7 +14,7 @@
  *              too and recomputed until closure — no restricted asset ever trades in a forbidden direction.
  *   carry      daily short financing rate: sum_{shares < 0} carry * close * |shares| is deducted from daily equity and
  *              recorded in the recurrent state so it persists across days.
- * When all three are nullptr, every floating-point operation matches the qnt reproduction bitwise; summary statistics
+ * When all three are nullptr, the symmetric execution operation order is preserved; summary statistics
  * (Sharpe, drawdown, etc.) are computed uniformly from rr by the caller.
  *
  * Relies on IEEE NaN propagation (NaN price -> weight zeroed); build must retain -fno-finite-math-only.

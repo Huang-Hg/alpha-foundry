@@ -1,18 +1,19 @@
-"""python -m foundry <command> — the one entry point.
+"""python -m foundry <command> — explicit service, JSON-RPC requests, and mining.
 
-  formulas     eval [FORMULA ...] [--file F] [--accept] [--json OUT] [--quiet] [--in-process]
-               family FILE [--json OUT] [--in-process]      (a `#` line is the hypothesis of the formulas below it)
-               fields | ops                                 (what formulas can read / use)
-  service      serve | status | stop | attach [HOST] | detach | mirror HOST REMOTE_STATUS LOCAL_STATUS
-  search       mine OUT [--accept] [--resume] [--mode gfn|random] [--seed-portfolio current|equal]
-                    [--objective portfolio|single] [--null-shift] [--epochs N] [--batch-size N] [--probes N] [--seed N]
-               calibrate RUN_DIR                            (reward violation scales from a finished run)
-  dashboard    monitor [--source STATUS] [--attach] [--once] | preview [STATUS ...]
+  schema OUTPUT                     write the machine-readable request contract
+  request INPUT.jsonl OUTPUT.jsonl   send JSON-RPC requests to the configured service
+  fields | ops                      inspect the active market vocabulary
+  serve | status | stop | attach [HOST] | detach | mirror HOST REMOTE LOCAL
+  mine OUTPUT                       run the configured mining program
+  import-perpetual OUTPUT            import verified public USD-M archives
+  calibrate RUN | monitor | preview
 
-Evaluation goes through the resident service (started on demand, or the attached cloud one); --in-process computes
-here instead. Only --accept writes the production library.
+Start or attach the service explicitly. request never starts a local GPU process.
 """
 from __future__ import annotations
+
+from foundry.config import load_config, ROOT, path
+
 
 import argparse
 import json
@@ -20,81 +21,52 @@ import sys
 from pathlib import Path
 
 
-def _formulas(a):
-    exprs = list(a.formulas)
-    if a.file:
-        exprs += [l.strip() for l in Path(a.file).read_text(encoding='utf-8').splitlines() if l.strip() and not l.strip().startswith('#')]
-    if not exprs:
-        sys.exit('no formulas: give formulas or --file')
-    return exprs
+def cmd_request(a):
+    from foundry.service.client import invoke
+    with open(a.output,'w',encoding='utf-8') as out:
+        for line in Path(a.input).read_text(encoding='utf-8').splitlines():
+            response=invoke(json.loads(line))
+            out.write(json.dumps(response,ensure_ascii=False,allow_nan=False)+'\n')
+            out.flush()
 
 
-def _in_process_portfolio():
-    from foundry.engine import Engine
-    from foundry.portfolio.library import Library
-    from foundry.portfolio.portfolio import Portfolio
-    return Portfolio(Engine(), Library.load())
-
-
-def cmd_eval(a):
-    from foundry import report
-    exprs = _formulas(a)
-    if a.in_process:
-        from foundry.service.daemon import evaluate
-        rows = evaluate(_in_process_portfolio(), exprs, a.accept)
-    else:
-        from foundry.service import client
-        rows = client.evaluate(exprs, accept=a.accept, quiet=a.quiet, source=a.file and Path(a.file).as_posix())
-    report.rows(rows, a.quiet)
-    if a.json:
-        Path(a.json).write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding='utf-8')
-
-
-def cmd_family(a):
-    from foundry import report
-    seeds, hypothesis = [], ''
-    for line in Path(a.file).read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        if line.startswith('#'):
-            hypothesis = line.lstrip('#').strip()
-        elif line:
-            seeds.append(dict(expr=line, hypothesis=hypothesis))
-    if not seeds:
-        sys.exit(f'{a.file}: no formulas')
-    if a.in_process:
-        from foundry.portfolio import family
-        res = family.expand(_in_process_portfolio(), seeds)
-    else:
-        from foundry.service import client
-        res = client.evaluate_family(seeds, Path(a.file).as_posix())
-    report.family(res)
-    if a.json:
-        Path(a.json).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')
+def cmd_schema(a):
+    from foundry.service.schema import describe
+    Path(a.output).write_text(json.dumps(describe(),ensure_ascii=False,indent=2),encoding='utf-8')
 
 
 def cmd_fields(a):
     from foundry import report
-    report.fields()
+    from foundry.runtime import open_runtime, configured_study
+    settings = load_config()
+    with open_runtime(settings, configured_study(settings)) as runtime:
+        report.fields(runtime)
 
 
 def cmd_ops(a):
     from foundry import report
-    report.ops()
+    report.ops(load_config().expr)
 
 
 def cmd_serve(a):
     from foundry.service import client
     from foundry.service.daemon import Server
-    d = client.info()
-    if not (d and d.get('host')):          # a local service would hold a second copy of the panel on the card
+    if client.PORTFILE.exists():
         client.stop()
-    client.PORTFILE.unlink(missing_ok=True)
-    Server(0).run()
+    from foundry.runtime import open_runtime, configured_study
+    from foundry.adapters.library import FileLibraryStore
+    from foundry.adapters.arrays import FileArrayStore
+    from foundry.research import Research
+    settings = load_config()
+    with open_runtime(settings, configured_study(settings)) as runtime:
+        store = FileLibraryStore(ROOT / 'production' / 'library.json')
+        research = Research(runtime.engine, store, FileArrayStore(path(settings.portfolio.artifact_dir)))
+        Server(runtime, research).run()
 
 
 def cmd_status(a):
     from foundry.service import client
-    p = client.request(dict(op='ping'), timeout=10.0)
+    p = client.call('system.status',{},timeout=10.)
     print(json.dumps(p, ensure_ascii=False, indent=2) if p else '未运行')
 
 
@@ -106,8 +78,8 @@ def cmd_stop(a):
 
 def cmd_attach(a):
     from foundry.service import client, remote
-    d = client.info()
-    if d and not d.get('host'):            # free the local card before attaching to the cloud
+    d = client.info() if client.PORTFILE.exists() else {}
+    if d and 'host' not in d:            # free the local card before attaching to the cloud
         print(client.stop() or '(无本地服务)')
     remote.attach(a.host or remote.DEFAULT_HOST)
 
@@ -119,24 +91,23 @@ def cmd_detach(a):
 
 
 def cmd_mirror(a):
-    from foundry.config import MonitorConfig
     from foundry.service import remote
-    remote.mirror(a.host, a.remote, Path(a.local), MonitorConfig().push_seconds)
+    remote.mirror(a.host, a.remote, Path(a.local), load_config().monitor.push_seconds)
 
 
 def cmd_mine(a):
     from foundry.search import run
-    run.run(a)
+    run.run(Path(a.output), load_config())
 
 
 def cmd_calibrate(a):
     from foundry.search import calibrate
-    calibrate.report(Path(a.run))
+    calibrate.report(Path(a.run), load_config().portfolio)
 
 
 def cmd_monitor(a):
     from foundry.monitor import launcher
-    launcher.main(a.source, a.attach, a.once)
+    launcher.main(a.source, a.attach, a.once, load_config().monitor)
 
 
 def cmd_preview(a):
@@ -144,20 +115,21 @@ def cmd_preview(a):
     print(preview.write(a.statuses))
 
 
+def cmd_import_perpetual(a):
+    from foundry.adapters.perpetual_data import import_perpetual
+    manifest = import_perpetual(Path(a.output), load_config().crypto_perpetual)
+    print(json.dumps(dict(output=a.output, sources=len(manifest['sources']),
+                          artifacts=manifest['artifacts']), indent=2))
+
+
 def main():
     p = argparse.ArgumentParser(prog='python -m foundry', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='command', required=True)
-    s = sub.add_parser('eval')
-    s.add_argument('formulas', nargs='*')
-    s.add_argument('--file')
-    s.add_argument('--accept', action='store_true', help='admit the passing formulas into the production library')
-    s.add_argument('--json')
-    s.add_argument('--quiet', action='store_true', help='print only admitted formulas and a count per stage')
-    s.add_argument('--in-process', action='store_true', help='compute here instead of in the service')
-    s = sub.add_parser('family')
-    s.add_argument('file')
-    s.add_argument('--json')
-    s.add_argument('--in-process', action='store_true')
+    s = sub.add_parser('request')
+    s.add_argument('input')
+    s.add_argument('output')
+    s = sub.add_parser('schema')
+    s.add_argument('output')
     sub.add_parser('fields')
     sub.add_parser('ops')
     sub.add_parser('serve')
@@ -172,14 +144,8 @@ def main():
     s.add_argument('local')
     s = sub.add_parser('mine')
     s.add_argument('output')
-    s.add_argument('--accept', action='store_true', help='persist verified changes to the production library')
-    s.add_argument('--resume', action='store_true')
-    s.add_argument('--mode', choices=('gfn', 'random'), default='gfn')
-    s.add_argument('--seed-portfolio', choices=('current', 'equal'), default='current')
-    s.add_argument('--objective', choices=('portfolio', 'single'), default='portfolio')
-    s.add_argument('--null-shift', action='store_true', help='noise control: every signal delayed by its own 1-3 years')
-    for name in ('epochs', 'batch-size', 'probes', 'seed'):
-        s.add_argument('--' + name, type=int)
+    s = sub.add_parser('import-perpetual')
+    s.add_argument('output')
     s = sub.add_parser('calibrate')
     s.add_argument('run')
     s = sub.add_parser('monitor')

@@ -1,74 +1,60 @@
-"""The portfolio objective of the search: rewards from admission against a portfolio frozen for the epoch, a behaviour
-archive of recent distinct books, and the joint reweighting of the members (CEM), all on CUDA.
-
-Reward of a candidate: inside admission (a feasible weight exists and its highest positive correlation with the
-portfolio or any member is at most rho_max) 1 + 3*sigmoid(utility - .25*co_loss - .1*length - .25*novelty); outside
--6 - min(4, V), V = the admission violation plus the correlation excess plus 1 for an all-cash book; a formula that
-fails G1 gets -12. A book equal to an archived one of the same portfolio is a duplicate (-10).
-"""
-from __future__ import annotations
-
+"""Search rewards and proposals; research owns evaluation, admission and commits."""
 from collections import OrderedDict
+from dataclasses import dataclass, replace
+from foundry.candidates import Formula
 
-import cupy as cp
-
-from foundry.core import metrics as M
-from foundry.portfolio import admission
-from foundry.portfolio.library import SEED
-from foundry.portfolio.reference import CFG, capped
+from foundry.research_types import Candidate, ConstraintCheck, PrecisionDiagnostics
 from foundry.search.policy import CEM
 
-_HASH = cp.RawKernel(r'''
-extern "C" __global__ void fingerprints(const double* w, unsigned long long* out, int n) {
-    __shared__ unsigned long long hashes[256];
-    unsigned long long h=0;
-    for(int j=threadIdx.x;j<n;j+=blockDim.x) {
-        double v=w[(long long)blockIdx.x*n+j];
-        unsigned long long x=v==0?0:__double_as_longlong(v);
-        x^=(unsigned long long)(j+1)*0x9e3779b97f4a7c15ULL;
-        x=(x^(x>>30))*0xbf58476d1ce4e5b9ULL;x=(x^(x>>27))*0x94d049bb133111ebULL;
-        h^=x^(x>>31);
-    }
-    hashes[threadIdx.x]=h;__syncthreads();
-    for(int d=128;d;d>>=1){if(threadIdx.x<d)hashes[threadIdx.x]^=hashes[threadIdx.x+d];__syncthreads();}
-    if(threadIdx.x==0)out[blockIdx.x]=hashes[0];
-}''', 'fingerprints')
+
+@dataclass(frozen=True)
+class BehaviorState:
+    book: object
+    returns: object
+    expr: str
+    portfolio_version: str
 
 
-def standardized(r):
+@dataclass(frozen=True)
+class MiningResult:
+    expr: str
+    log_reward: float
+    passed: bool
+    g1: bool
+    g2: bool
+    rho: float | None = None
+    utility: float | None = None
+    error: str | None = None
+    co_loss: float = 0.
+    novelty: float = 0.
+    duplicate: bool = False
+    weight: float = 0.
+    delta: tuple[ConstraintCheck, ...] = ()
+    precision: PrecisionDiagnostics | None = None
+    backend: str = ''
+    g3: bool = False
+    sharpe: float | None = None
+    cagr: float | None = None
+    maxdd: float | None = None
+    rho_portfolio: float | None = None
+    rho_members: float | None = None
+    appraisal: float | None = None
+    required_sharpe: float | None = None
+    recent_years: tuple[float, ...] = ()
+
+
+def standardized(r, xp):
     centered = r - r.mean(axis=1, keepdims=True)
-    norm = cp.sqrt(cp.sum(centered * centered, axis=1, keepdims=True))
-    valid = cp.isfinite(r).all(1) & (norm[:, 0] > 1e-8)
-    return cp.where(valid[:, None], centered / cp.maximum(norm, 1e-8), 0), valid
-
-
-def weight_metrics(rr, dd, ref, ppy):
-    """(feasible, utility, deltas) of portfolios with net returns rr (B,T) and max drawdowns dd against the reference:
-    the constraints and balanced utility of admission, on the statistics of foundry.core.metrics."""
-    delta = cp.stack((M.weighted_sharpe(rr, ref.p, ppy) - ref.wsharpe, M.sharpe(rr, ppy) - ref.sharpe,
-                      M.cagr(rr, ppy) - ref.cagr, M.recent_growth(rr, ref.p, ppy) - ref.recent_growth), axis=1)
-    feasible = M.sound(rr) & (delta >= admission.return_requirements(dd, ref) - 1e-10).all(1)
-    utility = .5 * cp.tanh(delta[:, 0] / CFG.sharpe_scale) + .5 * cp.tanh(delta[:, 3] / CFG.growth_scale)
-    return feasible, utility, delta
-
-
-def member_states(portfolio):
-    """(weights, books, net returns (n,T)) of the members, device-resident; the empty library's equal-weight seed
-    counts as its one member."""
-    engine = portfolio.engine
-    members = portfolio.library.members or [SEED]
-    formulas = [m['expr'] for m in members if m['expr'] != SEED['expr']]
-    known = dict(zip(formulas, engine.members(formulas, portfolio.null_shift)))
-    seed = engine.equal_weight()
-    states = [(seed, engine.returns([seed])[1][0]) if m['expr'] == SEED['expr'] else known[m['expr']] for m in members]
-    return [m['weight'] for m in members], [b for b, _ in states], cp.stack([r for _, r in states])
+    norm = xp.sqrt(xp.sum(centered * centered, axis=1, keepdims=True))
+    valid = xp.isfinite(r).all(1) & (norm[:, 0] > 1e-8)
+    return xp.where(valid[:, None], centered / xp.maximum(norm, 1e-8), 0), valid
 
 
 class Archive:
     def __init__(self, capacity=32):
-        self.capacity = capacity
+        self.capacity, self.version = capacity, 0
         self.items = OrderedDict()
-        self.version = 0
+        self.populations = {}
 
     def update(self, staged):
         for key, value in staged.items():
@@ -81,189 +67,172 @@ class Archive:
 
 
 class Evaluator:
-    gate = None          # the portfolio objective admits on the four portfolio margins, not on a single-alpha gate
+    gate = None
     COUNTERS = ('requested', 'unique_evaluations', 'g1', 'g2', 'low_corr', 'behavior_duplicates', 'fp64_refined', 'weight_trials')
 
-    def __init__(self, portfolio, archive, rho_max=.9):
-        self.portfolio, self.engine, self.archive, self.rho_max = portfolio, portfolio.engine, archive, rho_max
-        self.ref = portfolio.reference
-        self.version = portfolio.version
+    def __init__(self, research, archive, rho_max=.9):
+        self.research, self.portfolio = research, research.portfolio
+        self.engine, self.archive, self.rho_max = research.engine, archive, rho_max
+        self.ref, self.version = self.portfolio.reference, self.portfolio.version
+        self.context_id = research.context.id
         self.archive_version = archive.version
-        self.pending = OrderedDict()
-        self.cache = {}
+        self.pending, self.cache = OrderedDict(), {}
         self.best = None
+        self.best_score = -float('inf')
         self.counters = dict.fromkeys(self.COUNTERS, 0)
-        self.weights, self.books, self.member_returns = member_states(portfolio)
-        self.reference_vectors, self.reference_valid = standardized(cp.concatenate((self.ref.rr[None], self.member_returns)))
-        if archive.items:
-            self.archive_vectors, _ = standardized(cp.stack([v['rr'] for v in archive.items.values()]))
-        else:
-            self.archive_vectors = None
+        self.weights, self.books, self.member_returns = research.member_states(self.context_id)
+        xp = self.engine.xp
+        self.reference_vectors, self.reference_valid = standardized(xp.concatenate((self.ref.rr[None], self.member_returns)), xp)
+        self.archive_vectors = standardized(xp.stack([v.returns for v in archive.items.values()]), xp)[0] if archive.items else xp.empty((0, len(self.ref.rr)))
 
     def check_context(self):
-        if self.portfolio.version != self.version or self.archive.version != self.archive_version:
-            raise RuntimeError('Portfolio/archive changed inside frozen search epoch')
+        self.research.require_context(self.context_id)
+        if self.archive.version != self.archive_version:
+            raise RuntimeError('archive changed inside frozen search epoch')
 
     def context(self):
-        r, weights = self.ref.rr, cp.asarray(self.weights)
-        # Permutation-invariant member summaries plus chronological portfolio blocks.
-        block = cp.minimum(cp.arange(len(r)) * 6 // len(r), 5)
-        means = cp.bincount(block, weights=r, minlength=6) / cp.maximum(cp.bincount(block, minlength=6), 1)
-        sig = cp.sqrt(cp.mean(r * r))
+        xp = self.engine.xp
+        r, weights = self.ref.rr, xp.asarray(self.weights)
+        block = xp.minimum(xp.arange(len(r)) * 6 // len(r), 5)
+        means = xp.bincount(block, weights=r, minlength=6) / xp.maximum(xp.bincount(block, minlength=6), 1)
+        sig = xp.sqrt(xp.mean(r * r))
         member_vol = self.member_returns.std(1)
-        values = cp.concatenate((cp.asarray([self.ref.wsharpe / 3, self.ref.sharpe / 3, self.ref.recent_growth, self.ref.cagr]),
-                                 cp.stack((cp.sum(weights * weights), cp.sum(weights * member_vol) * self.engine.ppy ** .5,
-                                           cp.mean(cp.sum(self.ref.W, axis=1)), cp.asarray(len(self.weights) / 40))),
-                                 means / cp.maximum(sig, 1e-8),
-                                 cp.stack((cp.asarray(len(self.archive.items) / max(1, self.archive.capacity)),
-                                           cp.asarray(0.) if self.archive_vectors is None else
-                                           cp.mean(self.archive_vectors @ self.reference_vectors[0])))))
-        return cp.asnumpy(cp.tanh(cp.nan_to_num(values))).tolist()
+        values = xp.concatenate((xp.asarray([self.ref.wsharpe / 3, self.ref.sharpe / 3, self.ref.recent_growth, self.ref.cagr]),
+            xp.stack((xp.sum(weights * weights), xp.sum(weights * member_vol) * self.engine.ppy ** .5,
+                      xp.mean(xp.sum(self.ref.W, axis=1)), xp.asarray(len(self.weights) / 40))),
+            means / xp.maximum(sig, 1e-8),
+            xp.stack((xp.asarray(len(self.archive.items) / max(1, self.archive.capacity)),
+                      xp.mean(self.archive_vectors @ self.reference_vectors[0]) if len(self.archive_vectors) else xp.asarray(0.)))))
+        return self.engine.to_host(xp.tanh(xp.nan_to_num(values))).tolist()
 
     def evaluate(self, expressions):
         self.check_context()
         self.counters['requested'] += len(expressions)
         fresh = [x for x in dict.fromkeys(expressions) if x not in self.cache]
         for lo in range(0, len(fresh), self.engine.candidate_batch):
-            rows = self.engine.formulas(fresh[lo:lo + self.engine.candidate_batch], report=False,
-                                        null_shift=self.portfolio.null_shift)
-            verdicts = self.portfolio.admit(rows)
-            valid = [(r, g) for r, g in zip(rows, verdicts) if g['layers']['G1_structure']['passed']]
-            self.counters['unique_evaluations'] += len(rows)
-            for r in rows:
-                self.cache[r['expr']] = dict(expr=r['expr'], log_reward=-12., passed=False, g1=False,
-                                             g2=False, rho=None, utility=None, error=r['error'])
+            sources = tuple(Formula(expression) for expression in fresh[lo:lo + self.engine.candidate_batch])
+            batch = self.research.evaluate_device(sources, self.context_id)
+            self.counters['unique_evaluations'] += len(batch.rows)
+            for row in batch.rows:
+                self.cache[row.source.expression] = MiningResult(row.source.expression, -12., False, False, False, error=row.error)
+            valid = [(r, v) for r, v in zip(batch.rows, batch.verdicts) if v.stopped_at != 'G1']
             if valid:
                 self._valid_batch(valid)
         return [self.cache[x] for x in expressions]
 
-    def _behavior(self, R):
-        """(standardized returns, has-variance flag, highest positive correlation with the portfolio or any
-        member, low-correlation flag, similarity to the archive) of a batch of daily returns."""
-        vectors, nonzero = standardized(R)
-        correlations = cp.clip(vectors @ self.reference_vectors.T, -1, 1)
-        rho = cp.maximum(0, cp.where(self.reference_valid[None], correlations, -cp.inf).max(1))
-        # An undefined all-cash correlation is never rewarded as novel behavior.
-        low_corr = nonzero & cp.isfinite(rho) & (rho <= self.rho_max)
-        novelty = cp.zeros(len(R)) if self.archive_vectors is None else cp.maximum(0, vectors @ self.archive_vectors.T).max(1)
+    def _behavior(self, returns):
+        xp = self.engine.xp
+        vectors, nonzero = standardized(returns, xp)
+        correlations = xp.clip(vectors @ self.reference_vectors.T, -1, 1)
+        rho = xp.maximum(0, xp.where(self.reference_valid[None], correlations, -xp.inf).max(1))
+        low_corr = nonzero & xp.isfinite(rho) & (rho <= self.rho_max)
+        novelty = xp.maximum(0, vectors @ self.archive_vectors.T).max(1) if len(self.archive_vectors) else xp.zeros(len(returns))
         return vectors, nonzero, rho, low_corr, novelty
 
-    def _fingerprints(self, W):
-        hashes = cp.empty(len(W), dtype=cp.uint64)
-        _HASH((len(W),), (256,), (W, hashes, W.shape[1] * W.shape[2]))
-        return cp.asnumpy(hashes).tolist()
-
     def _duplicate(self, key, book):
-        old = self.archive.items.get(key)
-        return old is not None and old['portfolio_version'] == self.version and bool(cp.array_equal(book, old['W']))
+        if key not in self.archive.items:
+            return False
+        old = self.archive.items[key]
+        return old.portfolio_version == self.version and bool(self.engine.xp.array_equal(book, old.book))
 
-    def _stage(self, staged, W, R, rows):
-        """staged: key -> row of this batch; only the newest `capacity` survive, so only those are copied."""
+    def _stage(self, staged, books, returns, rows):
         for key, i in list(staged.items())[-self.archive.capacity:]:
-            self.pending[key] = dict(W=W[i].copy(), rr=R[i].copy(), expr=rows[i]['expr'], portfolio_version=self.version)
+            self.pending[key] = BehaviorState(books[i].copy(), returns[i].copy(), rows[i].source.expression, self.version)
             self.pending.move_to_end(key)
             while len(self.pending) > self.archive.capacity:
                 self.pending.popitem(last=False)
 
     def _valid_batch(self, pairs):
+        xp = self.engine.xp
         rows, verdicts = zip(*pairs)
-        W = cp.stack([r['_W'] for r in rows])
-        R = cp.stack([r['_rr'] for r in rows])
-        _, nonzero, rho, low_corr, novelty = self._behavior(R)
+        books, returns = xp.stack([r.book for r in rows]), xp.stack([r.returns for r in rows])
+        _, nonzero, rho, low_corr, novelty = self._behavior(returns)
         down = self.ref.rr < 0
-        co_loss = cp.sum(cp.maximum(-R, 0) * down, axis=1) / cp.maximum(cp.sum(cp.abs(R), axis=1), 1e-12)
-        proposals = [g['layers']['G2_performance'] for g in verdicts]
-        inputs = cp.asarray([[p['passed'], p.get('utility', 0), p.get('violation', 4), len(r['expr']) / 512]
-                             for p, r in zip(proposals, rows)])
-        feasible = inputs[:, 0].astype(cp.bool_) & low_corr
-        distance = inputs[:, 2] + cp.maximum(0, rho - self.rho_max) + (~nonzero)
-        raw_reward = cp.where(feasible, 1 + 3 / (1 + cp.exp(-(inputs[:, 1] - .25 * co_loss - .1 * inputs[:, 3] - .25 * novelty))),
-                              -6 - cp.minimum(4, distance))
-        hash_values = self._fingerprints(W)
-        reports = cp.asnumpy(cp.stack((raw_reward, feasible, rho, co_loss, novelty, nonzero), axis=1)).tolist()
+        co_loss = xp.sum(xp.maximum(-returns, 0) * down, axis=1) / xp.maximum(xp.sum(xp.abs(returns), axis=1), 1e-12)
+        proposals = [v.proposal for v in verdicts]
+        inputs = xp.asarray([[p.passed, p.utility, p.violation, len(r.source.expression) / 512] for p, r in zip(proposals, rows)])
+        feasible = inputs[:, 0].astype(xp.bool_) & low_corr
+        distance = inputs[:, 2] + xp.maximum(0, rho - self.rho_max) + (~nonzero)
+        reward = xp.where(feasible, 1 + 3 / (1 + xp.exp(-(inputs[:, 1] - .25 * co_loss - .1 * inputs[:, 3] - .25 * novelty))), -6 - xp.minimum(4, distance))
+        reports = self.engine.to_host(xp.stack((reward, feasible, rho, co_loss, novelty, nonzero), axis=1)).tolist()
         staged = OrderedDict()
-        for i, (r, g, p, values, key) in enumerate(zip(rows, verdicts, proposals, reports, hash_values)):
-            duplicate = self._duplicate(key, W[i])
+        for i, (row, verdict, proposal, values, key) in enumerate(zip(rows, verdicts, proposals, reports, self.engine.fingerprints(books))):
+            duplicate = self._duplicate(key, books[i])
             accepted = bool(values[1]) and not duplicate
-            report = dict(expr=r['expr'], log_reward=values[0] if not duplicate else -10., passed=accepted,
-                          g1=True, g2=p['passed'], rho=values[2], co_loss=values[3], novelty=values[4],
-                          duplicate=duplicate, utility=p.get('utility'), weight=p['weight'],
-                          delta={k: v[1] for k, v in p['checks'].items()}, precision=p.get('precision'),
-                          backend=p['backend'])
-            self.cache[r['expr']] = report
+            self.cache[row.source.expression] = MiningResult(row.source.expression, values[0] if not duplicate else -10., accepted, True,
+                proposal.passed, values[2], proposal.utility, co_loss=values[3], novelty=values[4], duplicate=duplicate,
+                weight=proposal.weight, delta=proposal.checks, precision=proposal.precision, backend=proposal.backend)
             self.counters['g1'] += 1
-            self.counters['g2'] += int(p['passed'])
+            self.counters['g2'] += int(proposal.passed)
             self.counters['low_corr'] += int(accepted)
             self.counters['behavior_duplicates'] += int(duplicate)
-            self.counters['weight_trials'] += p['trials']
-            self.counters['fp64_refined'] += int(p['backend'] == 'cuda-f64')
-            if accepted and (self.best is None or p['utility'] > self.best[1]['layers']['G2_performance']['utility']):
-                # Clones, so neither the row nor its verdict retains the batch allocation behind it.
-                row = dict(r, _W=r['_W'].copy(), _rr=r['_rr'].copy())
-                self.best = (row, dict(g, layers=dict(g['layers'], G2_performance=dict(p, row=row))))
+            self.counters['weight_trials'] += proposal.trials
+            self.counters['fp64_refined'] += int(proposal.backend.endswith('-f64'))
+            if accepted and proposal.utility > self.best_score:
+                self.best = row.source.expression
+                self.best_score = proposal.utility
             if not duplicate and values[5]:
                 staged[key] = i
                 staged.move_to_end(key)
-        self._stage(staged, W, R, rows)
+        self._stage(staged, books, returns, rows)
 
     def accept(self):
         self.check_context()
         if self.best is None:
             return None
-        row, previous = self.best
-        # Always a fresh FP64 admission, never a rounded reward reused as a verdict.
-        proposal = admission.proposals(self.engine, [row], self.ref, precision='f64')[0]
-        if not proposal['passed']:
-            raise RuntimeError('Selected candidate failed FP64 admission')
-        verdict = dict(previous, layers=dict(previous['layers'], G2_performance=proposal))
-        weight = self.portfolio.accept(row, verdict)
-        return dict(expr=row['expr'], weight=weight, utility=proposal['utility'])
+        result = self.research.commit((Candidate(self.best, Formula(self.best)),), self.context_id)
+        row = result.rows[0]
+        assert row.accepted
+        return CandidateAcceptance(row.row.source.expression, row.weight, row.verdict.proposal.utility)
 
     def reweight(self, iterations=3, count=32, seed=1):
-        """Budgeted logit-normal CEM over independent additive weights in (0,1) plus explicit
-        deletion proposals, CUDA FP64. A member's own book is never levered; the exposure cap
-        is the only coupling between members."""
         self.check_context()
-        library = self.portfolio.library
-        members = library.members
-        if len(members) < 2:
+        if len(self.portfolio.library.members) < 2:
             return None
-        books = cp.stack(self.books)
-        base = cp.asarray(self.weights, dtype=cp.float64)
-        inside = cp.clip(base, 1e-6, 1 - 1e-6)
-        sampler = CEM(cp.asnumpy(cp.log(inside / (1 - inside))))
+        xp = self.engine.xp
+        books = xp.stack(self.books)
+        base = xp.asarray(self.weights, dtype=xp.float64)
+        inside = xp.clip(base, 1e-6, 1 - 1e-6)
+        sampler = CEM(self.engine.to_host(xp.log(inside / (1 - inside))))
         best = None
         evaluations = 0
         for iteration in range(iterations):
-            weights = cp.asarray(sampler.sample(count, seed + iteration))
-            deletes = cp.broadcast_to(base, (len(base), len(base))).copy()
-            deletes[cp.arange(len(base)), cp.arange(len(base))] = 0
-            trials = cp.concatenate((weights, base[None], deletes))
+            weights = xp.asarray(sampler.sample(count, seed + iteration))
+            deletes = xp.broadcast_to(base, (len(base), len(base))).copy()
+            deletes[xp.arange(len(base)), xp.arange(len(base))] = 0
+            trials = xp.concatenate((weights, base[None], deletes))
             score_parts = []
             for lo in range(0, len(trials), self.engine.candidate_batch):
                 part = trials[lo:lo + self.engine.candidate_batch]
-                _, rr, _, dd = self.engine.returns(capped(cp.tensordot(part, books, axes=(1, 0))), 'f64')
-                feasible, utility, _ = weight_metrics(rr, dd, self.ref, self.engine.ppy)
-                scores = cp.where(feasible, utility, -1e6)
+                trial = self.research.trial_weights(part, books, self.context_id)
+                feasible, utility = trial.feasible, trial.utility
+                scores = xp.where(feasible, utility, -1e6)
                 score_parts.append(scores)
-                at = int(cp.argmax(scores))
+                at = int(xp.argmax(scores))
                 if bool(feasible[at]) and (best is None or float(scores[at]) > best[0]):
                     best = (float(scores[at]), part[at].copy())
                 evaluations += len(part)
-            scores = cp.concatenate(score_parts)
-            # No feasible elite: explore again, do not fit arbitrary rejected ties.
+            scores = xp.concatenate(score_parts)
             nfeasible = int((scores[:count] > -1e5).sum())
             if nfeasible:
-                sampler.update(cp.asnumpy(scores[:count]), min(nfeasible, max(1, count // 4)))
+                sampler.update(self.engine.to_host(scores[:count]), min(nfeasible, max(1, count // 4)))
         if best is None:
-            return dict(changed=False, evaluations=evaluations)
-        self.check_context()
-        values = cp.asnumpy(best[1]).tolist()
-        library.members = [dict(m, weight=w) for m, w in zip(members, values) if w > 0]
-        self.portfolio.changed()
-        # One FP64 backtest of the stored portfolio: it is the verdict here and the reference of the next epoch.
-        stored = self.portfolio.reference
-        feasible, utility, _ = weight_metrics(stored.rr[None], cp.asarray([stored.maxdd]), self.ref, self.engine.ppy)
-        if not bool(feasible[0]):
-            raise RuntimeError('CEM final portfolio failed FP64 constraints')
-        return dict(changed=True, evaluations=evaluations, utility=float(utility[0]), weights=values)
+            return ReweightResult(False, evaluations)
+        values = self.engine.to_host(best[1]).tolist()
+        committed = self.research.commit_weights(values, self.context_id)
+        return ReweightResult(committed.changed, evaluations, committed.utility, tuple(values))
+
+
+@dataclass(frozen=True)
+class CandidateAcceptance:
+    expr: str
+    weight: float
+    utility: float
+
+
+@dataclass(frozen=True)
+class ReweightResult:
+    changed: bool
+    evaluations: int
+    utility: float | None = None
+    weights: tuple[float, ...] = ()

@@ -281,7 +281,7 @@ void fm_ts_quantile(const double* x, double* out, int64_t T, int64_t S, int64_t 
                 comp[(size_t)t] =
                     (int64_t)(std::lower_bound(vals.begin(), vals.end(), v) - vals.begin()) + 1;
         }
-        /* 2. Sliding window: BIT counts + side-channel cnt_nan (same structure as _ts_rank_bucket) */
+        /* 2. Sliding window: BIT counts + side-channel cnt_nan. */
         std::vector<int64_t> bit((size_t)M + 2, 0);
         int64_t cnt_nan = 0;
         for (int64_t t = 0; t < T; t++) {

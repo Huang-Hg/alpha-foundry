@@ -13,7 +13,7 @@ This module imports nothing numerical, so hosts without the native extensions (a
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict
 
 # Written arguments of each kind (panels, windows and scalars alike).
 ARITY = {'unary': 1, 'binary': 2, 'binary_const': 2, 'ternary': 3, 'ts': 2, 'ts_param': 3, 'pair': 3, 'pair_param': 4}
@@ -31,7 +31,6 @@ class Op:
     name: str
     kind: str
     commutative: bool = False         # children are ordered by hash, so equivalent trees hash alike
-    causal_window: Optional[int] = None   # largest window with a causal implementation on every backend
     doc: str = ''
 
 
@@ -56,7 +55,7 @@ _TABLE = (
     Op('cs_scale', 'unary', doc='x / sum|x|'),
     # time series
     Op('ts_mean', 'ts'), Op('ts_std', 'ts'), Op('ts_max', 'ts'), Op('ts_min', 'ts'), Op('ts_sum', 'ts'),
-    Op('ts_rank', 'ts', causal_window=31, doc='the CPU kernel buckets on full-sample boundaries beyond 31'),
+    Op('ts_rank', 'ts', doc='exact trailing-window average rank; ties share rank'),
     Op('ts_arg_max', 'ts'), Op('ts_arg_min', 'ts'), Op('ts_ema', 'ts'), Op('ts_wma', 'ts'), Op('ts_ref', 'ts'),
     Op('ts_delta', 'ts'), Op('ts_skew', 'ts'), Op('ts_kurt', 'ts'), Op('ts_mad', 'ts'), Op('ts_slope', 'ts'),
     Op('ts_chanpos', 'ts', doc='(x-min)/(max-min); a flat window is 0.5'), Op('ts_ddown', 'ts', doc='x/max-1; max<=0 -> NaN'),

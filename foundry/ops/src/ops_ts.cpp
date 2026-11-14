@@ -6,7 +6,7 @@
  *
  * All parallelised across symbols via OpenMP; incremental window updates (sum / sum^2 / monotonic
  * deque / Fenwick BIT).
- * AVX2 SIMD lane-packing for ts_sum/ts_mean (for other ops, a serial t-loop is already cache-friendly).
+ * Sum/mean recompute centered windows in the same order as CUDA to preserve discrete decisions.
  *
  * 2D strided addressing: x[t * ldx + s] / out[t * ldo + s] (ld = row stride; see ops.hpp).
  * Per-column accumulation order along t is independent of ld -> bitwise identical for any ld.
@@ -25,116 +25,37 @@
 #endif
 
 
-/* SIMD enablement: compiled in whenever gcc/clang defines __AVX2__. 4-lane path for 4*k symbols, scalar tail otherwise. */
-#if defined(__AVX2__)
-#include <immintrin.h>
-#define FM_HAS_AVX2 1
-#else
-#define FM_HAS_AVX2 0
-#endif
-
-#if FM_HAS_AVX2
-/* AVX2 lane-pack helper: treat NaN as zero + accumulate cnt_nan (int64x4) for x[t*ldx + s_block .. s_block+3]. */
-static inline void _fm_unpack_clean(__m256d v, __m256d* out_clean, __m256i* out_inc) {
-    /* nan_mask all-ones lanes = NaN */
-    __m256d nan_mask = _mm256_cmp_pd(v, v, _CMP_UNORD_Q);
-    /* clean = nan ? 0 : v */
-    *out_clean = _mm256_blendv_pd(v, _mm256_setzero_pd(), nan_mask);
-    /* inc = nan_mask ? 1 : 0 */
-    __m256i ones = _mm256_set1_epi64x(1);
-    *out_inc = _mm256_and_si256(_mm256_castpd_si256(nan_mask), ones);
-}
-
-/* 4-symbol lane-packed kernel for ts_sum / ts_mean. */
-static void rolling_sum_simd_block(const double* x, double* out,
-                                   int64_t T, int64_t w,
-                                   int64_t s_block, int divide,
-                                   int64_t ldx, int64_t ldo) {
-    __m256d vsum = _mm256_setzero_pd();
-    __m256i vcnt = _mm256_setzero_si256();
-    const __m256d vnan_out = _mm256_set1_pd(NAN);
-    const __m256d vw = _mm256_set1_pd((double)w);
-
-    /* Warmup t = 0 .. w-2: accumulate into sum/cnt, emit NaN */
-    for (int64_t t = 0; t < w - 1; t++) {
-        __m256d v = _mm256_loadu_pd(&x[t * ldx + s_block]);
-        __m256d clean; __m256i inc;
-        _fm_unpack_clean(v, &clean, &inc);
-        vsum = _mm256_add_pd(vsum, clean);
-        vcnt = _mm256_add_epi64(vcnt, inc);
-        _mm256_storeu_pd(&out[t * ldo + s_block], vnan_out);
-    }
-    /* Main loop t >= w-1: add current -> emit -> evict oldest. */
-    for (int64_t t = w - 1; t < T; t++) {
-        __m256d v_new = _mm256_loadu_pd(&x[t * ldx + s_block]);
-        __m256d clean_new; __m256i inc_new;
-        _fm_unpack_clean(v_new, &clean_new, &inc_new);
-        vsum = _mm256_add_pd(vsum, clean_new);
-        vcnt = _mm256_add_epi64(vcnt, inc_new);
-
-        /* cnt == 0 mask -> blend mean / NaN */
-        __m256i cnt_zero = _mm256_cmpeq_epi64(vcnt, _mm256_setzero_si256());
-        __m256d val = divide ? _mm256_div_pd(vsum, vw) : vsum;
-        __m256d res = _mm256_blendv_pd(vnan_out, val, _mm256_castsi256_pd(cnt_zero));
-        _mm256_storeu_pd(&out[t * ldo + s_block], res);
-
-        /* Evict t - w + 1 (= 0 when t = w-1; never reached when t < w-1) */
-        if (t >= w - 1) {
-            int64_t old_t = t - w + 1;
-            if (old_t >= 0) {
-                __m256d v_drop = _mm256_loadu_pd(&x[old_t * ldx + s_block]);
-                __m256d clean_drop; __m256i inc_drop;
-                _fm_unpack_clean(v_drop, &clean_drop, &inc_drop);
-                vsum = _mm256_sub_pd(vsum, clean_drop);
-                vcnt = _mm256_sub_epi64(vcnt, inc_drop);
-            }
-        }
-    }
-}
-#endif  /* FM_HAS_AVX2 */
-
-/* Scalar fallback / remainder when S is not divisible by 4 */
-static void rolling_sum_scalar_one(const double* x, double* out, int64_t T,
-                                   int64_t w, int64_t s, int divide,
-                                   int64_t ldx, int64_t ldo) {
-    double sum = 0.0;
-    int64_t cnt_nan = 0;
-    for (int64_t t = 0; t < T; t++) {
-        double v = x[t * ldx + s];
-        if (isnan(v)) cnt_nan++; else sum += v;
-        if (t >= w) {
-            double old = x[(t - w) * ldx + s];
-            if (isnan(old)) cnt_nan--; else sum -= old;
-        }
-        if (t >= w - 1 && cnt_nan == 0) out[t * ldo + s] = divide ? sum / (double)w : sum;
-        else                            out[t * ldo + s] = NAN;
-    }
-}
-
+/* Match the CUDA moment kernel exactly at decision boundaries: each window
+ * accumulates oldest-to-newest deviations from its oldest observation. An
+ * explicit fused multiply-add restores the anchor, then division rounds once.
+ * Rolling subtraction drifts across a column and can turn an exact flat window
+ * into a positive/negative signal. Fast-math reassociation/reciprocal transforms
+ * would reintroduce the same discrete decision error, so these kernels are strict.
+ */
+#pragma GCC push_options
+#pragma GCC optimize ("no-fast-math", "fp-contract=off")
 static void rolling_sum_impl(const double* x, double* out, int64_t T, int64_t S, int64_t w,
                              int divide, int64_t ldx, int64_t ldo) {
-#if FM_HAS_AVX2
-    int64_t S_simd = S - (S & 3);    /* Multiple-of-4 prefix */
-    #pragma omp parallel for schedule(static)
-    for (int64_t s_block = 0; s_block < S_simd; s_block += 4) {
-        rolling_sum_simd_block(x, out, T, w, s_block, divide, ldx, ldo);
-    }
-    /* Scalar tail */
-    #pragma omp parallel for schedule(static)
-    for (int64_t s = S_simd; s < S; s++) {
-        rolling_sum_scalar_one(x, out, T, w, s, divide, ldx, ldo);
-    }
-#else
     #pragma omp parallel for schedule(static)
     for (int64_t s = 0; s < S; s++) {
-        rolling_sum_scalar_one(x, out, T, w, s, divide, ldx, ldo);
+        for (int64_t t = 0; t < std::min(T, w - 1); t++) out[t * ldo + s] = NAN;
+        for (int64_t t = w - 1; t < T; t++) {
+            const double anchor = x[(t - w + 1) * ldx + s];
+            double centered = 0.;
+            bool missing = false;
+            for (int64_t k = 0; k < w; k++) {
+                const double value = x[(t - w + 1 + k) * ldx + s];
+                if (isnan(value)) { missing = true; break; }
+                centered += value - anchor;
+            }
+            const double sum = fma((double)w, anchor, centered);
+            out[t * ldo + s] = missing ? NAN : (divide ? sum / (double)w : sum);
+        }
     }
-#endif
 }
-
 void fm_ts_sum (const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) { rolling_sum_impl(x, out, T, S, w, 0, ldx, ldo); }
 void fm_ts_mean(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) { rolling_sum_impl(x, out, T, S, w, 1, ldx, ldo); }
-
+#pragma GCC pop_options
 
 /* Per-column valid-range trimming: in wide panels, most columns have long pre-listing / post-delisting
  * all-NaN runs. Rolling kernels run only on [vlo, vhi] = first/last valid row and write NaN outside.
@@ -633,47 +554,6 @@ void fm_ts_arg_max(const double* x, double* out, int64_t T, int64_t S, int64_t w
 void fm_ts_arg_min(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) { rolling_argminmax_impl(x, out, T, S, w, 0, ldx, ldo); }
 
 
-/* ----- ts_rank bucketization helpers ----- */
-
-#define _RANK_BUCKETS 128
-struct _ts_rank_vi { double v; int64_t orig; };
-typedef struct _ts_rank_vi _ts_rank_vi_t;
-
-static inline void _bit_add(int64_t* bit, int64_t size, int64_t i, int64_t delta) {
-    for (; i <= size; i += i & -i) bit[i] += delta;
-}
-static inline int64_t _bit_prefix(const int64_t* bit, int64_t i) {
-    int64_t s = 0;
-    for (; i > 0; i -= i & -i) s += bit[i];
-    return s;
-}
-
-/* Bucketize one column: bucket_id[t] in {1..B} for finite values, 0 for NaN. */
-static void _bucketize_column(
-    const double* x, int64_t T, int64_t ldx, int64_t s_idx, int B,
-    int64_t* bucket_id, int64_t* n_finite_out)
-{
-    std::vector<_ts_rank_vi_t> arr(T);                          /* (value, orig_t) (RAII) */
-    int64_t n = 0;
-    for (int64_t t = 0; t < T; t++) {
-        double v = x[t * ldx + s_idx];
-        if (!isnan(v)) { arr[n].v = v; arr[n].orig = t; n++; }
-        else { bucket_id[t] = 0; }
-    }
-    *n_finite_out = n;
-    if (n == 0) return;
-    /* Sort ascending by value; tie order is unspecified — bucket IDs follow sorted position,
-     * and the bucketed kernel is a +-1/(2B) approximation anyway (continuous data has no exact ties). */
-    std::sort(arr.begin(), arr.begin() + n,
-              [](const _ts_rank_vi_t& a, const _ts_rank_vi_t& b) { return a.v < b.v; });
-    for (int64_t k = 0; k < n; k++) {
-        int64_t b = (k * B) / n + 1;
-        if (b > B) b = B;
-        bucket_id[arr[k].orig] = b;
-    }
-}
-
-
 /* ----- Lag / difference / EMA / WMA ----- */
 
 void fm_ts_ref(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) {
@@ -743,133 +623,52 @@ void fm_ts_wma(const double* x, double* out, int64_t T, int64_t S, int64_t w, in
     double wsum = (double)w * ((double)w + 1.0) / 2.0;
     #pragma omp parallel for schedule(static)
     for (int64_t s = 0; s < S; s++) {
-        /* Force NaN on warmup rows 0 .. w-2 */
-        for (int64_t t = 0; t < w - 1; t++) out[t * ldo + s] = NAN;
-
-        /* t = w-1: O(w) bootstrap of SUM / WSUM */
         double SUM = 0.0, WSUM = 0.0;
         int64_t cnt_nan = 0;
-        for (int64_t i = 0; i < w; i++) {
-            double v = x[i * ldx + s];
-            if (isnan(v)) cnt_nan++;
-            else { SUM += v; WSUM += (double)(i + 1) * v; }
-        }
-        out[(w - 1) * ldo + s] = (cnt_nan == 0) ? (WSUM / wsum) : NAN;
-
-        /* t >= w: O(1)/step sliding update */
-        for (int64_t t = w; t < T; t++) {
-            double drop = x[(t - w) * ldx + s];
-            double new_v = x[t * ldx + s];
-            int drop_nan = isnan(drop), new_nan = isnan(new_v);
-            double drop_clean = drop_nan ? 0.0 : drop;
-            double new_clean  = new_nan  ? 0.0 : new_v;
-
-            /* Update WSUM using OLD SUM (includes drop) */
-            WSUM = WSUM - SUM + (double)w * new_clean;
-            SUM  = SUM - drop_clean + new_clean;
-            if (drop_nan) cnt_nan--;
-            if (new_nan)  cnt_nan++;
-
-            out[t * ldo + s] = (cnt_nan == 0) ? (WSUM / wsum) : NAN;
-        }
-    }
-}
-
-
-/* ts_rank: normalised average rank of the current value within the window, in [0, 1].
- *
- * O(T*S*log T) scheme — per-column coordinate/bucket compression + sliding Fenwick BIT
- * (was O(T*S*W), ~10-15x faster at W=288):
- *
- * Per column:
- *   1. Collect finite (value, orig_t) -> sort by value -> rank index comp[t] in {1..M}; NaN -> 0
- *   2. BIT[1..M]: add(c, +1) / add(c, -1) / prefix(c) are all O(log M)
- *   3. Over window [t-w+1 .. t]:
- *        cnt_less = prefix(c - 1)
- *        cnt_eq   = prefix(c) - cnt_less       (includes current value)
- *        rank     = (cnt_less + 0.5 * (cnt_eq - 1)) / (w - 1)
- *   4. Side-channel cnt_nan tracks NaNs; cnt_nan > 0 -> emit NaN
- *
- * Tie handling: equal values share the same compressed index, so prefix differences count ties directly.
- */
-
-/* Small W uses O(T*S*W) naive scan — W inner iterations are cache-hot with tiny constant factor. */
-static void _ts_rank_naive(const double* x, double* out, int64_t T, int64_t S, int64_t w,
-                           int64_t ldx, int64_t ldo) {
-    #pragma omp parallel for schedule(static)
-    for (int64_t s = 0; s < S; s++) {
         for (int64_t t = 0; t < T; t++) {
-            if (t < w - 1) { out[t * ldo + s] = NAN; continue; }
-            double cur = x[t * ldx + s];
-            if (isnan(cur)) { out[t * ldo + s] = NAN; continue; }
-            int64_t cnt_less = 0, cnt_eq = 0;
-            int has_nan = 0;
-            for (int64_t i = 0; i < w; i++) {
-                double v = x[(t - i) * ldx + s];
-                if (isnan(v)) { has_nan = 1; break; }
-                if (v < cur) cnt_less++;
-                else if (v == cur) cnt_eq++;
-            }
-            if (has_nan) { out[t * ldo + s] = NAN; continue; }
-            out[t * ldo + s] = ((double)cnt_less + 0.5 * (double)(cnt_eq - 1))
-                             / (double)(w - 1);
-        }
-    }
-}
-
-/* Large W uses bucketized BIT — B=128 quantile buckets, BIT depth log2(B) = 7.
- * Same-bucket values are treated as ties; rank error is +-1/(2B) ~ 0.4% with negligible effect on rank IC. */
-static void _ts_rank_bucket(const double* x, double* out, int64_t T, int64_t S, int64_t w,
-                            int64_t ldx, int64_t ldo) {
-    const int B = _RANK_BUCKETS;
-    #pragma omp parallel for schedule(static)
-    for (int64_t s = 0; s < S; s++) {
-        std::vector<int64_t> bucket_buf(T, 0);                  /* Zero-initialised (RAII) */
-        int64_t* bucket_id = bucket_buf.data();
-        int64_t n_finite;
-        _bucketize_column(x, T, ldx, s, B, bucket_id, &n_finite);
-        if (n_finite == 0) {
-            for (int64_t t = 0; t < T; t++) out[t * ldo + s] = NAN;
-            continue;
-        }
-        std::vector<int64_t> bit_buf(B + 2, 0);                 /* Zero-initialised */
-        int64_t* bit = bit_buf.data();
-        int64_t cnt_nan = 0;
-
-        for (int64_t t = 0; t < w - 1; t++) {
-            out[t * ldo + s] = NAN;
-            int64_t b = bucket_id[t];
-            if (b == 0) cnt_nan++;
-            else        _bit_add(bit, B, b, +1);
-        }
-        for (int64_t t = w - 1; t < T; t++) {
-            int64_t b = bucket_id[t];
-            if (b == 0) cnt_nan++;
-            else        _bit_add(bit, B, b, +1);
-
-            if (cnt_nan > 0 || b == 0) {
-                out[t * ldo + s] = NAN;
+            double v = x[t * ldx + s];
+            int missing = isnan(v);
+            double clean = missing ? 0.0 : v;
+            if (t < w) {
+                if (!missing) { SUM += v; WSUM += (double)(t + 1) * v; }
             } else {
-                int64_t cnt_less = _bit_prefix(bit, b - 1);
-                int64_t cnt_eq   = _bit_prefix(bit, b) - cnt_less;
-                out[t * ldo + s] = ((double)cnt_less + 0.5 * (double)(cnt_eq - 1))
-                                 / (double)(w - 1);
+                double drop = x[(t - w) * ldx + s];
+                int drop_nan = isnan(drop);
+                WSUM = WSUM - SUM + (double)w * clean;
+                SUM = SUM - (drop_nan ? 0.0 : drop) + clean;
+                cnt_nan -= drop_nan;
             }
-
-            int64_t old_t = t - w + 1;
-            int64_t ob = bucket_id[old_t];
-            if (ob == 0) cnt_nan--;
-            else         _bit_add(bit, B, ob, -1);
+            cnt_nan += missing;
+            out[t * ldo + s] = (t >= w - 1 && cnt_nan == 0) ? (WSUM / wsum) : NAN;
         }
     }
 }
 
-/* Entry point: W < 32 uses naive scan (cache-friendly, tiny constant); W >= 32 uses bucketized BIT. */
-void fm_ts_rank(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) {
-    if (w < 32) _ts_rank_naive (x, out, T, S, w, ldx, ldo);
-    else        _ts_rank_bucket(x, out, T, S, w, ldx, ldo);
-}
 
+/* Exact rolling rank. Only the current trailing window enters the ordered set;
+ * no full-sample compression, bucket boundaries, or future values. */
+void fm_ts_rank(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) {
+    #pragma omp parallel for schedule(static)
+    for(int64_t s=0;s<S;++s) {
+        std::vector<double> window;
+        window.reserve((size_t)w);
+        int64_t missing=0;
+        for(int64_t t=0;t<T;++t) {
+            if(t>=w) {
+                double old=x[(t-w)*ldx+s];
+                if(isnan(old)) --missing;
+                else window.erase(std::lower_bound(window.begin(),window.end(),old));
+            }
+            double v=x[t*ldx+s];
+            if(isnan(v)) ++missing;
+            else window.insert(std::upper_bound(window.begin(),window.end(),v),v);
+            if(t<w-1 || missing) {out[t*ldo+s]=NAN;continue;}
+            auto lo=std::lower_bound(window.begin(),window.end(),v);
+            auto hi=std::upper_bound(lo,window.end(),v);
+            out[t*ldo+s]=((double)(lo-window.begin())+.5*(double)(hi-lo-1))/(double)(w-1);
+        }
+    }
+}
 
 /* ============================================================================
  * Rolling pair — fm_ts_corr / fm_ts_cov

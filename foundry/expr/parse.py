@@ -2,7 +2,7 @@
 reading source code (they are what an LLM author reads back).
 
 Grammar = the inverse of `Tree.pretty()`:
-    field                         btc_fees
+    field                         ma_dist_20
     op(args...)                   every operator of foundry.ops.registry; windows are integer literals, the scalar
                                   of a binary_const / ts_param / pair_param operator is a numeric literal
 A bare number in a panel slot becomes a constant panel (`gt(x, 0.5)`); a formula must reference at least one field.
@@ -14,11 +14,9 @@ from __future__ import annotations
 import re
 from typing import Dict, Iterable
 
-from foundry.config import ExprConfig
 from foundry.expr.ast import Node, Tree
 from foundry.ops.registry import ARITY, MAX_WINDOW, MIN_WINDOW, OPS
 
-MAX_COST = ExprConfig().max_cost
 
 
 class ExprError(ValueError):
@@ -158,14 +156,7 @@ def parse(s: str, fields: Iterable[str]) -> Tree:
     return Tree(_Parser(s.strip(), set(fields)).parse())
 
 
-def causality(tree: Tree):
-    """Why the tree is not causal on every backend, or None."""
-    bad = [f'{n.op} 窗口 {n.window} > {OPS[n.op].causal_window}' for n in tree.root.walk()
-           if not n.leaf and OPS[n.op].causal_window is not None and n.window > OPS[n.op].causal_window]
-    return f'非因果算子:{"; ".join(bad)}(CPU 实现在该窗口以上用全样本桶边界)' if bad else None
-
-
-def validate(s: str, fields: Iterable[str]) -> Dict:
+def validate(s: str, fields: Iterable[str], max_cost: int) -> Dict:
     """-> dict(ok, error, cost, n_ops, fields, windows, pretty, tree); never raises (batch screening)."""
     try:
         t = parse(s, fields)
@@ -173,12 +164,9 @@ def validate(s: str, fields: Iterable[str]) -> Dict:
         return dict(ok=False, error=str(e))
     nodes = list(t.root.walk())
     cost = t.cost()
-    if cost > MAX_COST:
-        return dict(ok=False, error=f'cost {cost} > 上限 {MAX_COST}([expr] max_cost)。简化表达式或减少嵌套层数', cost=cost)
+    if cost > max_cost:
+        return dict(ok=False, error=f'cost {cost} > 上限 {max_cost}([expr] max_cost)。简化表达式或减少嵌套层数', cost=cost)
     if not any(n.kind == 'operand' for n in nodes):
         return dict(ok=False, error='表达式不含任何字段(纯常数树)')
-    why = causality(t)
-    if why:
-        return dict(ok=False, error=why, cost=cost)
     return dict(ok=True, error=None, cost=cost, n_ops=sum(not n.leaf for n in nodes), fields=t.fields(),
                 windows=sorted({n.window for n in nodes if n.window is not None}), pretty=t.pretty(), tree=t)
