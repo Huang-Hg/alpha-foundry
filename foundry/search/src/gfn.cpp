@@ -31,24 +31,24 @@ struct Model {
     std::mt19937_64 rng;
     std::vector<State> samples;
     std::vector<Probe> probes;
-    int maxlen,maxcost,maxts,causal,ordinary=0,epoch=0,trained=-1;   // causal: largest window of a CAUSAL_WINDOW slot
+    int maxlen,maxcost,maxts,ordinary=0,epoch=0,trained=-1;
     std::string grammar;
-    Model(const std::string& spec,int len,int cost,int ts,int causal_window,uint64_t seed)
-        :rng(seed),maxlen(len),maxcost(cost),maxts(ts),causal(causal_window),grammar(spec) {
+    Model(const std::string& spec,int len,int cost,int ts,uint64_t seed)
+        :rng(seed),maxlen(len),maxcost(cost),maxts(ts),grammar(spec) {
         require(len>=3 && len<=64 && cost>=3 && cost<=100 && ts>=0 && ts<=64,"invalid grammar budget");
         std::istringstream rows(spec); std::string line;
         while(std::getline(rows,line)) {
             std::istringstream r(line); Action a; int n,t;
             require(bool(r>>a.name>>a.out>>a.cost>>n),"invalid grammar row");
-            require(a.out>=0&&a.out<=5&&a.cost>=0&&n>=0&&n<=4,"invalid production");
+            require(a.out>=0&&a.out<=4&&a.cost>=0&&n>=0&&n<=4,"invalid production");
             require(a.name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")==std::string::npos,"invalid token name");
-            for(int i=0;i<n;i++) { require(bool(r>>t)&&t>=0&&t<=5,"invalid slot"); a.children.push_back(t); }
+            for(int i=0;i<n;i++) { require(bool(r>>t)&&t>=0&&t<=4,"invalid slot"); a.children.push_back(t); }
             a.ts=a.name.rfind("ts_",0)==0;
             actions.push_back(a);
         }
         require(!actions.empty(),"empty grammar");
-        for(int slot=0;slot<4;slot++) {
-            bool leaf=false; for(auto&a:actions) if(a.children.empty() && (a.out==slot||(slot==3&&a.out==2&&std::stod(a.name)<=causal))) leaf=true;
+        for(int slot=0;slot<3;slot++) {
+            bool leaf=false; for(auto&a:actions) if(a.children.empty() && a.out==slot) leaf=true;
             require(leaf,"grammar lacks terminal for a slot");
         }
         w1.resize(H*F); w2.resize(actions.size()*(H+1)); z.assign(C+1,0);
@@ -65,12 +65,11 @@ struct Model {
     bool legal(const State&s,int id) const {
         if(s.slots.empty())return false;
         const auto&a=actions[id];int slot=s.slots.back();
-        if(a.out!=slot && !(slot==3&&a.out==2&&std::stod(a.name)<=causal)
-                       && !(slot==4&&a.out==1&&std::stod(a.name)!=0))return false;
+        if(a.out!=slot && !(slot==3&&a.out==1&&std::stod(a.name)!=0))return false;
         if(a.ts&&s.nest.back()>=maxts)return false;
         int need=s.cost+a.cost;
-        for(size_t i=0;i+1<s.slots.size();i++)need+=s.slots[i]<=1||s.slots[i]==4;
-        for(int c:a.children)need+=c<=1||c==4;
+        for(size_t i=0;i+1<s.slots.size();i++)need+=s.slots[i]<=1||s.slots[i]==3;
+        for(int c:a.children)need+=c<=1||c==3;
         return need<=maxcost && s.seq.size()+s.slots.size()+a.children.size()<=size_t(maxlen);
     }
     void step(State&s,int a) const {
@@ -306,13 +305,13 @@ bool inout(PyObject*obj,npy_intp n) {
 }
 
 PyObject* policy_new(PyTypeObject*type,PyObject*args,PyObject*kw) {
-    static const char*names[]={"grammar","max_tokens","max_cost","max_ts_depth","causal_window","seed",nullptr};
-    const char*spec; int len,cost,ts,causal; uint64_t seed;
-    if(!PyArg_ParseTupleAndKeywords(args,kw,"siiiiO&:Policy",const_cast<char**>(names),&spec,&len,&cost,&ts,&causal,seed_arg,&seed))
+    static const char*names[]={"grammar","max_tokens","max_cost","max_ts_depth","seed",nullptr};
+    const char*spec; int len,cost,ts; uint64_t seed;
+    if(!PyArg_ParseTupleAndKeywords(args,kw,"siiiO&:Policy",const_cast<char**>(names),&spec,&len,&cost,&ts,seed_arg,&seed))
         return nullptr;
     auto*self=reinterpret_cast<PolicyObject*>(type->tp_alloc(type,0));
     if(!self) return nullptr;
-    if(!guarded([&]{ self->model=new Model(spec,len,cost,ts,causal,seed); })) { Py_DECREF(self); return nullptr; }
+    if(!guarded([&]{ self->model=new Model(spec,len,cost,ts,seed); })) { Py_DECREF(self); return nullptr; }
     return reinterpret_cast<PyObject*>(self);
 }
 

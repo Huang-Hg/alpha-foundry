@@ -1,4 +1,5 @@
 # build outputs
+.venv/
 __pycache__/
 *.pyc
 *.pyd
@@ -13,7 +14,7 @@ __pycache__/
 /logs/
 /output/
 
-# local only, never public: market data, the production library, the Quantiacs venue, internal notes
+# local only: market data, production library, external venue tools, internal notes
 /data/
 /production/
 /venues/

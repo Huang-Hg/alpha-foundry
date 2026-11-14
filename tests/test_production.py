@@ -1,48 +1,50 @@
-"""The production portfolio reproduces its recorded books, returns and reference bit for bit (local: GPU + data).
+"""Explicit production-baseline audit; never records or migrates a baseline.
 
-The record lives next to the library (production/regression.npz, local only, like the library itself). A change
-that moves it is either a bug or a deliberate semantic change; in the latter case re-record it with
-    python -m tests.test_production record
-and state the change. A data rebuild also moves it (the research window is fixed, but qnt revises history)."""
+This suite requires an independently provisioned current-protocol production library and
+baseline on the authorized worker. Historical baselines remain untouched and are
+rejected when their protocol differs. General integration uses tests.fixtures instead.
+"""
+from dataclasses import asdict
 import json
-import sys
 import unittest
 
-import cupy as cp
 import numpy as np
 
-from foundry.config import ROOT
-from foundry.engine import Engine
-from foundry.portfolio.library import Library
-from foundry.portfolio.portfolio import Portfolio
+from foundry.adapters.library import FileLibraryStore
+from foundry.adapters.arrays import FileArrayStore
+from foundry.config import ROOT, load_config, path
+from foundry.contracts import Study
+from foundry.portfolio.library import PROTOCOL
+from foundry.research import Research
+from foundry.runtime import open_runtime
 
 RECORD = ROOT / 'production' / 'regression.npz'
 HEADLINE = ('sharpe', 'cagr', 'maxdd', 'wsharpe', 'recent_growth')
 
 
-def snapshot():
-    engine = Engine()
-    lib = Library.load()
-    rows = engine.formulas([m['expr'] for m in lib.members])
-    ref = Portfolio(engine, lib).reference
-    out = {f'member{i}_{k}': cp.asnumpy(r[f'_{k}']) for i, r in enumerate(rows) for k in ('W', 'rr')}
-    out.update(U=cp.asnumpy(ref.U), rr=cp.asnumpy(ref.rr), headline=np.array([getattr(ref, k) for k in HEADLINE]),
-               members=np.array(json.dumps(lib.members)))
-    return out
-
-
 class ProductionTests(unittest.TestCase):
     def test_production_portfolio_is_reproduced_bitwise(self):
-        record, now = np.load(RECORD), snapshot()
-        self.assertEqual(str(record['members']), str(now['members']), 'the library changed: re-record')
-        for k in record.files:
-            if k != 'members':
-                self.assertTrue(np.array_equal(record[k], now[k], equal_nan=True), k)
+        with np.load(RECORD) as record:
+            self.assertIn('protocol', record.files, 'historical baseline has no current protocol; explicit review required')
+            self.assertEqual(str(record['protocol']), PROTOCOL, 'baseline protocol differs; do not silently re-record')
+            study = Study(**json.loads(str(record['study'])))
+            settings = load_config()
+            with open_runtime(settings, study) as runtime:
+                engine = runtime.engine
+                research = Research(engine, FileLibraryStore(ROOT / 'production' / 'library.json'),
+                                    FileArrayStore(path(settings.portfolio.artifact_dir)))
+                library = research.portfolio.library
+                rows = research.evaluate_device(tuple(member.source for member in library.members),
+                                                research.context.id, report=True).rows
+                ref = research.portfolio.reference
+                now = {f'member{i}_{key}': engine.to_host(value)
+                       for i, row in enumerate(rows) for key, value in (('W', row.book), ('rr', row.returns))}
+                now.update(U=engine.to_host(ref.U), rr=engine.to_host(ref.rr),
+                           headline=np.array([getattr(ref, key) for key in HEADLINE]))
+                self.assertEqual(json.loads(str(record['members'])), [asdict(member) for member in library.members])
+                for key, value in now.items():
+                    self.assertTrue(np.array_equal(record[key], value, equal_nan=True), key)
 
 
 if __name__ == '__main__':
-    if sys.argv[1:] == ['record']:
-        np.savez_compressed(RECORD, **snapshot())
-        print(f'recorded {RECORD}')
-    else:
-        unittest.main()
+    unittest.main()

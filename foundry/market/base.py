@@ -1,64 +1,28 @@
 """Market: everything that differs between markets, and nothing else.
 
-A market plugin declares its fields (the panel components formulas can read), loads its data artifacts into a Panel
-over its research window, compiles its execution rules into an ExecutionSpec, names the universe a book may hold
+A market plugin declares its fields, compiles already-loaded data into an execution specification, names the universe a book may hold
 on each day, and states its calendar (periods per year, Sharpe convention). Formula evaluation, books, the
 execution kernel, statistics, admission and search are shared by every market.
 """
 from __future__ import annotations
 
-import importlib
-from dataclasses import dataclass
-from typing import Tuple
-
-import numpy as np
-
-from foundry.backtest.spec import ExecutionSpec
-from foundry.core.panel import Field, Panel
-from foundry.expr.evaluate import Backend
-
-
-@dataclass(frozen=True)
-class Window:
-    """Research rows [0, end) of the loaded grid; statistics and holdings start at `start`."""
-    dates: np.ndarray                  # datetime64[D], rows [0, end)
-    start: int
-
-    @property
-    def stat_dates(self):
-        return self.dates[self.start:]
+from foundry.core.panel import Field
+from foundry.contracts import Backend, LoadedStudy, MarketData, Study
 
 
 class Market:
     name = ''
+    decision_clock = 'session_close'
+    execution_clock = 'next_session_open'
     ppy = 252.0
-    geometric = True                   # Sharpe on log returns; the Quantiacs crypto convention is arithmetic
+    geometric = True                   # Market-level descriptive statistics use log returns.
     categories: dict = {}              # category -> description, for formula authors
-    cfg: object                        # the market's config section: data_dir, start, end and its execution rules
-
-    def load(self, backend: Backend) -> Tuple[Panel, ExecutionSpec, Window]:
+    def compile(self, data: MarketData, backend: Backend, study: Study) -> LoadedStudy:
         raise NotImplementedError
 
-    def universe(self, panel: Panel):
+    def universe(self, panel):
         """Bool (T,S) on the panel's device: the assets a book may hold each day."""
         raise NotImplementedError
-
-
-def market(name: str) -> Market:
-    return importlib.import_module(f'foundry.market.{name}').MARKET
-
-
-def long_table(file, start: str, end: str, columns):
-    """A long (date, symbol, field...) parquet -> (dates up to `end`, symbols, {field: (T,S)}, first research row).
-    A symbol-day without a row is NaN."""
-    import pandas as pd
-    df = pd.read_parquet(file)
-    df = df[df['date'] <= pd.Timestamp(end)]
-    dates, symbols = np.sort(df['date'].unique()), np.sort(df['symbol'].unique())
-    grids = {c: np.ascontiguousarray(df.pivot(index='date', columns='symbol', values=c)
-                                     .reindex(index=dates, columns=symbols).to_numpy(dtype=np.float64)) for c in columns}
-    dates = dates.astype('datetime64[D]')
-    return dates, list(symbols), grids, int(np.searchsorted(dates, np.datetime64(start)))
 
 
 EPS = 1e-12

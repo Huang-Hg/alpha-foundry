@@ -50,7 +50,7 @@ SINGLE_AS_PORTFOLIO = dict(SINGLE, objective='portfolio')
 SINGLE_CLOSED = dict(SINGLE, gate=dict(GATE, required_appraisal=None))
 PROBE = dict(phase='evaluating', objective='probe', mode='gfn', epoch=1, epochs=2, unique_evaluations=5,
              g1=5, g2=1, low_corr=1, recent=[dict(expr='close', g1=True, g2=True, passed=True)])
-MARKET = dict(RUNNING, market='crypto')
+MARKET = dict(RUNNING, market='us_equity')
 
 NOW = 1000.
 JOB = dict(t=NOW-40, op='family', source='tmp/funnel/agents/r7/vol_regime/round2.txt', dt=12.3, ok=True,
@@ -67,7 +67,7 @@ IDLE = dict(BUSY, cur=None)
 SERVICE = [dict(kind='service', phase='warm', warm='装载面板与派生特征…', now=NOW, elapsed_seconds=5),
            IDLE, BUSY, dict(BUSY, _source_mtime=0., _source_name='service_status.json')]
 SERVICE_STALE = dict(BUSY, _source_mtime=time.time()-120)
-SERVICE_MARKET = dict(BUSY, market='crypto')
+SERVICE_MARKET = dict(BUSY, market='us_equity')
 
 GLIDES = [dict(unique_evaluations=100, portfolio_sharpe=2.0, phase='evaluating'),
           dict(unique_evaluations=300, portfolio_sharpe=2.2, phase='evaluating'),
@@ -162,8 +162,8 @@ class MonitorTests(unittest.TestCase):
         header = lambda state: render(state, rows=30, width=120).plain.split('\n')[0]
         self.assertNotIn('ALPHA SEARCH · ', header(RUNNING))
         self.assertNotIn('评价服务 · ', header(BUSY))
-        self.assertIn('ALPHA SEARCH · CRYPTO', header(MARKET))
-        self.assertIn('评价服务 · CRYPTO', header(SERVICE_MARKET))
+        self.assertIn('ALPHA SEARCH · US_EQUITY', header(MARKET))
+        self.assertIn('评价服务 · US_EQUITY', header(SERVICE_MARKET))
         for state in (MARKET, SERVICE_MARKET):
             for width, height in GRID:
                 with self.subTest(kind=state.get('kind'), width=width, height=height):
@@ -187,7 +187,7 @@ class MonitorTests(unittest.TestCase):
             output = io.StringIO()
             heartbeat = Mock()
             with patch('sys.stdout', output), patch('foundry.monitor.watch.time.sleep') as sleep:
-                watch(path, heartbeat=heartbeat)
+                watch(path, frame_seconds=.1, heartbeat=heartbeat)
             self.assertEqual(output.getvalue().count('ALPHA SEARCH'), 1)
             sleep.assert_not_called()
             heartbeat.assert_not_called()
@@ -214,7 +214,7 @@ class MonitorTests(unittest.TestCase):
                 with patch('sys.stdout', output), patch('foundry.monitor.watch.time.sleep', advance), \
                         patch('foundry.monitor.watch.time.monotonic', lambda: clock[0]):
                     with self.assertRaises(KeyboardInterrupt):
-                        watch(source)
+                        watch(source, frame_seconds=.1)
             stream = output.getvalue()
             self.assertIn('111', frames[0])
             self.assertIn('222', stream[len(frames[0]):])

@@ -2,17 +2,17 @@
 from __future__ import annotations
 
 import os
-import time
+import tempfile
 from pathlib import Path
 
 
 def publish(path: Path, content: bytes) -> None:
     """Replace `path` atomically: a reader sees the old file or the new one, never a partial write."""
-    temp = path.with_suffix(f'{path.suffix}.{os.getpid()}.tmp')
-    temp.write_bytes(content)
-    while True:
-        try:
-            os.replace(temp, path)
-            return
-        except PermissionError:      # Windows: a reader has the file open right now
-            time.sleep(0.02)
+    fd, name = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(content)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)

@@ -1,8 +1,10 @@
-# Research runtime. Native extensions are built with ./build.sh (needs numpy headers and g++; msys2 ucrt64 on Windows).
+# Research runtime. Native extensions use Linux Python/NumPy headers and g++ via bash build.sh, including WSL2.
 numpy>=2.0
 pandas>=2.0
 pyarrow>=17
 rich>=13             # terminal dashboard
 paramiko>=3          # cloud evaluation service over SSH
-cupy-cuda12x>=13.6   # GPU backend; NVRTC comes from the CUDA toolkit or the nvidia-cuda-nvrtc-cu12 wheel
-# The Quantiacs venue (venues/quantiacs, local only) runs in its own environment with qnt, xarray, nbformat, nbclient.
+# Install the GPU backend for the runtime CUDA major separately.
+# The validated Colab CUDA 13 runtime uses: pip install cupy-cuda13x
+
+jsonschema>=4

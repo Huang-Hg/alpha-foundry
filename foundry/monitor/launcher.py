@@ -12,7 +12,7 @@ import sys
 import time
 
 from foundry.config import ROOT
-from foundry.core.files import publish
+from foundry.adapters.files import publish
 from .cells import BASE
 from .watch import watch
 
@@ -32,14 +32,14 @@ def alive(owner):
     return owner.get('pid',0)>0 and 0<=time.time()-owner.get('heartbeat',0)<3
 
 
-def main(source, attach, once):
+def main(source, attach, once, config):
     """source: status file to show from now on (None keeps the current one, the live search run at first);
     attach: render in this terminal; once: print one complete frame and exit."""
     STATE.mkdir(parents=True,exist_ok=True)
     if source or not SOURCE.exists():
         write(SOURCE,{'status_path':str((source or LIVE).resolve())})
     if attach or once or os.name!='nt':
-        watch(SOURCE,once=once,heartbeat=lambda:write(OWNER,{'pid':os.getpid(),'heartbeat':time.time()}))
+        watch(SOURCE,config.frame_seconds,once=once,heartbeat=lambda:write(OWNER,{'pid':os.getpid(),'heartbeat':time.time()}))
         return
     try:
         owner=json.loads(OWNER.read_text(encoding='utf-8'))

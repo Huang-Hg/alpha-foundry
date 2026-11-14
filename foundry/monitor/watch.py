@@ -14,7 +14,6 @@ import time
 from rich.console import Console
 from rich.live import Live
 
-from foundry.config import MonitorConfig
 from .cells import BASE
 from .schema import ENDED, GLIDE, RESTART
 from .view import render
@@ -45,7 +44,7 @@ class Glide:
         return out
 
 
-def watch(path, once=False, heartbeat=None):
+def watch(path, frame_seconds, once=False, heartbeat=None):
     path=Path(path)
     tty=sys.stdout.isatty()
     # Windows terminals support VT even when their parent exported TERM=dumb.
@@ -88,7 +87,6 @@ def watch(path, once=False, heartbeat=None):
         # Half-block card edges are painted with colour; without colour they would print as bars.
         console.print(render(read()[1] or {},width=console.width,edges=tty))
         return
-    frame_seconds=MonitorConfig().frame_seconds
     # Full-screen replacement must use the alternate buffer. Cursor-up redraws
     # cannot erase rows that have already overflowed into terminal scrollback.
     # OSC 11 extends the panel colour into the window padding; OSC 111 gives it back.

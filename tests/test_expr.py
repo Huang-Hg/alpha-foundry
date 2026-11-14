@@ -3,11 +3,13 @@ import unittest
 
 import numpy as np
 
-from foundry.expr.evaluate import backend, evaluate
-from foundry.expr.parse import MAX_COST, ExprError, parse, validate
+from foundry.expr.evaluate import evaluate
+from foundry.runtime import prepare_backend
+from foundry.expr.parse import ExprError, parse, validate
 from foundry.ops.registry import ARITY, OPS
 
 FIELDS = ('x', 'y', 'z')
+MAX_COST = 25
 
 
 class ParseTests(unittest.TestCase):
@@ -36,16 +38,16 @@ class ParseTests(unittest.TestCase):
                 self.assertIn(part, str(e.exception))
 
     def test_validator(self):
-        ok = validate('gt(ts_mean(x, 20), 0.5)', FIELDS)
+        ok = validate('gt(ts_mean(x, 20), 0.5)', FIELDS, MAX_COST)
         self.assertTrue(ok['ok'])
         self.assertEqual((ok['fields'], ok['windows'], ok['n_ops']), (['x'], [20], 2))
-        self.assertIn('非因果', validate('ts_rank(x, 32)', FIELDS)['error'])
-        self.assertTrue(validate('ts_rank(x, 31)', FIELDS)['ok'])
-        self.assertIn('纯常数', validate('add(1, 2)', FIELDS)['error'])
+        self.assertTrue(validate('ts_rank(x, 120)', FIELDS, MAX_COST)['ok'])
+        self.assertTrue(validate('ts_rank(x, 31)', FIELDS, MAX_COST)['ok'])
+        self.assertIn('纯常数', validate('add(1, 2)', FIELDS, MAX_COST)['error'])
         deep = 'x'
         while parse(deep, FIELDS).cost() <= MAX_COST:
             deep = f'ts_mean({deep}, 5)'
-        self.assertIn('cost', validate(deep, FIELDS)['error'])
+        self.assertIn('cost', validate(deep, FIELDS, MAX_COST)['error'])
 
     def test_scalars_are_continuous_and_bare_numbers_are_constant_panels(self):
         t = parse('gt(x, 0.37)', FIELDS)
@@ -63,8 +65,8 @@ class RegistryTests(unittest.TestCase):
         rng = np.random.default_rng(1)
         fields = {k: rng.standard_normal((300, 7)) for k in FIELDS}
         cache = {}
-        a = evaluate(parse('add(ts_mean(x, 5), ts_mean(x, 5))', FIELDS).root, fields, backend('cpu'), cache)
-        np.testing.assert_array_equal(a, 2 * evaluate(parse('ts_mean(x, 5)', FIELDS).root, fields, backend('cpu'), {}))
+        a = evaluate(parse('add(ts_mean(x, 5), ts_mean(x, 5))', FIELDS).root, fields, prepare_backend('cpu'), cache, np.ones((300,7),bool))
+        np.testing.assert_array_equal(a, 2 * evaluate(parse('ts_mean(x, 5)', FIELDS).root, fields, prepare_backend('cpu'), {}, np.ones((300,7),bool)))
         self.assertEqual(len(cache), 2)                     # ts_mean once, add once
         self.assertTrue(np.isnan(a[:4]).all() and np.isfinite(a[4:]).all())
 

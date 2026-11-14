@@ -1,30 +1,19 @@
 """Tree evaluation on any operator backend.
 
-`evaluate(node, fields, backend, cache)` walks the tree once, calls the backend implementation of every operator
+`evaluate(node, fields, backend, cache, universe)` walks the tree once, calls the backend implementation of every operator
 with the signature of its kind, and keeps each internal subtree's result in `cache` under the subtree hash, so the
 common subtrees of a batch of formulas are computed once. Field panels are returned as they are (never copied into
-the cache). A backend is (array module, implementation table); `backend(name)` loads foundry/ops/<name>.py:
-'cpu' (the C++ reference), 'cuda' (cupy kernels) or 'portable' (numpy only).
+the cache). Backend implementations are prepared by the runtime and injected.
 """
 from __future__ import annotations
 
-import importlib
-from typing import Callable, Dict, Mapping, NamedTuple
+from typing import Dict, Mapping
 
 from foundry.expr.ast import Node
+from foundry.contracts import Backend
 
 
-class Backend(NamedTuple):
-    xp: object
-    impl: Dict[str, Callable]
-
-
-def backend(name: str) -> Backend:
-    xp = importlib.import_module('cupy' if name == 'cuda' else 'numpy')
-    return Backend(xp, importlib.import_module(f'foundry.ops.{name}').IMPL)
-
-
-def evaluate(n: Node, fields: Mapping, backend: Backend, cache: Dict[int, object]):
+def evaluate(n: Node, fields: Mapping, backend: Backend, cache: Dict[int, object], universe):
     if n.kind == 'operand':
         return fields[n.op]
     if n.kind in ('const_add', 'const_mul'):
@@ -35,10 +24,11 @@ def evaluate(n: Node, fields: Mapping, backend: Backend, cache: Dict[int, object
     kind, ch = n.kind, n.children
 
     def sub(i):
-        return evaluate(ch[i], fields, backend, cache)
+        return evaluate(ch[i], fields, backend, cache, universe)
 
     if kind == 'unary':
-        v = f(sub(0))
+        x=sub(0)
+        v = f(backend.xp.where(universe,x,backend.xp.nan)) if n.op.startswith('cs_') else f(x)
     elif kind == 'binary':
         v = f(sub(0), sub(1))
     elif kind == 'binary_const':

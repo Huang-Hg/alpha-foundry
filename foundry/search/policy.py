@@ -1,8 +1,7 @@
 """Search grammar and the native typed-prefix GFlowNet policy (foundry.search._gfn).
 
 The grammar is a text protocol, one production per line: token, output slot, AST cost, child count, child slots.
-Slots: PANEL a sub-expression, CONST a constant, WINDOW a time-series window, CAUSAL_WINDOW a WINDOW token no larger
-than the causal limit of the operator (registry OPS[..].causal_window, handed to the policy), NONZERO a constant
+Slots: PANEL a sub-expression, CONST a constant, WINDOW a causal time-series window, NONZERO a constant
 other than 0, PAIR_WINDOW a pair window. Sampling, training and CEM numerics all run in the extension.
 """
 from __future__ import annotations
@@ -12,7 +11,7 @@ import numpy as np
 from foundry.ops.registry import COST, OPS, WINDOW_LADDER
 from foundry.search import _gfn
 
-PANEL, CONST, WINDOW, CAUSAL_WINDOW, NONZERO, PAIR_WINDOW = range(6)
+PANEL, CONST, WINDOW, NONZERO, PAIR_WINDOW = range(5)
 
 # The searchable part of the operator table; the order fixes the action ids and so the sampled sequences.
 UNARY = ('sign', 'abs', 'neg', 'log', 'sqrt', 'tanh', 's_log_1p')
@@ -24,7 +23,6 @@ TS = ('ts_mean', 'ts_std', 'ts_min', 'ts_max', 'ts_delta', 'ts_ref', 'ts_slope',
       'ts_arg_min', 'ts_arg_max', 'ts_ddown', 'ts_rank')
 PAIR = ('ts_corr', 'ts_cov')
 CONSTANTS = ('-2', '-1', '-0.5', '-0.2', '-0.1', '-0.05', '0', '0.05', '0.1', '0.2', '0.5', '0.8', '1', '2')
-(CAUSAL,) = {OPS[name].causal_window for name in TS if OPS[name].causal_window}     # one CAUSAL_WINDOW slot type
 
 
 def _op(name, *slots):
@@ -38,7 +36,7 @@ def grammar(fields, window_caps):
     rows += [_op(name, PANEL, PANEL) for name in BINARY]
     rows += [_op(name, PANEL, CONST) for name in COMPARE_CONST]
     rows += [_op(name, PANEL, NONZERO if name in NONZERO_CONST else CONST) for name in BINARY_CONST]
-    rows += [_op(name, PANEL, CAUSAL_WINDOW if OPS[name].causal_window else WINDOW) for name in TS]
+    rows += [_op(name, PANEL, WINDOW) for name in TS]
     rows += [_op(name, PANEL, PANEL, PAIR_WINDOW) for name in PAIR]
     # A window is an attribute of its operator's node, so it adds no cost of its own.
     rows += [f'{w} {WINDOW} 0 0' for w in WINDOW_LADDER if w <= window_caps[0]]
@@ -52,7 +50,7 @@ class Policy:
 
     def __init__(self, fields, seed, max_tokens, max_cost, max_ts_depth, window_caps):
         self.spec = grammar(fields, window_caps)
-        self.native = _gfn.Policy(self.spec, max_tokens, max_cost, max_ts_depth, CAUSAL, seed)
+        self.native = _gfn.Policy(self.spec, max_tokens, max_cost, max_ts_depth, seed)
 
     def sample(self, count, probes, context, random=False):
         """-> dict(epoch, ordinary, probe_count, expressions): `ordinary` policy samples, then 12 per probe.

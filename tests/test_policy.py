@@ -26,7 +26,7 @@ class PolicyTests(unittest.TestCase):
         batch = self.policy.sample(256, 4, [0.] * 16)
         self.assertEqual(len(batch['expressions']), 256 + 12 * batch['probe_count'])
         for expr in batch['expressions']:
-            v = validate(expr, FIELDS)
+            v = validate(expr, FIELDS, 25)
             self.assertTrue(v['ok'], (expr, v))
             self.assertLessEqual(v['cost'], 25)
             self.assertLessEqual(len(re.findall(r'[A-Za-z_]\w*|-?\d+\.?\d*', expr)), 13, expr)
@@ -35,8 +35,6 @@ class PolicyTests(unittest.TestCase):
                 """Time-series operators stacked on the deepest path below (and including) node."""
                 if node.leaf:
                     return 0
-                if node.op == 'ts_rank':
-                    self.assertLessEqual(node.window, 31)
                 return node.op.startswith('ts_') + max((check(child) for child in node.children), default=0)
             self.assertLessEqual(check(v['tree'].root), 2, expr)
 

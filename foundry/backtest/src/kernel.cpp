@@ -1,7 +1,7 @@
 /* foundry/backtest/src/kernel.cpp — daily execution kernel; see kernel.hpp for semantics.
  *
  * Optional inputs expand into template bools by presence: unused generalisations vanish at compile time, leaving the
- * base instantiation's loops identical to the qnt reproduction verbatim. That is required for bitwise agreement —
+ * base instantiation's symmetric execution loops identical. That is required for bitwise agreement —
  * -ffast-math lets the vectoriser reassociate reductions depending on loop shape and compiler version, so the
  * generalisations add separate loops or elementwise selects without altering the base reduction loops. Bitwise parity
  * holds within the same toolchain (across GCC versions or vs numpy pairwise-sum, differences are ~1e-16). */
@@ -12,7 +12,7 @@
 
 namespace bt {
 
-static constexpr double QNT_EPS = 1e-7;   // qnt.stats.EPS = 10**-7
+static constexpr double PRICE_EPS = 1e-7;
 
 template <bool SELL, bool BLOCK, bool CARRY>
 static void run(const double* w,
@@ -105,7 +105,7 @@ static void run(const double* w,
                 /* Freezing alters the operable equity-to-weight ratio, so a restricted asset still marked tradable
                  * could now cross its current position into the forbidden direction. Freeze those too and recompute
                  * until none does (the frozen set grows monotonically, at most S rounds; 1 round when unrestricted). */
-                if (w_operable < QNT_EPS) break;
+                if (w_operable < PRICE_EPS) break;
                 const uint8_t* bk = block + day * S;
                 bool refrozen = false;
                 for (int64_t a = 0; a < S; a++) {
@@ -120,7 +120,7 @@ static void run(const double* w,
             }
         }
 
-        if (w_operable < QNT_EPS) {
+        if (w_operable < PRICE_EPS) {
             eq_after = eq_before;
         } else {
             double step_slip = 0.0;

@@ -1,7 +1,7 @@
 """Cloud evaluation service: the local client reaches a cloud service through an SSH channel, same protocol.
 
     python -m foundry attach [host]     attach this workspace to the cloud service (start it if needed)
-    python -m foundry eval ...          evaluation now runs on the cloud GPU
+    python -m foundry request input.jsonl output.jsonl  evaluation runs on the cloud GPU
     python -m foundry detach            forget the cloud service (it keeps running); stop = stop it too
 
 Transport: a paramiko direct-tcpip channel per request (like ssh -L, in process, no tunnel to manage). The cloud
@@ -26,8 +26,7 @@ from typing import Dict, List
 import paramiko
 
 from foundry.config import ROOT
-from foundry.core.files import publish
-from foundry.portfolio.library import STORE
+from foundry.adapters.files import publish
 from foundry.service.protocol import PORTFILE
 
 REMOTE_ROOT = '/root/quant'                  # deployment convention: the code root on the system disk
@@ -35,7 +34,7 @@ PY = '/root/miniconda3/bin/python'          # sshd exec is a non-interactive she
 HOSTS = ROOT / 'mcp-ssh' / 'hosts.json'
 DEFAULT_HOST = 'quant-server'
 BOOT_BUDGET = 240.0
-SOURCES = ('*.py', '*.cu', '*.cpp', '*.hpp', '*.h')
+SOURCES = ('*.py', '*.cu', '*.cuh', '*.cpp', '*.hpp', '*.h')
 
 _LOGIN = re.compile(r'^\s*ssh\s+(?:-p\s*(\d+)\s+)?([^@\s]+)@(\S+?)(?:\s+-p\s*(\d+))?\s*$')
 _SSH: Dict[str, paramiko.SSHClient] = {}
@@ -107,7 +106,7 @@ def _alive(name: str, ssh: paramiko.SSHClient):
     finally:
         sftp.close()
     try:
-        request(dict(host=name, port=d['port']), dict(op='ping'), timeout=10.0)
+        request(dict(host=name, port=d['port']), dict(jsonrpc='2.0',id='status',method='system.status',params={}), timeout=10.0)
     except paramiko.ChannelException:                # nobody listens on the port any more
         return None
     return d
@@ -118,7 +117,6 @@ def attach(name: str = DEFAULT_HOST, quiet: bool = False) -> Dict:
     ssh = connect(name)
     diff = parity(ssh)
     assert not diff, 'cloud code differs from this workspace; deploy first (tar + upload, rebuild native sources):\n  ' + '\n  '.join(diff)
-    push_library(ssh)                                # a running service reloads the library by mtime
     d = _alive(name, ssh)
     if d is None:
         if not sh(ssh, 'pgrep -f "[f]oundry serve" || true').strip():
@@ -134,30 +132,10 @@ def attach(name: str = DEFAULT_HOST, quiet: bool = False) -> Dict:
             d = _alive(name, ssh)
         say(f'[remote] 就绪({time.time() - t0:.1f}s)')
     PORTFILE.parent.mkdir(parents=True, exist_ok=True)
-    PORTFILE.write_text(json.dumps(dict(host=name, port=d['port'], pid=d['pid'], started=d['started'], python=d['python']),
+    PORTFILE.write_text(json.dumps(dict(host=name, port=d['port'], pid=d['pid'], started=d['started']),
                                    ensure_ascii=False), encoding='utf-8')
     say(f'[remote] 已接到 {name}(pid {d["pid"]} · 云端 :{d["port"]})。此后评价全走云端。')
     return d
-
-
-def push_library(ssh: paramiko.SSHClient) -> None:
-    """The local library is the source of truth (admission is judged against it): upload it, or remove the cloud
-    copy when there is none here."""
-    target = f'{REMOTE_ROOT}/{STORE.relative_to(ROOT).as_posix()}'
-    if STORE.exists():
-        sh(ssh, f'mkdir -p {target.rsplit("/", 1)[0]}')
-        sftp = ssh.open_sftp()
-        sftp.put(str(STORE), target)
-        sftp.close()
-    else:
-        sh(ssh, f'rm -f {target}')
-
-
-def pull_library(name: str) -> None:
-    """--accept changed the cloud copy: bring it back so the local file stays the only original."""
-    sftp = connect(name).open_sftp()
-    sftp.get(f'{REMOTE_ROOT}/{STORE.relative_to(ROOT).as_posix()}', str(STORE))
-    sftp.close()
 
 
 def mirror(host: str, source: str, target, push_seconds: float) -> None:

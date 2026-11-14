@@ -9,11 +9,12 @@ field definition; nothing else changes.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from foundry.expr.evaluate import Backend
+from foundry.contracts import Backend
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,13 @@ class Field:
 class Panel:
     def __init__(self, dates: np.ndarray, assets: Sequence[str], fields: Sequence[Field],
                  sources: Mapping[str, np.ndarray], backend: Backend):
-        self.dates, self.assets, self.backend = dates, list(assets), backend
+        dates.setflags(write=False)
+        self.dates, self.assets, self.backend = dates, tuple(assets), backend
+        digest=hashlib.sha256(dates.tobytes()+('\n'.join(assets)).encode())
+        for name,value in sorted(sources.items()):
+            digest.update(name.encode());digest.update(np.ascontiguousarray(value).tobytes())
+            value.setflags(write=False)
+        self.snapshot=digest.hexdigest()
         self.fields: Dict[str, Field] = {f.name: f for f in fields}
         xp = backend.xp
         self._values = {k: xp.ascontiguousarray(xp.asarray(v)) for k, v in sources.items()}
@@ -60,3 +67,7 @@ class Panel:
             if f.formula:
                 out.setdefault(f.category, []).append(k)
         return out
+
+    def release(self):
+        """Release arrays owned by this study after its runtime is closed."""
+        self._values.clear()

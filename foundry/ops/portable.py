@@ -1,17 +1,14 @@
 """Portable operator backend: numpy only, for hosts without the native extensions (a hosted notebook).
 
-`IMPL` maps registry names to callables with the signature of their kind (foundry/ops/registry.py). Every kernel
-follows its CPU reference (foundry/ops/src/*.cpp) step by step: the same accumulation order, the same window rule (a
-windowed output needs rows t-w+1..t all non-NaN, so the first w-1 rows are NaN) and the same degenerate-window values,
-so it equals a strict-IEEE build of that source bitwise. The production build adds -ffast-math (fused multiply-adds,
-reciprocal division, vectorised reductions), which moves cancellation-prone results by more than rounding; the one
-such transformation mirrored here is ts_mean's multiply by 1/w (see tests/test_portable.py). Rolling kernels walk the
-rows in Python and vectorise across assets. ts_rank counts exactly, as the reference does up to its causal window
-(31); wider windows are rejected by validate().
+`IMPL` maps registry names to callables with the signature of their kind (foundry/ops/registry.py). The window rule
+requires rows t-w+1..t all non-NaN, so the first w-1 rows are NaN. Sum/mean share CUDA's oldest-anchored accumulation
+and FMA restoration so near-zero comparisons preserve their decisions. Other rolling kernels follow the native
+CPU implementation. Rolling kernels walk rows in Python and vectorise across assets; ranks count trailing values.
 
-Imports numpy and math only: the source is inlined into the Quantiacs notebook.
+Usable without a native extension or a GPU.
 """
 import math
+from decimal import Decimal, localcontext
 
 import numpy as np
 
@@ -190,29 +187,35 @@ def cs_scale(x):
     return np.where(ok[:, None] & valid, x / np.where(ok, total, 1.0)[:, None], NAN)
 
 
-# ---------------------------------------------------------------- time series: running sums
+# ---------------------------------------------------------------- time series: canonical centered sums
 def ts_sum(x, w):
-    """The reference sums assets in blocks of four (one AVX2 register: add row t, emit, drop row t-w+1) and the
-    remaining S mod 4 assets in its scalar loop (add row t, drop row t-w, emit); both orders are kept, so the sums
-    agree bitwise and ma_dist (price / mean - 1, which cancels to ~0) keeps its sign."""
+    """CUDA's oldest-anchored window order and one-rounding anchor restoration.
+
+    Decimal implements the one FMA per output without a platform-dependent
+    long-double width or a native-extension requirement. This portable backend
+    prioritizes identical threshold decisions over native backend throughput.
+    """
     T, S = x.shape
-    nan = np.isnan(x)
-    x0 = np.where(nan, 0.0, x)
-    v = S - S % 4
-    out = np.empty(x.shape)
-    s = np.zeros(S)
-    for t in range(T):
-        s = s + x0[t]
-        if t >= w:
-            s[v:] = s[v:] - x0[t - w, v:]
-        out[t] = s
-        if t >= w - 1:
-            s[:v] = s[:v] - x0[t - w + 1, :v]
-    return np.where(_nan_free(nan, w), out, NAN)
+    out = np.full(x.shape, NAN)
+    if T < w:
+        return out
+    anchor = x[:T - w + 1]
+    centered = np.zeros(anchor.shape)
+    for k in range(w):
+        centered += x[k:k + len(anchor)] - anchor
+    valid = ~np.isnan(centered)
+    with localcontext() as context:
+        context.prec = 1100
+        restored = np.fromiter((float(Decimal.from_float(float(a)) * w + Decimal.from_float(float(s)))
+                                for a, s in zip(anchor[valid], centered[valid])), dtype=np.float64,
+                               count=int(valid.sum()))
+    result = out[w - 1:]
+    result[valid] = restored
+    return out
 
 
 def ts_mean(x, w):
-    return ts_sum(x, w) * (1.0 / w)             # the production build compiles sum / w to sum * (1 / w)
+    return ts_sum(x, w) / w
 
 
 def ts_std(x, w):
@@ -426,7 +429,7 @@ def _counts(rows):
 
 
 def ts_rank(x, w):
-    """Average rank of the current value in its window, in [0,1] (exact counts: w <= 31)."""
+    """Average rank of the current value in its trailing window, in [0,1]."""
     def fn(rows):
         less, eq = _counts(rows)
         return (less + 0.5 * (eq - 1)) / (w - 1)
