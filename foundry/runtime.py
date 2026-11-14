@@ -182,12 +182,14 @@ class Runtime:
         self.close()
 
 
-def plan_precision(requested, supported):
+def plan_precision(requested, supported, screening):
     required = {'auto': {'f64', 'mixed'}, 'paired': {'f64', 'paired'}, 'f64': {'f64'}}[requested]
-    if required <= supported:
+    if required <= screening:
         return PrecisionPlan(requested, requested, 'requested_policy_supported', tuple(sorted(supported)))
     if supported == frozenset({'f64'}):
         return PrecisionPlan(requested, 'f64', 'executor_f64_only', ('f64',))
+    if screening == frozenset({'f64'}):
+        return PrecisionPlan(requested, 'f64', 'risk_screening_requires_f64', tuple(sorted(supported)))
     raise ValueError(f'unsupported precision policy {requested}: executor supports {sorted(supported)}')
 
 
@@ -202,7 +204,7 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             prepare_execution = cuda.prepare
             if study.market == 'crypto_perpetual':
                 from foundry.backtest import perpetual_cuda
-                prepare_execution = perpetual_cuda.prepare
+                prepare_execution = lambda: perpetual_cuda.prepare(settings.cuda.mixed_return_atol, settings.portfolio.metric_atol)
         elif name in ('cpu', 'portable'):
             from foundry.backtest import cpu
             resources = HostResources()
@@ -219,7 +221,8 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             executor = prepare_execution()
             cleanup.callback(executor.close)
             loaded = load_study(settings, study, backend)
-            context = study_snapshot(loaded, settings, plan_precision(settings.cuda.precision, executor.precisions))
+            context = study_snapshot(loaded, settings, plan_precision(settings.cuda.precision,
+                                      executor.precisions, executor.screening_precisions))
             engine = Engine(loaded, backend, executor, resources, settings, context)
             cleanup.callback(engine.close)
         runtime = Runtime(settings, loaded, backend, executor, resources, engine)

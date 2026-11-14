@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from functools import wraps
 from collections import OrderedDict
+from dataclasses import replace
 import hashlib
 
 from foundry.contracts import Backend, LoadedStudy, ReturnBatch, StudySnapshot
@@ -55,9 +56,11 @@ class Engine:
         self.years = M.Years(loaded.window.stat_dates, self.xp)
         self.top_days = max(1, int((len(self.dates) - self.start) * 0.01))
         self.candidate_batch, self.trial_batch = resources.batch_sizes(settings.cuda, self.panel.shape)
+        self.commit_batch = self.candidate_batch if executor.parallel_trials else 1
         self.precision = context.precision.effective
         self._members: dict[tuple, tuple] = {}
         self._arrays: OrderedDict[ArraySource, object] = OrderedDict()
+        self._reports = OrderedDict()
 
     @resource_scope
     def validate_batch(self, batch):
@@ -182,6 +185,26 @@ class Engine:
 
     @resource_scope
     def evaluate_sources(self, sources, report=True, precision='f64', null_shift=False):
+        """Snapshot-scoped measurements; returned buffers are borrowed read-only.
+
+        Each caller gets its own mutable row. Portfolio verdicts are recomputed.
+        """
+        if not report or precision != 'f64':
+            return self._compute_sources(sources, report, precision, null_shift)
+        keys = [(self.context.id, source, precision, null_shift) for source in sources]
+        found = {key: self._reports[key] for key in keys if key in self._reports}
+        missing = list(dict.fromkeys(key for key in keys if key not in found))
+        if missing:
+            computed = self._compute_sources([key[1] for key in missing], True, precision, null_shift)
+            found.update(zip(missing, computed))
+        for key in keys:
+            self._reports[key] = found[key]
+            self._reports.move_to_end(key)
+            if len(self._reports) > self.candidate_batch:
+                self._reports.popitem(last=False)
+        return [replace(found[key]) for key in keys]
+
+    def _compute_sources(self, sources, report, precision, null_shift):
         """Every source becomes a book before the same execution/metrics path."""
         rows = [EvaluationRow(source, True, None, precision) for source in sources]
         formulas = [i for i, source in enumerate(sources) if isinstance(source, Formula)]
@@ -311,6 +334,7 @@ class Engine:
         """Release this study's caches; runtime closes its execution resources."""
         self._members.clear()
         self._arrays.clear()
+        self._reports.clear()
         self.fields.clear()
         self.panel.release()
         del self.spec, self.universe, self.slots, self.years

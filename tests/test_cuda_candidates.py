@@ -188,6 +188,54 @@ class ArrayBoundaryTests(unittest.TestCase):
 
 
 class ArrayMarketTests(unittest.TestCase):
+    def test_measurement_cache_is_bounded_and_does_not_cache_mutable_rows_or_noise(self):
+        settings = settings_for('us_equity')
+        settings = replace(settings, cuda=replace(settings.cuda, candidate_batch=2))
+        with open_runtime(settings, study_for(settings, 'us_equity')) as runtime:
+            engine = runtime.engine
+            sources = tuple(Formula(e) for e in EXPRESSIONS)
+            with patch.object(engine, '_compute_sources', wraps=engine._compute_sources) as compute:
+                first = engine.evaluate_sources(sources[:2])
+                first[0].ok = False
+                again = engine.evaluate_sources(sources[:2])
+                self.assertTrue(again[0].ok)
+                self.assertEqual(compute.call_count, 1)
+                noise = engine.evaluate_sources(sources[:1], null_shift=True)
+                self.assertEqual(compute.call_count, 2)
+                self.assertFalse(bool(cp.any(noise[0].book)))
+                engine.evaluate_sources(sources[2:])
+                self.assertLessEqual(len(engine._reports), 2)
+                engine.evaluate_sources(sources[:1])
+                self.assertEqual(compute.call_count, 4)
+
+    def test_batched_commit_preserves_greedy_order_versions_and_atomic_publication(self):
+        for market in ('us_equity', 'a_share', 'crypto_spot', 'crypto_perpetual'):
+            with self.subTest(market=market), runtime_for(market) as runtime:
+                engine = runtime.engine
+                candidates = tuple(Candidate(str(i), Formula(e)) for i, e in enumerate(EXPRESSIONS))
+                serial, batched = research_for(runtime), research_for(runtime)
+                batch_size = engine.commit_batch
+                engine.commit_batch = 1
+                expected = serial.commit(candidates, serial.context.id)
+                engine.commit_batch = batch_size
+                actual = batched.commit(candidates, batched.context.id)
+                self.assertEqual(serial.portfolio.library, batched.portfolio.library)
+                for a, b in zip(expected.rows, actual.rows):
+                    self.assertEqual((a.id, a.accepted, a.weight, a.verdict.reason),
+                                     (b.id, b.accepted, b.weight, b.verdict.reason))
+                self.assertEqual(expected.before, actual.before)
+                self.assertEqual(expected.context, actual.context)
+                # A fresh writer fails at the only publication point; the live
+                # portfolio and version must remain unchanged after evaluation.
+                if any(row.accepted for row in actual.rows):
+                    failed = research_for(runtime)
+                    original = failed.portfolio
+                    with patch.object(failed.store, 'commit', side_effect=OSError('publication failed')):
+                        with self.assertRaisesRegex(OSError, 'publication failed'):
+                            failed.commit(candidates, failed.context.id)
+                    self.assertIs(failed.portfolio, original)
+                    self.assertEqual(failed.store.read(engine.study), original.library)
+
     def test_bounded_array_cache_handles_larger_batches_and_cold_library_reload(self):
         settings = settings_for('us_equity')
         settings = replace(settings, cuda=replace(settings.cuda, candidate_batch=1))

@@ -17,6 +17,8 @@ class HostSpec:
 
 
 class Executor:
+    parallel_trials = False
+    screening_precisions = frozenset({'f64'})
     precisions = frozenset({'f64'})
 
     def device_spec(self, host):

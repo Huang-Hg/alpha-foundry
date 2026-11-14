@@ -87,16 +87,26 @@ class Research:
         before, original = self.context, self.portfolio
         working = original
         results = []
-        for candidate in candidates:
-            self._prepare_sources((candidate.source,))
-            row = self.engine.evaluate_sources((candidate.source,), report=True, null_shift=working.null_shift)[0]
-            verdict = working.admit([row])[0]
-            if verdict.passed:
-                self.engine.retain_member(row, working.null_shift)
-                working = working.accepted(row, verdict)
-            report = replace(row, tree=None, book=None, returns=None, maxdd=None)
-            results.append(CandidateResult(candidate.id, report, verdict, verdict.passed,
-                                           verdict.proposal.weight if verdict.passed else 0.))
+        for lo in range(0, len(candidates), self.engine.candidate_batch):
+            part = candidates[lo:lo + self.engine.candidate_batch]
+            sources = tuple(c.source for c in part)
+            self._prepare_sources(sources)
+            rows = self.engine.evaluate_sources(sources, report=True, null_shift=working.null_shift)
+            at = 0
+            while at < len(part):
+                # Same version: read-only trial batches can run together. After
+                # the first acceptance the suffix must be judged on its successor.
+                stop = min(len(part), at + self.engine.commit_batch)
+                verdicts = working.admit(rows[at:stop])
+                for row, verdict, candidate in zip(rows[at:stop], verdicts, part[at:stop]):
+                    at += 1
+                    report = replace(row, tree=None, book=None, returns=None, maxdd=None)
+                    results.append(CandidateResult(candidate.id, report, verdict, verdict.passed,
+                                                    verdict.proposal.weight if verdict.passed else 0.))
+                    if verdict.passed:
+                        self.engine.retain_member(row, working.null_shift)
+                        working = working.accepted(row, verdict)
+                        break
         if working.version != original.version:
             self.store.commit(original.library, working.library)
             self.portfolio = working
