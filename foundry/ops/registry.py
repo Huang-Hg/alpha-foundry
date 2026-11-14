@@ -64,7 +64,8 @@ _TABLE = (
     Op('ts_av_diff', 'ts', doc='x - mean ignoring NaN'),
     Op('ts_decay_exp_window', 'ts_param', doc='(x, w, factor)'), Op('ts_scale', 'ts_param', doc='(x, w, k): chanpos + k'),
     Op('ts_quantile', 'ts_param', doc='(x, w, driver): 0 gaussian, 1 uniform, 2 cauchy'),
-    Op('ts_corr', 'pair', True), Op('ts_cov', 'pair', True),
+    Op('ts_corr', 'pair', True, doc='sample Pearson correlation; either window constant -> NaN'),
+    Op('ts_cov', 'pair', True, doc='sample covariance; either finite window constant -> exactly zero'),
     Op('ts_regression', 'pair_param', doc='(y, x, w, rettype): 0 residual, 1 intercept, 2 slope, 3 fit, 4 R^2'),
 )
 OPS: Dict[str, Op] = {op.name: op for op in _TABLE}

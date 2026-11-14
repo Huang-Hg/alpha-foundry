@@ -18,14 +18,13 @@ class HostSpec:
 
 class Executor:
     parallel_trials = False
-    screening_precisions = frozenset({'f64'})
-    precisions = frozenset({'f64'})
+    precisions = frozenset({'native'})
 
     def device_spec(self, host):
         return HostSpec(host)
 
     def simulate(self, W, spec, start, ppy, precision):
-        assert precision == 'f64', 'perpetual execution requires the FP64 policy'
+        assert precision == 'native'
         arrays = _bt.perpetual(np.ascontiguousarray(W, dtype=np.float64),
                                tuple(getattr(spec.host, name) for name in ARRAY_FIELDS),
                                spec.host.leverage)

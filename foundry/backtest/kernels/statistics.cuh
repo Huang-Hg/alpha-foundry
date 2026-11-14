@@ -1,5 +1,5 @@
-/* Paired statistics use FP32 arithmetic. FP64 remains at the return-input and
- * five-scalar output boundaries. Integer exponents preserve cumulative wealth
+/* Paired statistics use FP32 arithmetic. Wide arrays remain at the return-input
+ * and five-scalar output boundaries. Integer exponents preserve cumulative wealth
  * outside the FP32 exponent range; no float log/exp approximations are used.
  */
 template<typename A>
@@ -23,13 +23,6 @@ template<> struct StatGroup<128> {
     __device__ static FloatPair sum(FloatPair v) { return block_sum(v); }
     __device__ static bool any(bool v) { return __syncthreads_or(v); }
 };
-
-__device__ __forceinline__ FloatPair pair_sqrt(FloatPair x) {
-    float q = sqrtf(x.hi);
-    if (q == 0.0f) return FloatPair(0.0f, 0.0f);
-    FloatPair p(q, 0.0f);
-    return p + (x - p*p) / FloatPair(__fadd_rn(q,q), 0.0f);
-}
 
 struct ScaledPair {
     FloatPair value;
@@ -134,7 +127,7 @@ __device__ void paired_statistics(const double* rr, int T, int start, double ppy
         FloatPair d=(FloatPair(rr[t])-origin)-shift;
         part+=d*d;
     }
-    FloatPair sd=pair_sqrt(StatGroup<N>::sum(part)/n);
+    FloatPair sd=sqrt(StatGroup<N>::sum(part)/n);
     WealthSummary wealth=WealthSummary::identity();
     if(!serial) {
         const int size=(T-start+N-1)/N;
@@ -148,9 +141,8 @@ __device__ void paired_statistics(const double* rr, int T, int start, double ppy
         }
     }
     if (lane==0) {
-        FloatPair annual(ppy), mr=mean*annual, vol=sd*pair_sqrt(annual);
-        st[0]=(vol.hi==0.0f && vol.lo==0.0f)
-              ? (mr.hi==0.0f ? nan("") : (double)copysignf(__int_as_float(0x7f800000),mr.hi)) : (double)(mr/vol);
+        FloatPair annual(ppy), mr=mean*annual, vol=sd*sqrt(annual);
+        st[0]=vol>FloatPair(0.f,0.f) ? (double)(mr/vol) : 0.;
         st[1]=(double)mr; st[2]=(double)vol; st[3]=(double)wealth.dd;
         st[4]=wealth.total.output()-1.0;
     }

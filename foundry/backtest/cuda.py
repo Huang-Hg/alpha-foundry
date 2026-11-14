@@ -6,6 +6,7 @@ from pathlib import Path
 from functools import cached_property
 import cupy as cp
 import numpy as np
+from foundry.numeric.cuda_source import paired_source
 from foundry.backtest.spec import ExecutionSpec
 from foundry.contracts import SimulationResult
 _KERNELS = Path(__file__).parent / 'kernels'
@@ -46,28 +47,28 @@ class _DeviceSpec:
         self.general = not spec.symmetric or spec.open_raw.shape[1] > MAX_ASSETS
         self.flags = int(spec.cost_sell is not None) | int(spec.block is not None) << 1 | int(spec.carry is not None) << 2
         names = ('open_raw', 'prev_close', 'open_ff0', 'close_ff0', 'cost_buy')
-        self.f64 = [cp.asarray(getattr(spec, k), dtype=cp.float64) for k in names] + [cp.asarray(spec.live, dtype=cp.uint8)]
+        self.storage = [cp.asarray(getattr(spec, k), dtype=cp.float64) for k in names] + [cp.asarray(spec.live, dtype=cp.uint8)]
 
     @cached_property
-    def extra_f64(self):
+    def extra_storage(self):
         shape = self.host.live.shape
-        return [self.f64[4] if self.host.cost_sell is None else cp.asarray(self.host.cost_sell), cp.zeros(shape, cp.float64) if self.host.carry is None else cp.asarray(self.host.carry), cp.zeros(shape, cp.uint8) if self.host.block is None else cp.asarray(self.host.block)]
+        return [self.storage[4] if self.host.cost_sell is None else cp.asarray(self.host.cost_sell), cp.zeros(shape, cp.float64) if self.host.carry is None else cp.asarray(self.host.carry), cp.zeros(shape, cp.uint8) if self.host.block is None else cp.asarray(self.host.block)]
 
     @cached_property
     def extra_mixed(self):
-        return [a.astype(cp.float32) for a in self.extra_f64[:2]] + [self.extra_f64[2]]
+        return [a.astype(cp.float32) for a in self.extra_storage[:2]] + [self.extra_storage[2]]
 
     @cached_property
     def extra_paired(self):
-        return [self._pack(a) for a in self.extra_f64[:2]] + [self.extra_f64[2]]
+        return [self._pack(a) for a in self.extra_storage[:2]] + [self.extra_storage[2]]
 
     @cached_property
     def mixed(self):
-        return [a.astype(cp.float32) for a in self.f64[:5]] + [self.f64[5]]
+        return [a.astype(cp.float32) for a in self.storage[:5]] + [self.storage[5]]
 
     @cached_property
     def paired(self):
-        return [self._pack(a) for a in self.f64[:5]] + [self.f64[5]]
+        return [self._pack(a) for a in self.storage[:5]] + [self.storage[5]]
 
     def arrays(self, precision):
         return getattr(self, precision)
@@ -78,13 +79,12 @@ class _DeviceSpec:
 
 class Executor:
     parallel_trials = True
-    screening_precisions = frozenset({'f64', 'mixed', 'paired'})
-    precisions = frozenset({'f64', 'mixed', 'paired'})
+    precisions = frozenset({'mixed', 'paired'})
 
     def __init__(self):
-        self._MOD = cp.RawModule(code='\n'.join(((_KERNELS / f).read_text(encoding='utf-8') for f in ('float_pair.cuh', 'backtest.cu', 'statistics.cuh'))), options=('--std=c++14',))
-        self._SIMULATE = {p: self._MOD.get_function(f'k_simulate_{p}') for p in ('f64', 'mixed', 'paired')}
-        self._BLEND = {p: self._MOD.get_function(f'k_blend_{p}') for p in ('f64', 'mixed', 'paired')}
+        self._MOD = cp.RawModule(code=paired_source()+'\n'+'\n'.join(((_KERNELS / f).read_text(encoding='utf-8') for f in ('reductions.cuh', 'backtest.cu', 'statistics.cuh'))), options=('--std=c++14',))
+        self._SIMULATE = {p: self._MOD.get_function(f'k_simulate_{p}') for p in ('mixed', 'paired')}
+        self._BLEND = {p: self._MOD.get_function(f'k_blend_{p}') for p in ('mixed', 'paired')}
         self._STATS = self._MOD.get_function('k_statistics_paired')
         self._SPLIT = cp.ElementwiseKernel('float64 v', 'float32 hi, float32 lo', 'hi = (float)v; lo = isfinite(v) ? (float)(v - (double)hi) : 0.0f;', 'bt_split')
         self._general_modules = {}
@@ -97,12 +97,12 @@ class Executor:
 
     def _general_module(self, slots):
         if slots not in self._general_modules:
-            source = '\n'.join(((_KERNELS / f).read_text(encoding='utf-8') for f in ('float_pair.cuh', 'backtest.cu', 'statistics.cuh', 'general.cu')))
+            source = paired_source()+'\n'+'\n'.join(((_KERNELS / f).read_text(encoding='utf-8') for f in ('reductions.cuh', 'backtest.cu', 'statistics.cuh', 'general.cu')))
             self._general_modules[slots] = cp.RawModule(code=f'#define GEN_SLOTS {slots}\n' + source, options=('--std=c++14',))
         return self._general_modules[slots]
 
     def paired(self, x):
-        """Pack contiguous (hi, lo) FP32 pairs from FP64, once outside the serial recurrence."""
+        """Pack contiguous (hi, lo) FP32 pairs from the interchange array, once outside the serial recurrence."""
         out = cp.empty(x.shape + (2,), dtype=cp.float32)
         self._SPLIT(x, out[..., 0], out[..., 1])
         return out
@@ -110,14 +110,14 @@ class Executor:
     def _pack(self, x, precision):
         if precision == 'paired':
             return self.paired(x)
-        return x if precision == 'f64' else x.astype(cp.float32)
+        return x.astype(cp.float32)
 
     def _statistics(self, rr, stats, start, ppy):
         B, T = rr.shape
         self._STATS((B,), (128,), (rr, np.int32(T), np.int32(start), np.float64(ppy), stats))
 
-    def simulate(self, W, spec: _DeviceSpec, start: int, ppy: float, precision='f64'):
-        """Books W (B,T,S) -> (net daily returns (B,T) f64, stats (B,5) = sharpe, mean, vol, max drawdown, total return
+    def simulate(self, W, spec: _DeviceSpec, start: int, ppy: float, precision):
+        """Books W (B,T,S) -> (net daily returns (B,T), stats (B,5) = sharpe, mean, vol, max drawdown, total return
     over rows [start:]). One launch walks the days in order, so it has a latency floor independent of B
     (V100S, T=4262 x S=73: ~31 ms for 1..256 books): batch books into as few launches as possible."""
         B, T, S = W.shape
@@ -125,12 +125,10 @@ class Executor:
         if spec.general:
             kernel = self._general_module((S + 127) // 128).get_function(f'k_general_{precision}')
             kernel((B,), (128,), (self._pack(W, precision), *(np.uint64(0),) * 5, *spec.general_arrays(precision), np.int32(T), np.int32(S), np.int64(start), np.float64(ppy), rr, stats))
-            if precision == 'paired':
-                self._statistics(rr, stats, start, ppy)
+            self._statistics(rr, stats, start, ppy)
             return SimulationResult(rr, stats, None)
         self._SIMULATE[precision](((B + 3) // 4,), (128,), (self._pack(W, precision), *spec.arrays(precision), np.int32(T), np.int32(S), np.int32(B), np.int64(start), np.float64(ppy), rr, stats))
-        if precision == 'paired':
-            self._statistics(rr, stats, start, ppy)
+        self._statistics(rr, stats, start, ppy)
         return SimulationResult(rr, stats, None)
 
     def blend(self, W, U, owners, weights, spec: _DeviceSpec, start: int, ppy: float, precision, batch: int):
@@ -151,8 +149,7 @@ class Executor:
                 kernel((n,), (128,), (W, U, owners[lo:lo + n], weights[lo:lo + n], eref, eown, *spec.general_arrays(precision), np.int32(T), np.int32(S), np.int64(start), np.float64(ppy), rr[lo:lo + n], stats[lo:lo + n]))
                 continue
             self._BLEND[precision](((n + 3) // 4,), (128,), (W, U, owners[lo:lo + n], weights[lo:lo + n], eref, eown, *spec.arrays(precision), np.int32(T), np.int32(S), np.int32(n), np.int64(start), np.float64(ppy), rr[lo:lo + n], stats[lo:lo + n]))
-        if precision == 'paired':
-            self._statistics(rr, stats, start, ppy)
+        self._statistics(rr, stats, start, ppy)
         return SimulationResult(rr[:, start:], stats, None)
 
     def device_spec(self, host):

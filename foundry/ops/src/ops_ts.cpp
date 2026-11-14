@@ -702,7 +702,7 @@ void fm_ts_corr(const double* a, const double* b, double* out, int64_t T, int64_
         vlo = lo; vhi = hi;
     }
     std::vector<double>  acc_buf((size_t)S * 5);                /* 5 sliding accumulators (RAII) */
-    std::vector<int64_t> cnt_buf(S);
+    std::vector<int64_t> cnt_buf(S), constant_a(S), constant_b(S);
     double*  acc = acc_buf.data();
     int64_t* cnt = cnt_buf.data();
     double *sa = acc, *sb = acc + S, *sab = acc + 2 * S, *saa = acc + 3 * S, *sbb = acc + 4 * S;
@@ -719,6 +719,8 @@ void fm_ts_corr(const double* a, const double* b, double* out, int64_t T, int64_
                 int64_t lo = vlo[s], hi = vhi[s];
                 if (t < lo || t > hi) { orow[s] = NAN; continue; }
                 double va = ar[s], vb = br[s];
+                constant_a[s] = t > lo && va == a[(t-1)*lda_+s] ? constant_a[s]+1 : 1;
+                constant_b[s] = t > lo && vb == b[(t-1)*ldb+s] ? constant_b[s]+1 : 1;
                 int valid = !isnan(va) && !isnan(vb);
                 if (!valid) cnt[s]++;
                 else { sa[s] += va; sb[s] += vb; sab[s] += va * vb; saa[s] += va * va; sbb[s] += vb * vb; }
@@ -733,7 +735,7 @@ void fm_ts_corr(const double* a, const double* b, double* out, int64_t T, int64_
                     double cov = (sab[s] - ma * sb[s]) / (double)(w - 1);
                     double va_ = (saa[s] - ma * sa[s]) / (double)(w - 1);
                     double vb_ = (sbb[s] - mb * sb[s]) / (double)(w - 1);
-                    if (va_ > 0.0 && vb_ > 0.0) orow[s] = cov / sqrt(va_ * vb_);
+                    if (constant_a[s] < w && constant_b[s] < w && va_ > 0.0 && vb_ > 0.0) orow[s] = cov / sqrt(va_ * vb_);
                     else                        orow[s] = NAN;
                 } else {
                     orow[s] = NAN;
@@ -762,7 +764,7 @@ void fm_ts_cov(const double* a, const double* b, double* out, int64_t T, int64_t
         vlo = lo; vhi = hi;
     }
     std::vector<double>  acc_buf((size_t)S * 3);                /* 3 sliding accumulators (RAII) */
-    std::vector<int64_t> cnt_buf(S);
+    std::vector<int64_t> cnt_buf(S), constant_a(S), constant_b(S);
     double*  acc = acc_buf.data();
     int64_t* cnt = cnt_buf.data();
     double *sa = acc, *sb = acc + S, *sab = acc + 2 * S;
@@ -779,6 +781,8 @@ void fm_ts_cov(const double* a, const double* b, double* out, int64_t T, int64_t
                 int64_t lo = vlo[s], hi = vhi[s];
                 if (t < lo || t > hi) { orow[s] = NAN; continue; }
                 double va = ar[s], vb = br[s];
+                constant_a[s] = t > lo && va == a[(t-1)*lda_+s] ? constant_a[s]+1 : 1;
+                constant_b[s] = t > lo && vb == b[(t-1)*ldb+s] ? constant_b[s]+1 : 1;
                 int valid = !isnan(va) && !isnan(vb);
                 if (!valid) cnt[s]++;
                 else { sa[s] += va; sb[s] += vb; sab[s] += va * vb; }
@@ -790,7 +794,10 @@ void fm_ts_cov(const double* a, const double* b, double* out, int64_t T, int64_t
                 }
                 if (t - lo >= w - 1 && cnt[s] == 0) {
                     double ma = sa[s] / (double)w;
-                    orow[s] = (sab[s] - ma * sb[s]) / (double)(w - 1);
+                    // A constant operand has exactly zero covariance. Raw moments
+                    // otherwise manufacture tiny signals from cancellation.
+                    orow[s] = constant_a[s] >= w || constant_b[s] >= w ? 0. :
+                        (sab[s] - ma * sb[s]) / (double)(w - 1);
                 } else {
                     orow[s] = NAN;
                 }

@@ -102,19 +102,6 @@ class ConstraintCheck:
     delta: float
 
 
-@dataclass(frozen=True)
-class PrecisionDiagnostics:
-    mode: str
-    refined: bool
-    calibration_error: float
-    return_envelope: float
-    over_budget: bool
-    unstable: bool
-    fp64_trials: int
-    fp32_trials: int
-    calibration_breach: bool = False
-
-
 @dataclass
 class Proposal:
     passed: bool
@@ -132,7 +119,6 @@ class Proposal:
     maxdd: float = float('nan')
     utility: float = float('nan')
     violation: float = float('inf')
-    precision: PrecisionDiagnostics | None = None
 
 
 @dataclass(frozen=True)

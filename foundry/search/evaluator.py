@@ -3,7 +3,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, replace
 from foundry.candidates import Formula
 
-from foundry.research_types import Candidate, ConstraintCheck, PrecisionDiagnostics
+from foundry.research_types import Candidate, ConstraintCheck
 from foundry.search.policy import CEM
 
 
@@ -30,7 +30,6 @@ class MiningResult:
     duplicate: bool = False
     weight: float = 0.
     delta: tuple[ConstraintCheck, ...] = ()
-    precision: PrecisionDiagnostics | None = None
     backend: str = ''
     g3: bool = False
     sharpe: float | None = None
@@ -68,7 +67,7 @@ class Archive:
 
 class Evaluator:
     gate = None
-    COUNTERS = ('requested', 'unique_evaluations', 'g1', 'g2', 'low_corr', 'behavior_duplicates', 'fp64_refined', 'weight_trials')
+    COUNTERS = ('requested', 'unique_evaluations', 'g1', 'g2', 'low_corr', 'behavior_duplicates', 'weight_trials')
 
     def __init__(self, research, archive, rho_max=.9):
         self.research, self.portfolio = research, research.portfolio
@@ -161,13 +160,12 @@ class Evaluator:
             accepted = bool(values[1]) and not duplicate
             self.cache[row.source.expression] = MiningResult(row.source.expression, values[0] if not duplicate else -10., accepted, True,
                 proposal.passed, values[2], proposal.utility, co_loss=values[3], novelty=values[4], duplicate=duplicate,
-                weight=proposal.weight, delta=proposal.checks, precision=proposal.precision, backend=proposal.backend)
+                weight=proposal.weight, delta=proposal.checks, backend=proposal.backend)
             self.counters['g1'] += 1
             self.counters['g2'] += int(proposal.passed)
             self.counters['low_corr'] += int(accepted)
             self.counters['behavior_duplicates'] += int(duplicate)
             self.counters['weight_trials'] += proposal.trials
-            self.counters['fp64_refined'] += int(proposal.backend.endswith('-f64'))
             if accepted and proposal.utility > self.best_score:
                 self.best = row.source.expression
                 self.best_score = proposal.utility

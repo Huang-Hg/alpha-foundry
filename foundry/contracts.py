@@ -71,6 +71,23 @@ class ReturnBatch:
 
 
 @dataclass(frozen=True)
+class ReturnMoments:
+    """Per-row arithmetic Sharpe, geometric growth and recency-weighted moments.
+
+    Arrays stay on the backend and have the input's shape excluding its time axis.
+    Population variance, zero variance -> Sharpe 0; weights sum to one. Growth
+    uses log1p of each net return. Nonfinite/ruined rows remain domain-invalid.
+    """
+    sharpe: object
+    cagr: object
+    weighted_sharpe: object
+    recent_growth: object
+
+
+ReturnMeasure = Callable[[object, object, float], ReturnMoments]
+
+
+@dataclass(frozen=True)
 class Backend:
     name: str
     xp: object
@@ -79,6 +96,7 @@ class Backend:
     max_window: int
     max_pair_window: int
     to_host: Callable
+    measure: ReturnMeasure
     close: Callable
 
 

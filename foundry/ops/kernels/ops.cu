@@ -5,7 +5,7 @@
  *   - Row-major (T,S): x[t*S+s]; panels are tall (T >> S), one thread per output (t,s).
  *   - Rolling windows use a shared-memory tile: a block of (SS assets) x (TT days) loads (TT+w-1) x SS with halo.
  *   - out[t,s] = (t >= w-1 and no NaN in [t-w+1, t]) ? stat : NaN (the CPU range trimming is only an optimisation).
- *   - Centering anchor K: kmode 0 = oldest value of the window (sum/mean/std/mad); kmode 1 = first valid value of
+ *   - Centering anchor K: kmode 0 = oldest value of the window (sum/mean/mad); kmode 1 = first valid value of
  *     the column (skew/kurt, matching the CPU degenerate-window threshold).
  */
 
@@ -17,7 +17,7 @@ template<typename T> __device__ __forceinline__ T* shmem() {
 
 
 /* ============================================================================
- * Rolling moment kernel: op 0=sum 1=mean 2=std 3=skew 4=kurt 5=mad
+ * Rolling moment kernel: op 0=sum 1=mean 3=skew 4=kurt 5=mad
  * ========================================================================== */
 template<typename T>
 __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
@@ -61,11 +61,6 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
         T mean = (s1 + wd * K) / wd, mad = 0;
         for (int k = 0; k < w; k++) mad += fabs(sh[(ty + k) * SS + sx] - mean);
         res = mad / wd;
-    } else if (op == 2) {                                         /* std  */
-        T Sx = s1 + wd * K, Sxx = s2 + (T)2 * K * s1 + wd * K * K;
-        T mean = Sx / wd, var = (Sxx - mean * Sx) / (wd - (T)1);
-        if (var < 0) var = 0;
-        res = sqrt(var);
     } else {                                                      /* skew/kurt: two-pass central moments per window */
         /* Pass 1 window mean -> pass 2 direct central moments sum(v - mean)^p (eliminates e2 - mu^2 cancellation).
          * Same algorithm and oldest->newest order as CPU fm_ts_skew/kurt -> bitwise match (replaces incremental power
@@ -88,7 +83,7 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
 
 
 /* ============================================================================
- * Extended rolling kernel: op 0=max 1=min 2=wma 3=slope 4=rank 5=arg_max 6=arg_min
+ * Extended rolling kernel: op 0=max 1=min 2=wma 4=rank 5=arg_max 6=arg_min
  *   arg_*: emit (w-1)-argk = bars since extremum in [0, w-1]; ties -> most recent (>= / <=, matching C deque).
  * ========================================================================== */
 template<typename T>
@@ -126,13 +121,6 @@ __device__ void ext_core(const T* __restrict__ x, T* __restrict__ out,
         for (int k = 0; k < w; k++) { T v = sh[(ty + k) * SS + sx];
             if (isnan(v)) { bad = 1; break; } wsum += (T)(k + 1) * v; }
         out[o] = bad ? (T)nan("") : wsum / denom;
-    } else if (op == 3) {                                        /* slope */
-        T Sx = 0, Skx = 0;
-        for (int k = 0; k < w; k++) { T v = sh[(ty + k) * SS + sx];
-            if (isnan(v)) { bad = 1; break; } Sx += v; Skx += (T)k * v; }
-        if (bad) { out[o] = (T)nan(""); return; }
-        T mean_t = (T)(w - 1) / (T)2, var_t = (T)((long long)w * w - 1) / (T)12;
-        out[o] = (Skx - mean_t * Sx) / (T)w / var_t;
     } else {                                                     /* rank */
         T cur = sh[(ty + w - 1) * SS + sx];
         if (isnan(cur)) { out[o] = (T)nan(""); return; }
@@ -141,43 +129,6 @@ __device__ void ext_core(const T* __restrict__ x, T* __restrict__ out,
             if (isnan(v)) { bad = 1; break; } if (v < cur) cl++; else if (v == cur) ce++; }
         out[o] = bad ? (T)nan("") : ((T)cl + (T)0.5 * (T)(ce - 1)) / (T)(w - 1);
     }
-}
-
-
-/* ts_corr / ts_cov: paired tile; op 0=corr 1=cov; NaN on either side -> NaN. shared = 2*rows*SS*sizeof(T). */
-template<typename T>
-__device__ void pair_core(const T* __restrict__ a, const T* __restrict__ b,
-                         T* __restrict__ out, int Tt, int S, int w, int op) {
-    T* sh = shmem<T>();
-    int SS = blockDim.x, TT = blockDim.y, rows = TT + w - 1;
-    T* sha = sh; T* shb = sh + rows * SS;
-    int strip_s0 = blockIdx.x * SS, tile_t0 = blockIdx.y * TT, base_t = tile_t0 - (w - 1);
-    int tid = threadIdx.y * SS + threadIdx.x, nth = SS * TT;
-    for (int idx = tid; idx < rows * SS; idx += nth) {
-        int i = idx / SS, sx = idx - i * SS, gt = base_t + i, gs = strip_s0 + sx;
-        int oob = (gt < 0 || gt >= Tt || gs >= S);
-        sha[i * SS + sx] = oob ? (T)nan("") : a[(long long)gt * S + gs];
-        shb[i * SS + sx] = oob ? (T)nan("") : b[(long long)gt * S + gs];
-    }
-    __syncthreads();
-    int sx = threadIdx.x, ty = threadIdx.y, s = strip_s0 + sx, t = tile_t0 + ty;
-    if (s >= S || t >= Tt) return;
-    long long o = (long long)t * S + s;
-    /* K-centering on the window's oldest values (shift-invariant -> cov/var unchanged): prevents catastrophic
-     * cancellation in sum(a*b) on large-magnitude inputs (e.g. close ~1e2 vs vol ~1e6), critical for f32 stability. */
-    T Ka = sha[ty * SS + sx], Kb = shb[ty * SS + sx];
-    T Sa = 0, Sb = 0, Sab = 0, Saa = 0, Sbb = 0; int bad = 0;
-    for (int k = 0; k < w; k++) {
-        T va = sha[(ty + k) * SS + sx], vb = shb[(ty + k) * SS + sx];
-        if (isnan(va) || isnan(vb)) { bad = 1; break; }
-        T da = va - Ka, db = vb - Kb;
-        Sa += da; Sb += db; Sab += da * db; Saa += da * da; Sbb += db * db;
-    }
-    if (bad) { out[o] = (T)nan(""); return; }
-    T wd = (T)w, ma = Sa / wd, mb = Sb / wd, cov = (Sab - ma * Sb) / (wd - (T)1);
-    if (op == 1) { out[o] = cov; return; }
-    T va_ = (Saa - ma * Sa) / (wd - (T)1), vb_ = (Sbb - mb * Sb) / (wd - (T)1);
-    out[o] = (va_ > 0 && vb_ > 0) ? cov / sqrt(va_ * vb_) : (T)nan("");
 }
 
 
@@ -283,7 +234,6 @@ __device__ void cs_rank_core(const T* __restrict__ x, T* __restrict__ out, int S
  * path is confined to the backtest kernel). */
 extern "C" __global__ void k_moment(const double* x, double* o, int T, int S, int w, int op, const double* K, int km) { moment_core<double>(x, o, T, S, w, op, K, km); }
 extern "C" __global__ void k_ext(const double* x, double* o, int T, int S, int w, int op) { ext_core<double>(x, o, T, S, w, op); }
-extern "C" __global__ void k_pair(const double* a, const double* b, double* o, int T, int S, int w, int op) { pair_core<double>(a, b, o, T, S, w, op); }
 extern "C" __global__ void k_ema(const double* x, double* o, int T, int S, int span) { ema_core<double>(x, o, T, S, span); }
 extern "C" __global__ void k_cs(const double* x, double* o, int S, int op) { cs_core<double>(x, o, S, op); }
 extern "C" __global__ void k_cs_rank(const double* x, double* o, int S) { cs_rank_core<double>(x, o, S); }

@@ -47,7 +47,8 @@ FM_UNARY(fm_sign,   isnan(v) ? NAN : (v > 0.0) ? 1.0 : (v < 0.0) ? -1.0 : 0.0)
 FM_UNARY(fm_log,    (isnan(v) || v <= 0.0) ? NAN : log(v))
 FM_UNARY(fm_sqrt_,  (isnan(v) || v < 0.0) ? NAN : sqrt(v))
 FM_UNARY(fm_square, isnan(v) ? NAN : v * v)
-FM_UNARY(fm_tanh,   isnan(v) ? NAN : tanh(v))
+/* |x| < 2^-28: the cubic correction is below half an ulp, so rounded tanh(x)=x. */
+FM_UNARY(fm_tanh,   fabs(v) < 3.7252902984619140625e-9 ? v : tanh(v))
 FM_UNARY(fm_inv,    (isnan(v) || v == 0.0) ? NAN : (1.0 / v))
 /* s_log_1p: sign(x) * log(1 + |x|), compresses heavy tails while preserving sign; defined on all reals. */
 FM_UNARY(fm_s_log_1p, isnan(v) ? NAN : (v >= 0.0) ? log1p(v) : -log1p(-v))

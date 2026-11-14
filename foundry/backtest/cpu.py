@@ -18,13 +18,12 @@ class HostSpec:
 
 class Executor:
     parallel_trials = False
-    screening_precisions = frozenset({'f64'})
-    precisions = frozenset({'f64'})
+    precisions = frozenset({'native'})
     def device_spec(self,host):
         return HostSpec(host)
 
     def simulate(self,W,spec,start,ppy,precision):
-        assert precision=='f64','CPU executor uses the FP64 reference policy'
+        assert precision == 'native'
         s=spec.host
         rr=np.stack([_bt.simulate(np.ascontiguousarray(w,dtype=np.float64),s.open_raw,s.prev_close,s.open_ff0,
                                  s.close_ff0,s.cost_buy,s.cost_sell,s.live,s.block,s.carry) for w in W])

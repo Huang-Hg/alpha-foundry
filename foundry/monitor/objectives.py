@@ -98,7 +98,7 @@ class Portfolio(Objective):
 
     def footnotes(self, st):
         return [(label, num(st.get(key))) for label, key in
-                (('行为重复', 'behavior_duplicates'), ('FP64 精算', 'fp64_refined'), ('探针评价', 'probe_evaluations'))]
+                (('行为重复', 'behavior_duplicates'), ('探针评价', 'probe_evaluations'))]
 
 
 def sharpe_cell(report, st, bg):

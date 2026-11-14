@@ -147,6 +147,8 @@ def describe(research):
             pit='Producer-declared cutoffs are checked for forward references; the engine cannot prove the provenance of externally computed values.',
             persistence='research.register_batch writes immutable artifacts; evaluate and commit only read registered sources'),
         execution_risk=dict(report=schema_for(RiskSummary),
+            small_perpetual_cpu_cells=engine.cuda_cfg.perpetual_host_cells,
+            routing='Perpetual batches at or below B*T*S cells are planned on CPU before execution; larger batches use the selected device. No precision replay.',
             units='Initial NAV=1; funding is signed cashflow, negative means payment. Nonfinite numeric scalars serialize as null.',
             isolated_loss_cap='Accounting adjustment max(-isolated bucket equity,0) at liquidation; this is the isolated-loss model assumption, not verified insurance cashflow.',
             events=dict(path='SimulationResult.risk.liquidation_events', shape=['batch', 'execution_event', 'asset'],

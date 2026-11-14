@@ -87,6 +87,10 @@ class Research:
         before, original = self.context, self.portfolio
         working = original
         results = []
+        # A request fitting one device batch benefits from full parallelism.
+        # Multi-batch submissions bound work invalidated by early acceptances.
+        adaptive = len(candidates) > self.engine.commit_batch
+        lookahead = 1 if adaptive else self.engine.commit_batch
         for lo in range(0, len(candidates), self.engine.candidate_batch):
             part = candidates[lo:lo + self.engine.candidate_batch]
             sources = tuple(c.source for c in part)
@@ -96,7 +100,8 @@ class Research:
             while at < len(part):
                 # Same version: read-only trial batches can run together. After
                 # the first acceptance the suffix must be judged on its successor.
-                stop = min(len(part), at + self.engine.commit_batch)
+                first = at
+                stop = min(len(part), at + lookahead)
                 verdicts = working.admit(rows[at:stop])
                 for row, verdict, candidate in zip(rows[at:stop], verdicts, part[at:stop]):
                     at += 1
@@ -106,7 +111,13 @@ class Research:
                     if verdict.passed:
                         self.engine.retain_member(row, working.null_shift)
                         working = working.accepted(row, verdict)
+                        # An early acceptance invalidates speculative suffixes.
+                        # Use its observed distance for the next version.
+                        if adaptive:
+                            lookahead = at - first
                         break
+                else:
+                    lookahead = min(2 * lookahead, self.engine.commit_batch)
         if working.version != original.version:
             self.store.commit(original.library, working.library)
             self.portfolio = working
@@ -129,7 +140,7 @@ class Research:
         with self.engine.resources.scope():
             self.require_context(context_id)
             xp, ref = self.engine.xp, self.portfolio.reference
-            result = self.engine.returns(cap_book(xp.tensordot(weights, books, axes=(1, 0)), self.engine.allocation, xp), 'f64')
+            result = self.engine.returns(cap_book(xp.tensordot(weights, books, axes=(1, 0)), self.engine.allocation, xp))
             return self._weight_metrics(result.returns, result.maxdd, ref)
 
 
