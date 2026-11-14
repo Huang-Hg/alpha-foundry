@@ -45,7 +45,7 @@ class SearchTests(unittest.TestCase):
         research = research_for(self.runtime)
         ref = research.portfolio.reference
         rows = self.engine.evaluate(EXPRESSIONS, report=False)
-        proposals = admission.proposals(self.engine, rows, ref, 'f64')
+        proposals = admission.proposals(self.engine, rows, ref)
         for row, proposal in zip(rows, proposals):
             trial = research.trial_weights(cp.asarray([[1., proposal.weight]]),
                                                               cp.stack([ref.U, row.book]), research.context.id)

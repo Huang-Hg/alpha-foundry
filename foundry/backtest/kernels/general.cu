@@ -120,22 +120,7 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
         rebase(eq_after,previous,shares);
     }
     __syncthreads();
-    if(PairStats<A>::enabled) {
-        return;
-    }
-    // Statistics are independent of trading rules; keep the existing FP64 definitions.
-    double part=0.;
-    for(int t=(int)i0+tid;t<Tn;t+=128) part+=rr[t];
-    double n=Tn-i0, mean=block_sum(part)/n;
-    part=0.;
-    for(int t=(int)i0+tid;t<Tn;t+=128) {double d=rr[t]-mean;part+=d*d;}
-    double sd=sqrt(block_sum(part)/n);
-    if(tid==0) {
-        double cum=1.,peak=1.,dd=0.;
-        for(int t=(int)i0;t<Tn;++t) {cum*=1.+rr[t];peak=fmax(peak,cum);dd=fmin(dd,cum/peak-1.);}
-        double* st=stats+5*b; double mr=mean*ppy,vol=sd*sqrt(ppy);
-        st[0]=mr/vol;st[1]=mr;st[2]=vol;st[3]=dd;st[4]=cum-1.;
-    }
+
 }
 
 #define GENERAL(NAME,T,A,C,MIX) \
@@ -144,9 +129,7 @@ extern "C" __global__ void NAME(const T* W,const T* ref,const int* owners,const 
  const T* sell,const T* carry,const unsigned char* live,const unsigned char* block,int flags, \
  int Tn,int S,long long start,double ppy,double* rr,double* st) { \
  general_core<T,A,C,MIX>(W,ref,owners,weights,eref,eown,o,p,off,c,buy,sell,carry,live,block,flags,Tn,S,start,ppy,rr,st); }
-GENERAL(k_general_f64,double,double,double,false)
 GENERAL(k_general_mixed,float,float,double,false)
 GENERAL(k_general_paired,FloatPair,FloatPair,FloatPair,false)
-GENERAL(k_general_blend_f64,double,double,double,true)
 GENERAL(k_general_blend_mixed,float,float,double,true)
 GENERAL(k_general_blend_paired,FloatPair,FloatPair,FloatPair,true)

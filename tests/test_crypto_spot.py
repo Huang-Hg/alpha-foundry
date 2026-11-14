@@ -44,7 +44,7 @@ class CryptoSpotTests(unittest.TestCase):
     def simulate(self, loaded, weights):
         return self.executor.simulate(np.asarray(weights, dtype=float)[None, :, None],
                                       self.executor.device_spec(loaded.host_spec), loaded.window.start,
-                                      loaded.market.ppy, 'f64')
+                                      loaded.market.ppy, 'native')
 
     def test_reader_keeps_weekends_missing_days_and_historical_eligibility(self):
         rows = []

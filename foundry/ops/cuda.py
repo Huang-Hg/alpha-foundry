@@ -1,7 +1,7 @@
 """CUDA backend of the formula operators: cupy arrays in, cupy arrays out, always float64.
 
-Rolling statistics run the shared-memory tile kernels of kernels/ops.cu, path-dependent operators the column
-walkers of kernels/paths.cu; the rest are fused element-wise kernels. `IMPL` maps every registry name to its
+Window-local statistics use shared-memory tiles. Rolling std/slope/correlation retain the native reference's
+chronological recurrences, and population standardization uses its direct two-pass variance. `IMPL` maps every registry name to its
 implementation (signatures per kind, see foundry.ops.registry). Launch geometry is derived from the device
 properties, so the same code adapts to a 4 GB consumer card and a data-centre card; a window whose tile does not fit
 the card's shared memory is reported by `unsupported` before anything is launched.
@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 import cupy as cp
 import numpy as np
-from foundry.ops.registry import OPS
+from foundry.ops.registry import OPS, MAX_WINDOW
 _KERNELS = Path(__file__).with_name('kernels')
 D = cp.float64
 _ELEM = 8
@@ -26,14 +26,19 @@ class Ops:
         self._OPTIN = self._PROPS['sharedMemPerBlockOptin']
         self._MAXTHR = self._PROPS['maxThreadsPerBlock']
         self._SHBUDGET = min(self._OPTIN, self._PROPS['sharedMemPerMultiprocessor'] // 3)
-        self._k_moment, self._k_ext, self._k_pair, self._k_ema, self._k_cs, self._k_cs_rank = (self._OPS.get_function(n) for n in ('k_moment', 'k_ext', 'k_pair', 'k_ema', 'k_cs', 'k_cs_rank'))
-        self._DYNMAX = min((self._optin_max(f) for f in (self._k_moment, self._k_ext, self._k_pair, self._k_cs_rank)))
+        self._k_moment, self._k_ext, self._k_ema, self._k_cs, self._k_cs_rank = (self._OPS.get_function(n) for n in ('k_moment', 'k_ext', 'k_ema', 'k_cs', 'k_cs_rank'))
+        self._k_pair, self._k_slope, self._k_standardize, self._k_std = (self._PATHS.get_function(n) for n in ('k_pair', 'k_slope', 'k_standardize', 'k_std'))
+        self._DYNMAX = min((self._optin_max(f) for f in (self._k_moment, self._k_ext, self._k_cs_rank)))
         self._DUMMY = cp.zeros(1, dtype=D)
-        self.max_window = self._max_window(1)
-        self.max_pair_window = self._max_window(2)
+        self.max_window = self._max_window()
+        self.max_pair_window = MAX_WINDOW
         self._sign = cp.ElementwiseKernel('T x', 'T o', 'o = isnan(x) ? x : (x > (T)0 ? (T)1 : (x < (T)0 ? (T)-1 : (T)0));', 'fm_sign')
         self._log = cp.ElementwiseKernel('T x', 'T o', 'o = (isnan(x) || x <= (T)0) ? (T)nan("") : log(x);', 'fm_log')
         self._sqrt = cp.ElementwiseKernel('T x', 'T o', 'o = (isnan(x) || x < (T)0) ? (T)nan("") : sqrt(x);', 'fm_sqrt')
+        # Below 2^-28 the cubic correction is smaller than half an ulp for
+        # binary64. The correctly rounded result is x, including subnormals.
+        self._tanh = cp.ElementwiseKernel('T x', 'T o',
+            'o = fabs(x) < (T)3.7252902984619140625e-9 ? x : tanh(x);', 'fm_tanh')
         self._inv = cp.ElementwiseKernel('T x', 'T o', 'o = (isnan(x) || x == (T)0) ? (T)nan("") : (T)1 / x;', 'fm_inv')
         self._s_log_1p = cp.ElementwiseKernel('T x', 'T o', 'o = isnan(x) ? x : (x >= (T)0 ? log1p(x) : -log1p(-x));', 'fm_s_log_1p')
         self._div = cp.ElementwiseKernel('T a, T b', 'T o', 'o = (b == (T)0) ? (T)nan("") : a / b;', 'fm_div')
@@ -49,7 +54,7 @@ class Ops:
         self._scale = self._ew('scale_fin', 'T x, T lo, T hi, float64 k', 'T d = hi - lo; o = (fabs((double)d) < 1e-12) ? qnan<T>() : (T)((x - lo) / d + k);')
         self._avd_pre = cp.ElementwiseKernel('T x', 'T xz, T fm', 'bool f = isfinite(x); xz = f ? x : (T)0; fm = (T)(f ? 1 : 0);', 'fx_avd_pre')
         self._avd_post = self._ew('avd_post', 'T x, T s, T n', 'o = (isfinite(x) && n > 0) ? (T)(x - s / n) : qnan<T>();')
-        self.IMPL = dict(abs=cp.abs, neg=lambda x: -x, sign=self._sign, log=self._log, square=lambda x: x * x, sqrt=self._sqrt, tanh=cp.tanh, inv=self._inv, s_log_1p=self._s_log_1p, **{'not': self._not}, is_nan=self._is_nan, add=lambda a, b: a + b, sub=lambda a, b: a - b, mul=lambda a, b: a * b, div=self._div, max=cp.maximum, min=cp.minimum, gt=self._pred('gt', 'a > b'), lt=self._pred('lt', 'a < b'), **{'and': self._pred('and', '(a > 0) && (b > 0)'), 'or': self._pred('or', '(a > 0) || (b > 0)')}, equal=self._pred('equal', 'a == b'), not_equal=self._pred('not_equal', 'a != b'), greater_equal=self._pred('ge', 'a >= b'), less_equal=self._pred('le', 'a <= b'), add_const=lambda x, k: x + D(k), mul_const=lambda x, k: x * D(k), pow_const=lambda x, k: self._pow(x, D(k)), left_tail=lambda x, k: self._left_tail(x, float(k)), right_tail=lambda x, k: self._right_tail(x, float(k)), hump=self.hump, if_else=self._if_else, trade_when=self.trade_when, cs_rank=self.cs_rank, cs_zscore=lambda x: self._cs(x, 0), cs_demean=lambda x: self._cs(x, 1), cs_scale=lambda x: self._cs(x, 2), ts_mean=self.ts_mean, ts_std=self.ts_std, ts_max=self.ts_max, ts_min=self.ts_min, ts_sum=self.ts_sum, ts_rank=self.ts_rank, ts_arg_max=self.ts_arg_max, ts_arg_min=self.ts_arg_min, ts_ema=self.ts_ema, ts_wma=self.ts_wma, ts_ref=self.ts_ref, ts_delta=self.ts_delta, ts_skew=self.ts_skew, ts_kurt=self.ts_kurt, ts_mad=self.ts_mad, ts_slope=self.ts_slope, ts_chanpos=self.ts_chanpos, ts_ddown=self.ts_ddown, ts_zscore=self.ts_zscore, ts_snr=self.ts_snr, ts_backfill=self.ts_backfill, ts_median=self.ts_median, ts_av_diff=self.ts_av_diff, ts_decay_exp_window=self.ts_decay_exp_window, ts_scale=self.ts_scale, ts_quantile=self.ts_quantile, ts_corr=self.ts_corr, ts_cov=self.ts_cov, ts_regression=self.ts_regression)
+        self.IMPL = dict(abs=cp.abs, neg=lambda x: -x, sign=self._sign, log=self._log, square=lambda x: x * x, sqrt=self._sqrt, tanh=self._tanh, inv=self._inv, s_log_1p=self._s_log_1p, **{'not': self._not}, is_nan=self._is_nan, add=lambda a, b: a + b, sub=lambda a, b: a - b, mul=lambda a, b: a * b, div=self._div, max=cp.maximum, min=cp.minimum, gt=self._pred('gt', 'a > b'), lt=self._pred('lt', 'a < b'), **{'and': self._pred('and', '(a > 0) && (b > 0)'), 'or': self._pred('or', '(a > 0) || (b > 0)')}, equal=self._pred('equal', 'a == b'), not_equal=self._pred('not_equal', 'a != b'), greater_equal=self._pred('ge', 'a >= b'), less_equal=self._pred('le', 'a <= b'), add_const=lambda x, k: x + D(k), mul_const=lambda x, k: x * D(k), pow_const=lambda x, k: self._pow(x, D(k)), left_tail=lambda x, k: self._left_tail(x, float(k)), right_tail=lambda x, k: self._right_tail(x, float(k)), hump=self.hump, if_else=self._if_else, trade_when=self.trade_when, cs_rank=self.cs_rank, cs_zscore=lambda x: self._cs(x, 0), cs_demean=lambda x: self._cs(x, 1), cs_scale=lambda x: self._cs(x, 2), ts_mean=self.ts_mean, ts_std=self.ts_std, ts_max=self.ts_max, ts_min=self.ts_min, ts_sum=self.ts_sum, ts_rank=self.ts_rank, ts_arg_max=self.ts_arg_max, ts_arg_min=self.ts_arg_min, ts_ema=self.ts_ema, ts_wma=self.ts_wma, ts_ref=self.ts_ref, ts_delta=self.ts_delta, ts_skew=self.ts_skew, ts_kurt=self.ts_kurt, ts_mad=self.ts_mad, ts_slope=self.ts_slope, ts_chanpos=self.ts_chanpos, ts_ddown=self.ts_ddown, ts_zscore=self.ts_zscore, ts_snr=self.ts_snr, ts_backfill=self.ts_backfill, ts_median=self.ts_median, ts_av_diff=self.ts_av_diff, ts_decay_exp_window=self.ts_decay_exp_window, ts_scale=self.ts_scale, ts_quantile=self.ts_quantile, ts_corr=self.ts_corr, ts_cov=self.ts_cov, ts_regression=self.ts_regression)
         assert set(self.IMPL) == set(OPS), set(OPS) ^ set(self.IMPL)
 
     def _optin_max(self, fn):
@@ -57,26 +62,26 @@ class Ops:
         fn.max_dynamic_shared_size_bytes = cap
         return cap
 
-    def _candidate_tiles(self, w, budget, mult=1):
+    def _candidate_tiles(self, w, budget):
         """(assets, days) tiles whose (days + w - 1) x assets halo fits `budget`; larger tiles (more reuse) first."""
-        out = [(ss, tt) for ss in (8, 16, 32) for tt in (256, 192, 128, 96, 64, 48, 32, 16) if ss * tt <= self._MAXTHR and ss * tt % self._WARP == 0 and ((tt + w - 1) * ss * _ELEM * mult <= budget)]
+        out = [(ss, tt) for ss in (8, 16, 32) for tt in (256, 192, 128, 96, 64, 48, 32, 16) if ss * tt <= self._MAXTHR and ss * tt % self._WARP == 0 and ((tt + w - 1) * ss * _ELEM <= budget)]
         return sorted(out, key=lambda st: -st[0] * st[1])
 
-    def _tile(self, w, mult=1):
-        return (self._candidate_tiles(w, self._SHBUDGET, mult) or self._candidate_tiles(w, self._DYNMAX, mult))[0]
+    def _tile(self, w):
+        return (self._candidate_tiles(w, self._SHBUDGET) or self._candidate_tiles(w, self._DYNMAX))[0]
 
-    def _max_window(self, mult) -> int:
+    def _max_window(self) -> int:
         lo, hi = (2, 1 << 16)
         while lo < hi:
             mid = (lo + hi + 1) // 2
-            lo, hi = (mid, hi) if self._candidate_tiles(mid, self._DYNMAX, mult) else (lo, mid - 1)
+            lo, hi = (mid, hi) if self._candidate_tiles(mid, self._DYNMAX) else (lo, mid - 1)
         return lo
 
     def window_cap(self, op: str) -> int:
         return self.max_pair_window if OPS[op].kind == 'pair' else self.max_window
 
     def unsupported(self, tree):
-        """Reasons this tree cannot run on this card: unknown operators or windows above the card's tile limit."""
+        """Unknown operators or windows beyond the implementation's explicit capabilities."""
         out = []
         for n in tree.root.walk():
             if n.leaf:
@@ -109,8 +114,7 @@ class Ops:
     def _pair(self, a, b, w, op):
         T, S = a.shape
         out = cp.empty_like(a)
-        ss, tt = self._tile(w, 2)
-        self._k_pair(((S + ss - 1) // ss, (T + tt - 1) // tt), (ss, tt), (a, b, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op)), shared_mem=2 * (tt + w - 1) * ss * _ELEM)
+        self._k_pair(((S + 127) // 128,), (128,), (a, b, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op)))
         return out
 
     def ts_sum(self, x, w):
@@ -120,7 +124,10 @@ class Ops:
         return self._moment(x, w, 1, 0, self._DUMMY)
 
     def ts_std(self, x, w):
-        return self._moment(x, w, 2, 0, self._DUMMY)
+        T, S = x.shape
+        out = cp.empty_like(x)
+        self._k_std(((S + 127) // 128,), (128,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        return out
 
     def ts_mad(self, x, w):
         return self._moment(x, w, 5, 0, self._DUMMY)
@@ -141,7 +148,10 @@ class Ops:
         return self._ext(x, w, 2)
 
     def ts_slope(self, x, w):
-        return self._ext(x, w, 3)
+        T, S = x.shape
+        out = cp.empty_like(x)
+        self._k_slope(((S + 127) // 128,), (128,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        return out
 
     def ts_rank(self, x, w):
         return self._ext(x, w, 4)
@@ -194,15 +204,18 @@ class Ops:
         """Binary predicate: NaN on either side -> NaN, else 1/0 (the CPU FM_BIN_NAN semantics)."""
         return self._ew(name, 'T a, T b', f'o = (isnan(a) || isnan(b)) ? qnan<T>() : (T)(({cond}) ? 1 : 0);')
 
-    def _pop_std(self, x, w):
-        """Population standard deviation (ts_zscore / ts_snr use ss/w on the CPU; ts_std is the sample one)."""
-        return self.ts_std(x, w) * D(((w - 1) / w) ** 0.5)
+    def _standardize(self, x, w, mode):
+        T, S = x.shape
+        out = cp.empty_like(x)
+        self._k_standardize(((T * S + 127) // 128,), (128,),
+                           (x, out, np.int32(T), np.int32(S), np.int32(w), np.int32(mode)))
+        return out
 
     def ts_zscore(self, x, w):
-        return self._safe_div(x - self.ts_mean(x, w), self._pop_std(x, w))
+        return self._standardize(x, w, 0)
 
     def ts_snr(self, x, w):
-        return self._safe_div(self.ts_mean(x, w), self._pop_std(x, w))
+        return self._standardize(x, w, 1)
 
     def ts_chanpos(self, x, w):
         return self._chanpos(x, self.ts_min(x, w), self.ts_max(x, w))

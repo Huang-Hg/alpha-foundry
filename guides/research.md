@@ -2,11 +2,11 @@
 
 [Project overview](../README.md) · [简体中文](research.zh-CN.md)
 
-Point-in-time research for formulas, model signals and target exposures. Markets include US equities, A-shares, daily crypto spot and USDT linear isolated perpetuals. A-shares retain price-limit, suspension, sell-tax and next-session execution coverage. Linux CPU and CUDA execute explicit market specifications; cash markets support paired FP32 and perpetual accounts currently require FP64.
+Point-in-time research for formulas, model signals and target exposures. Markets include US equities, A-shares, daily crypto spot and USDT linear isolated perpetuals. A-shares retain price-limit, suspension, sell-tax and next-session execution coverage. Linux CPU and CUDA execute explicit market specifications; cash accounts and CUDA statistics use paired FP32. Numerical policies are fixed before evaluation; no automatic precision replay is performed.
 
 ## Architecture
 
-The modular monolith follows the ownership contract in AGENTS.md. tests/test_architecture.py checks dependency cycles, forbidden imports and import-time side effects.
+The modular monolith separates the responsibilities below. [Architecture checks](../tests/test_architecture.py) reject dependency cycles, forbidden imports and import-time side effects.
 
 | Owner | Responsibility |
 | --- | --- |
@@ -27,7 +27,7 @@ Old wire, portfolio and checkpoint protocols are rejected explicitly. There are 
 
 ## Candidate interface
 
-`research-v10` uses `Candidate(id, source)`. The tagged source is `Formula(expression)`, `ArraySource(kind, digest, snapshot, producer)`, or the explicit `EqualWeight()` portfolio seed. Formula miners and family exploration construct `Formula` objects. External model outputs enter through `Research.register_batch(batch, context_id)` and then use the same evaluation, weight trials, admission and commit rules.
+`research-v11` uses `Candidate(id, source)`. The tagged source is `Formula(expression)`, `ArraySource(kind, digest, snapshot, producer)`, or the explicit `EqualWeight()` portfolio seed. Formula miners and family exploration construct `Formula` objects. External model outputs enter through `Research.register_batch(batch, context_id)` and then use the same evaluation, weight trials, admission and commit rules.
 
 Construct `Research(engine, library_store, array_store, null_shift=False)` with explicit stores. `evaluate(candidates, context_id)` returns scalar reports; `evaluate_device(sources, context_id, report=False)` retains device books and daily returns. Queries do not publish artifacts or change the portfolio. `commit(candidates, context_id)` publishes one atomic successor. Registration is a separate command that stores immutable content-addressed artifacts and takes an owned copy, so the producer may reuse its input buffers after it returns. Reloading a committed array member verifies its artifact and declared cutoffs before execution.
 
@@ -49,9 +49,13 @@ Configure `[crypto_perpetual]` and use the importer listed by `python -m foundry
 
 Typed simulation results retain daily funding, trading/liquidation fees, isolated loss-cap adjustments, liquidation phase bitmaps, bankruptcy and final equity. Reports aggregate cashflows/counts over the research window and name the account model. Loss-cap adjustments are accounting in this model, not claimed exchange insurance payments. Actual maximum gross leverage may exceed the entry limit after adverse prices.
 
-Perpetual CUDA simulation supports FP64, FP32 (`mixed`) and double-FP32 (`paired`). A warp evaluates the hourly events of each daily collateral interval in parallel, with resident funding prefixes and an affine Newton solve for rebalance fees. Risk-boundary, exhausted-exponent and ill-conditioned-statistics rows receive explicit scalar FP64 refinement on the same device. Low-precision modes retain FP64 reporting/statistics and are experimental; their guard is not a general error proof. Signed admission is explicitly planned as FP64 (`risk_screening_requires_f64`) until a leveraged screening policy is calibrated.
+Perpetual CUDA assigns one warp to each account and lanes to assets. Hourly funding, liquidation stages and daily collateral changes remain chronological. Rebalance reductions run across assets. The account uses native arithmetic because the paired account experiment changed decisions immediately beside liquidation thresholds; its production use must satisfy the measured query-plus-commit cost limit described below. CUDA statistics and admission moments use paired FP32.
 
-Candidate measurements are cached within the immutable study/precision/noise context, bounded by `candidate_batch`; returned device buffers are borrowed read-only. Each caller receives a separate result row. Admission always uses the current portfolio version. CUDA commit trials batch candidates at the same version, consume results in input order, and recompute the suffix after each acceptance before one atomic publication. CPU uses sequential trials.
+Small perpetual accounts are planned for CPU execution before launch using `[cuda] perpetual_host_cells` and the complete `B*T*S` workload. The result returns to the runtime's device arrays. This is a declared size-based dispatch, with no runtime-error fallback or result-dependent rerun. Discovery publishes the threshold. Formula operators retain chronological rolling std/slope/correlation and population-standardization semantics; unstable compositions can still amplify tiny backend math differences, so sampled parity is not a guarantee for arbitrary formulas.
+
+The 64-contract experiment found no end-to-end benefit from the BF16 Tensor Core funding-prefix prototype. It is outside production. The replaced prefix kernels and scalar precision-refinement branch are deleted. Legitimate changes in funding intervals are accepted only with schedule evidence; missing funding events remain errors.
+
+Candidate measurements are cached within the immutable study/precision/noise context, bounded by `candidate_batch`; returned device buffers are borrowed read-only. Each caller receives a separate result row. Admission always uses the current portfolio version. CUDA commit trials batch candidates at the same version and consume results in input order. Requests fitting one device batch retain full parallelism. For larger requests, the lookahead grows after a rejected batch and contracts to the observed acceptance distance after a successful candidate; this avoids computing a large suffix against an obsolete portfolio. The successor is still published once, atomically. CPU uses sequential trials.
 
 ## PIT and precision
 
@@ -63,17 +67,13 @@ The A-share artifact retains full quotes for 365 historical constituents and app
 
 Execution specifications contain open eligibility, costs, directional freezes and carrying costs. Kernels do not infer market rules from stock codes. CPU/CUDA retain the same full asset universe and shared metric semantics.
 
-Paired precision uses two FP32 components for recurrence, blending and statistics, with scaled wealth exponents. Conversion, selected reporting metrics and final admission refinement still use FP64. Acceptance compares numerical errors, trades, selected weights and threshold decisions; paired FP32 does not promise bitwise FP64 equivalence.
+The precision acceptance budget is **query + ordered commit ≤ 2× the single-FP32 comparison**, on the same device, input candidates, order and market rules. Data loading, registration and JIT are reported separately and cannot dilute this ratio. A kernel-only speedup does not establish compliance. Native arithmetic is an explicit measured exception, not a second execution of a low-precision result.
 
-Historical resident-kernel measurements, 600 days × 299 stocks × 256 books, CUDA-event milliseconds:
+The numerical policy is fixed for the study and shared by query, weight trials and commit. `mixed` and `paired` select cash-account arithmetic; perpetual accounts and CPU use the explicit `native` policy. The API exposes the effective choice and no longer accepts a per-query precision override. Reports do not contain refinement counters. Wide arrays at interchange boundaries do not imply that all arithmetic is wide, nor that the whole pipeline is FP32.
 
-| GPU | FP64 execution + statistics | Paired execution + statistics |
-| --- | ---: | ---: |
-| L4 | 43.356 | 10.904 |
-| RTX PRO 6000 Blackwell Server Edition | 17.593 | 7.035 |
-| A100 SXM4 40GB | 7.055 | 12.682 |
+CUDA reductions, weighted moments and log growth use two FP32 components. Integer exponents preserve the wealth range. Leading-term/correction normalization uses Quick-Two-Sum; arbitrary leading terms still use Two-Sum, and FMA retains product residuals. The error-transform basis is [Hida, Li and Bailey](https://www.davidhbailey.com/dhbpapers/arith15.pdf). Centered weighted variance avoids spurious variance for constant returns; zero variance has Sharpe zero on both backends. Feasible utility ties use the configured metric tolerance, then CAGR and the smallest tied weight. These are shared semantics, not backend-specific admission thresholds. Accuracy checks cover returns, cashflows, liquidation events, chosen weights and both sides of decision thresholds. Historical bitwise baselines are not silently rerecorded when the protocol or numerical semantics change.
 
-These exclude packing/allocation, initial transfer and JIT. They are not end-to-end measurements of this refactor. The prior paired-statistics experiment preserved daily returns and measured maximum statistics error of 1.43e-13, including blended trials. Paired arithmetic is not universally faster than native FP64.
+The operator contract also makes finite constant-window covariance exactly zero and its correlation undefined. Tiny tanh values use the correctly rounded identity on CPU, CUDA and portable backends. A candidate relying on cancellation noise from a constant covariance now has no valid signal; this is an intentional bug fix, not a widened acceptance tolerance.
 
 ## Development and validation
 
@@ -98,7 +98,32 @@ Run CPU smoke before data/GPU integration in the environment authorized for the 
 
 ```bash
 PYTHONPATH=tests python -m unittest test_architecture test_expr test_native test_policy test_monitor test_pit test_api test_service test_runtime test_candidates test_crypto_spot test_perpetual test_perpetual_data
-PYTHONPATH=tests python -m unittest test_cuda_backtest test_cuda_statistics test_cuda_markets test_cuda_pit test_cuda_candidates test_cuda_perpetual test_markets test_portfolio test_search
+PYTHONPATH=tests python -m unittest test_cuda_backtest test_cuda_statistics test_cuda_moments test_cuda_operator_contracts test_cuda_markets test_cuda_pit test_cuda_candidates test_cuda_perpetual test_markets test_portfolio test_search
 ```
 
 Performance reports distinguish loading, transfer/JIT, resident batches and complete use cases, and state GPU, full universe, precision and observed error.
+
+### Numerical validation: PRO 6000
+
+The fixed-policy implementation passed 182 tests on Colab RTX PRO 6000 Blackwell Server Edition (97,887 MiB, driver 580.82.07; Python 3.13.16, NumPy 2.4.6, CuPy 14.0.1). Builds, smoke, CPU references, GPU tests and endpoint timing all ran there. The legacy private `production/regression.npz` lacks the current protocol/study identity: `test_production` was excluded and that artifact was not rewritten. This is not a claim of bitwise reproduction of the legacy portfolio.
+
+The comparison runs one warmed query followed by an ordered commit from the same initial portfolio, with identical candidates, order and market rules. Formula caches are cleared after warm-up. Loading, registration and JIT are outside the ratio. Each condition is measured once; the results qualify these workloads, not every device or input size.
+
+The **single-FP32 probe** changes GPU formula arithmetic and account arithmetic to single components. Both sides retain the same paired statistics, wide interchange arrays and preplanned small-perpetual CPU dispatch. It is an arithmetic-cost comparison, not an all-FP32 production implementation. The production formula operators and perpetual account recurrence retain native double arithmetic; cash accounts and CUDA statistics use paired FP32. Queries and commits never trigger precision reruns.
+
+| Workload | Single probe, seconds | Production, seconds | Ratio | Accepted |
+| --- | ---: | ---: | ---: | ---: |
+| US: 500 assets × 269 days, 64 formulas | 0.05081 | 0.08930 | 1.758× | 6 |
+| A-share: 365 assets × 601 days, 64 formulas | 0.10562 | 0.20479 | 1.939× | 8 |
+| Crypto spot: 73 assets × 4,018 days, 64 formulas | 0.22727 | 0.42082 | 1.852× | 5 |
+| Perpetual: 64 contracts, 64 formulas | 0.45509 | 0.83460 | 1.834× | 7 |
+| Perpetual: 64 contracts, 64 target books | 0.91915 | 1.56882 | 1.707× | 17 |
+| Perpetual: 64 contracts, 4,096 target books | 15.25573 | 26.91782 | 1.764× | 39 |
+
+All times in the table are **query + commit**. Perpetual inputs retain 365 days and all 8,760 hourly events, with a 184-day evaluation window. The large target-book case spends 10.52891 seconds on query and 16.38891 on commit; prepare and registration add 0.84255 and 1.24893 seconds separately. Device memory at completion is 11,666 MiB; pool reservation is 10,958 MiB. These are end-state readings, not peak measurements.
+
+Against the independent CPU reference, all six conditions have identical admission/rejection decisions, reason codes, constraint booleans, liquidation counts/first timestamps and bankruptcy flags. Maximum absolute differences across query and commit reports are: Sharpe `7.32e-11`, CAGR `2.18e-12`, drawdown `3.48e-13`, and selected weight `5.03e-12`. The 4,096-book funding difference is below `1.00e-15` and trading-fee difference below `2.03e-15`, in initial-equity units. Other report quantities have different scales: the largest normalized scalar error is `1.71e-9`, using `abs(error)/max(1, abs(reference))`; this is not a universal absolute-error bound. Direct CUDA tests additionally check event-stage bitmaps and adjacent liquidation thresholds. Array correctness reuses the unchanged CPU reference collected on the preceding authorized PRO 6000 worker; no cross-worker CPU speedup is claimed.
+
+The single probe changes some selected weights and constraint checks; in spot it even exchanges accepted candidate identities while leaving the accepted count at five. It therefore serves only as a speed denominator. Accuracy is judged against the independent CPU implementation, never from equal accepted counts alone.
+
+Paired arithmetic uses Quick-Two-Sum only for ordered normalization and FMA product residuals. Division forms its residual directly with FMA and preserves round-to-nearest division; an exact unit denominator returns the original pair. This removed redundant pair construction and reduced the previously over-budget cash workloads without lowering precision or changing admission tolerances. Tensor-core funding-prefix experiments are not enabled in production: they did not establish an end-to-end improvement for the chronological account model.

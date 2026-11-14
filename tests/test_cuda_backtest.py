@@ -63,7 +63,7 @@ class CudaBacktestTests(unittest.TestCase):
                 if assets > 128 or source is general:
                     self.assertEqual(spec.backend, 'cuda')
                     self.assertTrue(spec.general)
-                    expected = self.cpu.simulate(cp.asnumpy(W), self.cpu.device_spec(source), 3, 252., 'f64').returns
+                    expected = self.cpu.simulate(cp.asnumpy(W), self.cpu.device_spec(source), 3, 252., 'native').returns
                     actual = self.cuda.simulate(W, spec, 3, 252., 'paired')
                     np.testing.assert_allclose(cp.asnumpy(actual.returns), expected, atol=1e-10, rtol=0)
 
@@ -73,9 +73,9 @@ class CudaBacktestTests(unittest.TestCase):
         block = np.zeros((3, 3), np.uint8); block[2] = [2, 2, 0]
         spec = ExecutionSpec.build(o, c, o*0, block=block)
         W = np.array([[.8,.1,0], [.2,.2,.6], [0,0,0]])
-        expected = self.cpu.simulate(W[None], self.cpu.device_spec(spec), 0, 242., 'f64').returns[0]
+        expected = self.cpu.simulate(W[None], self.cpu.device_spec(spec), 0, 242., 'native').returns[0]
         np.testing.assert_allclose(expected, 0, atol=1e-15)
-        for precision in ('f64', 'paired'):
+        for precision in ('paired',):
             r = self.cuda.simulate(cp.asarray(W[None]), self.cuda.device_spec(spec), 0, 242., precision)
             cp.testing.assert_allclose(r.returns[0], cp.asarray(expected), atol=1e-12, rtol=0)
 
@@ -90,8 +90,8 @@ class CudaBacktestTests(unittest.TestCase):
                     source = replace(host, cost_sell=host.cost_buy*3 if flags&1 else None,
                                      block=block if flags&2 else None,
                                      carry=np.full(host.live.shape,.0003) if flags&4 else None)
-                    expected = self.cpu.simulate(cp.asnumpy(W), self.cpu.device_spec(source), 3, 242., 'f64').returns
-                    for precision in ('f64','paired'):
+                    expected = self.cpu.simulate(cp.asnumpy(W), self.cpu.device_spec(source), 3, 242., 'native').returns
+                    for precision in ('paired',):
                         actual = self.cuda.simulate(W,self.cuda.device_spec(source),3,242.,precision)
                         np.testing.assert_allclose(cp.asnumpy(actual.returns),expected,atol=1e-10,rtol=0)
 
@@ -100,10 +100,10 @@ class CudaBacktestTests(unittest.TestCase):
         open_ = np.vstack([close[:1], close[:-1]])
         spec = self.cuda.device_spec(ExecutionSpec.build(open_, close, open_ * 0))
         W = cp.asarray((close == 1.)[None], dtype=cp.float64)
-        exact = self.cuda.simulate(W, spec, 0, 365., 'f64')
+        exact = self.cpu.simulate(cp.asnumpy(W), self.cpu.device_spec(spec.host), 0, 365., 'native')
         actual = self.cuda.simulate(W, spec, 0, 365., 'paired')
-        self.assertTrue(bool(cp.isfinite(exact.returns).all()))
-        self.assertGreater(float(cp.prod(1 + exact.returns)), 1e100)
+        self.assertTrue(bool(np.isfinite(exact.returns).all()))
+        self.assertGreater(float(np.prod(1 + exact.returns)), 1e100)
         cp.testing.assert_allclose(actual.returns, exact.returns, atol=1e-10, rtol=0)
 
     def test_pair_retains_low_bits(self):
@@ -123,11 +123,11 @@ class CudaBacktestTests(unittest.TestCase):
         self.assertEqual(actual[2], actual[3])
         self.assertNotEqual(actual[0], actual[4])
 
-    def test_paired_recurrence_matches_f64(self):
+    def test_paired_recurrence_matches_native(self):
         for assets in (1, 31, 32, 33, 73, 128):
             with self.subTest(assets=assets):
                 W, spec = fixture(self.cuda, assets=assets)
-                exact = self.cuda.simulate(W, spec, 3, 365., 'f64')
+                exact = self.cpu.simulate(cp.asnumpy(W), self.cpu.device_spec(spec.host), 3, 365., 'native')
                 actual = self.cuda.simulate(W, spec, 3, 365., 'paired')
                 cp.testing.assert_allclose(actual.returns, exact.returns, rtol=0, atol=1e-10)
                 cp.testing.assert_allclose(actual.statistics[:, 1:], exact.statistics[:, 1:], rtol=1e-8, atol=1e-10)
@@ -139,7 +139,7 @@ class CudaBacktestTests(unittest.TestCase):
         U = W[1] * .8
         owners = cp.asarray([1, 2, 4, 1, 3], dtype=cp.int32)
         weights = cp.asarray([.01, .3, .5, 1., 1e-8], dtype=cp.float64)
-        expected = self.cuda.blend(W, U, owners, weights, spec, 3, 365., 'f64', 3)
+        expected = self.cpu.blend(cp.asnumpy(W), cp.asnumpy(U), cp.asnumpy(owners), cp.asnumpy(weights), self.cpu.device_spec(spec.host), 3, 365., 'native', 3)
         actual = self.cuda.blend(W, U, owners, weights, spec, 3, 365., 'paired', 3)
         cp.testing.assert_allclose(actual.returns, expected.returns, atol=1e-10, rtol=0)
         cp.testing.assert_allclose(actual.statistics, expected.statistics, atol=1e-8, rtol=1e-8)

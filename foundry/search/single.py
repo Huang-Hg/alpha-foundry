@@ -89,8 +89,8 @@ def required_sharpe(rho_portfolio, rho_members, reference, kappa, single_cfg, po
 
 def measures(engine, returns, reference):
     xp, cfg = engine.xp, engine.settings.single
-    sharpe = M.sharpe(returns, engine.ppy, xp)
-    cagr = M.cagr(returns, engine.ppy, xp)
+    moments = engine.backend.measure(returns, engine.recency_weights, engine.ppy)
+    sharpe, cagr = moments.sharpe, moments.cagr
     years = engine.years.sharpe(returns, engine.ppy, last=cfg.recent_years)
     centered, base = returns - returns.mean(1, keepdims=True), reference.rr - reference.rr.mean()
     norm = xp.sqrt((centered * centered).sum(1) * (base * base).sum())
@@ -148,7 +148,7 @@ class SingleEvaluator(Evaluator):
             proposal = verdict.proposal
             self.cache[row.source.expression] = MiningResult(row.source.expression, values[0] if not duplicate else -10., accepted, True,
                 bool(values[13]), rho=values[3], utility=values[6], novelty=values[4], duplicate=duplicate,
-                weight=proposal.weight, delta=proposal.checks, precision=proposal.precision, backend=proposal.backend,
+                weight=proposal.weight, delta=proposal.checks, backend=proposal.backend,
                 g3=bool(values[2]), sharpe=values[7], cagr=values[8], maxdd=values[9], rho_portfolio=values[10],
                 rho_members=values[14], appraisal=values[11], required_sharpe=values[12], recent_years=tuple(values[15:]))
             self.counters['g1'] += 1
@@ -157,7 +157,6 @@ class SingleEvaluator(Evaluator):
             self.counters['low_corr'] += int(accepted)
             self.counters['behavior_duplicates'] += int(duplicate)
             self.counters['weight_trials'] += proposal.trials
-            self.counters['fp64_refined'] += int(proposal.backend.endswith('-f64'))
             if accepted and values[6] > self.best_score:
                 self.best, self.best_score = row.source.expression, values[6]
             if not duplicate and values[5]:

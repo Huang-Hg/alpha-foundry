@@ -9,22 +9,11 @@
  * W (B,T,S); prices/cost (T,S); live uint8 (T,S). Outputs rr (B,T) f64 and stats (B,5) f64 =
  * [sharpe, mean_return, volatility, max_drawdown, total_return] over rows [i0:], arithmetic annualisation.
  * Recurrence scalars are replicated in every lane (same FP order -> deterministic); accumulators and shares are
- * double unless the mixed-precision instantiation asks for float. Relies on IEEE NaN propagation (0*NaN = NaN
+ * paired by default; the mixed instantiation uses single components. Relies on IEEE NaN propagation (0*NaN = NaN
  * -> zeroed), like the CPU kernel.
  */
 #define ASSETS_PER_LANE 4                        /* assets per lane => S <= 32*4 = 128 */
 #define PRICE_EPS 1e-7
-
-template<typename T> __device__ __forceinline__ T warp_reduce_sum(T v) {
-    for (int off = warpSize >> 1; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffff, v, off);
-    return v;
-}
-
-template<typename A>
-__device__ __forceinline__ A warp_sum_bcast(A v) {
-    v = warp_reduce_sum<A>(v);
-    return __shfl_sync(0xffffffff, v, 0);
-}
 
 /* Four independent sums on one shuffle chain: same latency as one. */
 template<typename A>
@@ -57,7 +46,7 @@ __device__ __forceinline__ C blend_den(const C* eref, const C* eown, int day, C 
 template<typename T, bool MIX, typename C>
 __device__ __forceinline__ T blend_weight(const T* W, const T* ref, long long i, C alpha, C den) {
     if (!MIX) return W[i];
-    // Keep the materialised f64 expression's separate multiply/add/divide rounding.
+    // Keep the materialised expression's separate multiply/add/divide rounding.
     return (T)(blend_add((C)ref[i], blend_mul(alpha, (C)W[i])) / den);
 }
 
@@ -188,8 +177,8 @@ __device__ void simulate_core(const T* __restrict__ W,
 
         A v = eq_tonight / prev_tonight - A(1);
         if (!isfinite(v)) v = A(0);
-        // A low-precision overflow/underflow must trigger precision escalation, never pass for the zero return
-        // of an invalid value.
+        // An unrepresentable recurrence remains invalid; it cannot masquerade
+        // as a valid zero return and is never rerun in another precision.
         if (LimitedRange<A>::value &&
             (!isfinite(eq_tonight) || !isfinite(eq_after) ||
              !isfinite(prev_tonight) || fabs(prev_tonight) < A(1e-30))) v = (A)__int_as_float(0x7fffffff);
@@ -204,49 +193,9 @@ __device__ void simulate_core(const T* __restrict__ W,
         rebase(eq_after, prev_tonight, shares);
     }
     __syncwarp();                                          /* lane 0 wrote rr; the whole warp reads it below */
-    if (PairStats<A>::enabled) {
-        return;
-    }
 
-    /* --- statistics over [i0:]: arithmetic annualisation (ddof=0), max drawdown, total return --- */
-    const double n = (double)(Tn - (int)i0);
-    double part = 0.0;
-    for (int t = (int)i0 + lane; t < Tn; t += 32) part += rr[t];
-    const double mean = warp_sum_bcast(part) / n;
-    part = 0.0;
-    for (int t = (int)i0 + lane; t < Tn; t += 32) { const double d = rr[t] - mean; part += d * d; }
-    const double sd = sqrt(warp_sum_bcast(part) / n);
-    if (lane == 0) {
-        double cum = 1.0, peak = 1.0, dd = 0.0;
-        for (int t = (int)i0; t < Tn; t++) {
-            cum *= 1.0 + rr[t];
-            if (cum > peak) peak = cum;
-            const double u = cum / peak - 1.0;
-            if (u < dd) dd = u;
-        }
-        const double mr = mean * ppy, vol = sd * sqrt(ppy);
-        double* st = stats_out + b * 5;
-        st[0] = mr / vol; st[1] = mr; st[2] = vol; st[3] = dd; st[4] = cum - 1.0;
-    }
 }
 
-extern "C" __global__ void k_simulate_f64(const double* W, const double* o_raw, const double* pcl,
-                                          const double* off, const double* cff, const double* cost,
-                                          const unsigned char* live, int T, int S, int B, long long i0,
-                                          double ppy, double* rr, double* st) {
-    simulate_core<double>(W, o_raw, pcl, off, cff, cost, live, T, S, B, i0, ppy, rr, st);
-}
-extern "C" __global__ void k_blend_f64(const double* W, const double* ref,
-                                       const int* owners, const double* weights,
-                                       const double* eref, const double* eown,
-                                       const double* o_raw, const double* pcl,
-                                       const double* off, const double* cff, const double* cost,
-                                       const unsigned char* live, int T, int S, int B, long long i0,
-                                       double ppy, double* rr, double* st) {
-    simulate_core<double,true>(W, o_raw, pcl, off, cff, cost, live, T, S, B, i0, ppy, rr, st,
-                               ref, owners, weights, eref, eown);
-}
-// Mixed precision: FP32 holdings/prices/daily state, FP64 return storage and all statistics.
 extern "C" __global__ void k_simulate_mixed(const float* W, const float* o_raw, const float* pcl,
                                             const float* off, const float* cff, const float* cost,
                                             const unsigned char* live, int T, int S, int B, long long i0,
@@ -264,8 +213,7 @@ extern "C" __global__ void k_blend_mixed(const float* W, const float* ref,
                                     ref, owners, weights, eref, eown);
 }
 
-// FP32 pairs retain low bits of the original data. Only return I/O and statistics
-// use FP64; the holdings recurrence and blended-book arithmetic use FP32.
+// Paired holdings and blended-book arithmetic retain low input bits.
 extern "C" __global__ void k_simulate_paired(const FloatPair* W, const FloatPair* o_raw, const FloatPair* pcl,
                                            const FloatPair* off, const FloatPair* cff, const FloatPair* cost,
                                            const unsigned char* live, int T, int S, int B, long long i0,

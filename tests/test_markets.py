@@ -30,7 +30,7 @@ class MarketTests(unittest.TestCase):
         self.assertTrue((spec.cost_sell > spec.cost_buy)[spec.live > 0].all())
         row = runtime.engine.evaluate(('gt(ma_dist_20,0)',))[0]
         free = replace(spec, block=None)
-        self.assertFalse(np.array_equal(runtime.executor.simulate(row.book[None], runtime.executor.device_spec(spec), 0, runtime.market.ppy, 'f64').returns, runtime.executor.simulate(row.book[None], runtime.executor.device_spec(free), 0, runtime.market.ppy, 'f64').returns))
+        self.assertFalse(np.array_equal(runtime.executor.simulate(row.book[None], runtime.executor.device_spec(spec), 0, runtime.market.ppy, 'native').returns, runtime.executor.simulate(row.book[None], runtime.executor.device_spec(free), 0, runtime.market.ppy, 'native').returns))
 
 
 if __name__ == '__main__':

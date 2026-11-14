@@ -24,8 +24,11 @@ def recency(dates: np.ndarray, halflife: float, xp):
 
 
 def weighted_sharpe(r, p, ppy, xp):
-    mu = xp.sum(r * p, axis=-1)
-    var = xp.sum((r - mu[..., None]) ** 2 * p, axis=-1)
+    origin = r[..., 0]
+    centered = r - origin[..., None]
+    shift = xp.sum(centered * p, axis=-1)
+    mu = origin + shift
+    var = xp.sum((centered - shift[..., None]) ** 2 * p, axis=-1)
     return xp.where(var > 0, mu / xp.sqrt(xp.where(var > 0, var, 1)) * ppy ** 0.5, 0)
 
 

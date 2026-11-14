@@ -65,33 +65,23 @@ class AdmissionTests(unittest.TestCase):
         expected = self.engine.metrics([cap_book(original.reference.U + row.weight * self.engine.evaluate([row.row.source.expression])[0].book, self.engine.allocation, cp)])[0]
         cp.testing.assert_allclose(after.rr, expected.returns, atol=1e-12, rtol=1e-12)
 
-    def test_precision_budget_and_threshold_sides(self):
+    def test_admission_does_not_rerun_in_another_precision(self):
         research = research_for(self.runtime)
         rows = self.engine.evaluate(EXPRESSIONS)
         ref = research.portfolio.reference
-        exact = admission.proposals(self.engine, rows, ref, 'f64')
-        for row, proposal in zip(rows, exact):
-            gain = proposal.wsharpe - ref.wsharpe
-            for offset in (-1e-7, 1e-7):
-                boundary = replace(ref, cfg=replace(ref.cfg, min_sharpe_gain=gain + offset),
-                                   precision_errors={})
-                a = admission.proposals(self.engine, [row], boundary, 'f64')[0]
-                b = admission.proposals(self.engine, [row], boundary, 'paired')[0]
-                self.assertEqual((a.passed, a.weight), (b.passed, b.weight))
-        with patch.object(self.engine, 'cuda_cfg', replace(self.engine.cuda_cfg, mixed_return_atol=1e-14)):
-            strict = admission.proposals(self.engine, rows, ref, 'auto')
-        self.assertTrue(all(p.precision.refined for p in strict))
-        self.assertEqual([p.weight for p in strict], [p.weight for p in exact])
-        mixed = self.engine.evaluate(EXPRESSIONS[:1], precision='mixed')
-        with self.assertRaises(AssertionError):
-            research.portfolio.admit(mixed)
+        with patch.object(self.engine, 'blend', wraps=self.engine.blend) as blend:
+            proposals = admission.proposals(self.engine, rows, ref)
+        self.assertEqual(blend.call_count, 1)
+        self.assertTrue(all(p.backend == 'cuda-paired' for p in proposals))
+        with self.assertRaises(TypeError):
+            self.engine.evaluate(EXPRESSIONS, precision='mixed')
 
     def test_capacity_is_a_business_rejection(self):
         members = (Member(Formula(EXPRESSIONS[0]), .5),)
         portfolio = Portfolio(self.engine, Library(members, self.engine.study))
         ref = replace(portfolio.reference, cfg=replace(portfolio.reference.cfg, max_members=1))
         row = self.engine.evaluate((EXPRESSIONS[1],))[0]
-        proposal = admission.proposals(self.engine, [row], ref, 'f64')[0]
+        proposal = admission.proposals(self.engine, [row], ref)[0]
         self.assertFalse(proposal.passed)
         self.assertFalse(next(c.passed for c in proposal.checks if c.name == 'capacity'))
 

@@ -82,6 +82,7 @@ class ArchitectureTests(unittest.TestCase):
         concrete = ('foundry.adapters', 'foundry.runtime', 'foundry.engine', 'foundry.service',
                     'foundry.search', 'foundry.ops.cuda', 'foundry.backtest.cuda',
                     'foundry.backtest.perpetual_cpu', 'foundry.backtest.perpetual_cuda',
+                    'foundry.numeric.cuda',
                     'cupy', 'pandas', 'pyarrow', 'socket', 'paramiko')
         for source, targets in self.dependencies.items():
             with self.subTest(module=source):
@@ -164,6 +165,7 @@ with patch('builtins.open', prohibited), \
     importlib.import_module('foundry.ops.cuda')
     importlib.import_module('foundry.backtest.cuda')
     importlib.import_module('foundry.backtest.perpetual_cuda')
+    importlib.import_module('foundry.numeric.cuda')
 '''
         result = subprocess.run([sys.executable, '-c', script], cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

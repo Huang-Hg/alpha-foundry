@@ -70,7 +70,7 @@ with open_runtime(settings, study) as runtime:
 
 接入模型输出时，用 `Research.register_batch` 注册 `ArrayBatch`，之后继续调用同样的 `evaluate` 与 `commit`。输入带有日期/资产坐标、快照身份和观测/拟合截止点。详见[非公式候选与 RPC 接口](guides/research.zh-CN.md#候选接口)。
 
-AI agent 可通过 `python -m foundry schema output/schema.json` 导出机器协议，通过 CLI 帮助发现命令。
+AI agent 可通过 `python -m foundry schema schema.json` 导出机器协议，通过 CLI 帮助发现命令。
 
 ## 工程原则
 

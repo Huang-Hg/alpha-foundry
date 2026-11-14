@@ -3,13 +3,14 @@ from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 import tempfile
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from foundry.adapters.perpetual_data import load_perpetual
+from foundry.adapters.perpetual_data import load_perpetual, _funding_coverage, _verify_transitions
 from foundry.contracts import DataContract, Study
 from foundry.market.crypto_perpetual import CryptoPerpetual
 from foundry.runtime import prepare_backend
@@ -55,6 +56,49 @@ def write_dataset(root, tables):
 
 
 class PerpetualDataTests(unittest.TestCase):
+    def test_interval_change_needs_independent_complete_settlement_evidence(self):
+        funding = pd.DataFrame(dict(symbol=['A']*4, calc_time=np.array([0, 1, 2, 4])*HOUR_MS,
+                                    funding_interval_hours=[1, 1, 1, 4]))
+        successor = pd.DataFrame(dict(symbol=['A'], calc_time=[8*HOUR_MS], funding_interval_hours=[4]))
+        proof = {('A', 2*HOUR_MS, 4*HOUR_MS)}
+        _funding_coverage(funding, successor, ('A',), 0, 8*HOUR_MS, proof)
+        with self.assertRaisesRegex(ValueError, 'gap'):
+            _funding_coverage(funding, successor, ('A',), 0, 8*HOUR_MS, set())
+        with self.assertRaisesRegex(ValueError, 'gap'):
+            _funding_coverage(funding.drop(index=1), successor, ('A',), 0, 8*HOUR_MS, proof)
+        with tempfile.TemporaryDirectory() as folder, patch('foundry.adapters.perpetual_data.urlopen') as request:
+            request.return_value.__enter__.return_value.read.return_value = json.dumps([
+                dict(symbol='A', fundingTime=h*HOUR_MS) for h in (2, 4)]).encode()
+            records = _verify_transitions(Path(folder), funding)
+            self.assertEqual((records[0]['first'], records[0]['last']), (2*HOUR_MS, 4*HOUR_MS))
+            self.assertTrue((Path(folder)/records[0]['archive']).is_file())
+            request.return_value.__enter__.return_value.read.return_value = json.dumps([
+                dict(symbol='A', fundingTime=h*HOUR_MS) for h in (2, 3, 4)]).encode()
+            with self.assertRaisesRegex(ValueError, 'missing or inconsistent'):
+                _verify_transitions(Path(folder), funding)
+
+    def test_interval_evidence_is_hash_checked_when_loading(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            write_dataset(root, tables_fixture())
+            manifest = json.loads((root/'manifest.json').read_text())
+            path = 'raw/transitions/BETAUSDT-1-2.json'
+            (root/path).parent.mkdir(parents=True)
+            payload = json.dumps([dict(symbol='BETAUSDT', fundingTime=t) for t in (1, 2)]).encode()
+            (root/path).write_bytes(payload)
+            manifest['sources'].append(dict(kind='funding_transition', symbol='BETAUSDT', first=1, last=2,
+                archive=path, sha256=hashlib.sha256(payload).hexdigest()))
+            (root/'manifest.json').write_text(json.dumps(manifest))
+            study = Study('crypto_perpetual', '2025-01-03', '2025-01-05')
+            load_perpetual(root, study)
+            (root/path).write_bytes(payload+b'corrupt')
+            with self.assertRaisesRegex(ValueError, 'transition SHA256'):
+                load_perpetual(root, study)
+            # A later transition cannot contaminate an earlier historical query.
+            manifest['sources'][0]['first'] = FIRST_MS + 72*HOUR_MS
+            (root/'manifest.json').write_text(json.dumps(manifest))
+            load_perpetual(root, study)
+
     def test_complete_utc_days_keep_weekends_order_and_funding_settlement_proxy(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

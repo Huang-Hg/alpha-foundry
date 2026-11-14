@@ -114,7 +114,7 @@ def import_perpetual(output, cfg):
         max(source['retrieved_at'] for source in sources),
         'Completed UTC daily trade OHLCV aggregated from complete hourly bars; funding and mark prices are execution-only.',
         'Hourly trade open and mark OHLC. Settlement mark is absent from funding CSV: hourly mark open is an explicit proxy; actual calc_time is retained and bucketed into its UTC hour.',
-        'Public archive retrieval vintage only; historical publication/revision vintages unavailable. Daily features are known at UTC day close. Funding is realized execution cashflow, never a feature; the next settlement timestamp and backward interval prove coverage only, without using its rate.',
+        'Public archive retrieval vintage only; historical publication/revision vintages unavailable. Daily features are known at UTC day close. Funding is realized execution cashflow, never a feature. Constant-interval coverage includes the next settlement timestamp without using its rate; shortened interval-change gaps require an archived funding-history API confirmation.',
         'Fixed preselected configured assets across the imported interval; not a reconstructed historical dynamic universe.')
     tables, artifacts = {}, {}
     lower, upper = start.value // 1_000_000, (end + pd.Timedelta(days=1)).value // 1_000_000
@@ -132,6 +132,8 @@ def import_perpetual(output, cfg):
         payload = table.to_parquet(index=False)
         artifacts[kind] = dict(path=kind + '.parquet', sha256=hashlib.sha256(payload).hexdigest(), rows=len(table))
         publish(output / artifacts[kind]['path'], payload)
+    transitions = _verify_transitions(output, tables['funding'])
+    sources.extend(transitions)
     manifest = dict(asdict(contract), history_start=cfg.history_start, end=cfg.end, symbols=list(symbols),
                     timezone='UTC', interval='1h', sources=sources, artifacts=artifacts,
                     built_at=datetime.now(timezone.utc).isoformat())
@@ -159,8 +161,39 @@ def _hourly_grid(frame, assets, times, columns, name):
     return grids
 
 
-def _funding_coverage(funding, successors, assets, lower, upper):
-    """Each settlement interval looks backward; the successor proves the tail."""
+def _transition_candidates(funding):
+    """Only a shortened gap at an interval change can be a transition."""
+    for symbol, events in funding.groupby('symbol', sort=False):
+        events = events.sort_values('calc_time')
+        times = events.calc_time.to_numpy(dtype=np.int64)
+        hours = times // HOUR_MS
+        spans = events.funding_interval_hours.to_numpy()
+        for i in np.flatnonzero((np.diff(hours) < spans[1:]) & (spans[1:] != spans[:-1])):
+            yield symbol, int(times[i]), int(times[i+1])
+
+
+def _verify_transitions(output, funding):
+    """Resolve ambiguous frequency changes against the independent REST history."""
+    records = []
+    for symbol, first, last in _transition_candidates(funding):
+        url = (f'https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}'
+               f'&startTime={first}&endTime={last}&limit=1000')
+        with urlopen(url, timeout=60) as response:
+            payload = response.read()
+        events = json.loads(payload)
+        if [(event['symbol'], event['fundingTime']) for event in events] != [(symbol, first), (symbol, last)]:
+            raise ValueError(f'funding interval transition has missing or inconsistent settlements: {symbol}')
+        path = f'raw/transitions/{symbol}-{first}-{last}.json'
+        (output / path).parent.mkdir(parents=True, exist_ok=True)
+        publish(output / path, payload)
+        records.append(dict(kind='funding_transition', symbol=symbol, first=first, last=last,
+                            url=url, archive=path, sha256=hashlib.sha256(payload).hexdigest(),
+                            bytes=len(payload), retrieved_at=datetime.now(timezone.utc).isoformat()))
+    return records
+
+
+def _funding_coverage(funding, successors, assets, lower, upper, transitions):
+    """Constant intervals prove adjacency; API evidence resolves frequency changes."""
     if set(successors['symbol']) != set(assets):
         raise ValueError('funding requires the next settlement timestamp/interval to prove tail coverage')
     proof = pd.concat((funding[['symbol', 'calc_time', 'funding_interval_hours']], successors), ignore_index=True)
@@ -177,8 +210,12 @@ def _funding_coverage(funding, successors, assets, lower, upper):
         spans = events['funding_interval_hours'].to_numpy(dtype=np.int64) * HOUR_MS
         if hours[0] >= upper or hours[0] - spans[0] >= lower:
             raise ValueError(f'funding has a missing initial settlement: {asset}')
-        if (np.diff(hours) != spans[1:]).any():
-            raise ValueError(f'funding settlement coverage has a gap or inconsistent interval: {asset}')
+        times = events['calc_time'].to_numpy(dtype=np.int64)
+        for i in np.flatnonzero(np.diff(hours) != spans[1:]):
+            transition = (asset, int(times[i]), int(times[i+1]))
+            if not (spans[i] != spans[i+1] and 0 < hours[i+1]-hours[i] < spans[i+1]
+                    and transition in transitions):
+                raise ValueError(f'funding settlement coverage has a gap or inconsistent interval: {asset}')
 
 
 def _project(tables, manifest, asof):
@@ -213,7 +250,9 @@ def _project(tables, manifest, asof):
     future = tables['funding'].loc[tables['funding']['calc_time'] >= upper,
                                   ['symbol', 'calc_time', 'funding_interval_hours']]
     successors = future.sort_values('calc_time').groupby('symbol', sort=False).head(1)
-    _funding_coverage(funding, successors, assets, lower, upper)
+    transitions = {(s['symbol'], s['first'], s['last']) for s in manifest['sources']
+                   if s['kind'] == 'funding_transition'}
+    _funding_coverage(funding, successors, assets, lower, upper, transitions)
     rates = np.zeros((len(times), len(assets)), dtype=np.float64)
     asset_index = {asset: i for i, asset in enumerate(assets)}
     rows = ((funding['hour'].to_numpy(dtype=np.int64) - lower) // HOUR_MS)
@@ -233,6 +272,19 @@ def _project(tables, manifest, asof):
 def load_perpetual(directory, study):
     directory = Path(directory)
     manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
+    upper = (pd.Timestamp(study.asof) + pd.Timedelta(days=1)).value // 1_000_000
+    for source in manifest['sources']:
+        if source['kind'] == 'funding_transition' and source['first'] < upper:
+            symbol, first, last = source['symbol'], source['first'], source['last']
+            path = f'raw/transitions/{symbol}-{first}-{last}.json'
+            if source['archive'] != path:
+                raise ValueError('funding transition path differs from canonical evidence path')
+            payload = (directory / path).read_bytes()
+            if hashlib.sha256(payload).hexdigest() != source['sha256']:
+                raise ValueError('funding transition SHA256 differs')
+            events = json.loads(payload)
+            if [(e['symbol'], e['fundingTime']) for e in events] != [(symbol, first), (symbol, last)]:
+                raise ValueError('funding transition evidence contains missing or inconsistent settlements')
     tables = {}
     for kind in KINDS:
         artifact = manifest['artifacts'][kind]

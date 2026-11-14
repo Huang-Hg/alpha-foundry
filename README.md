@@ -70,7 +70,7 @@ with open_runtime(settings, study) as runtime:
 
 For model outputs, register an `ArrayBatch` with `Research.register_batch`, then use the same `evaluate` and `commit` calls. Batches carry ordered dates/assets, a snapshot identity and observation/fitting cutoffs. See [batch input and RPC details](guides/research.md#candidate-interface).
 
-Agents can export the machine contract with `python -m foundry schema output/schema.json`; CLI help is the authoritative command list.
+Agents can export the machine contract with `python -m foundry schema schema.json`; CLI help is the authoritative command list.
 
 ## Engineering approach
 

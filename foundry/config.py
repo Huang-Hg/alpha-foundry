@@ -93,17 +93,19 @@ class CudaConfig:
     streams: int = ini('cuda', 'streams', 8)
     candidate_batch: int = ini('cuda', 'candidate_batch', 256)
     trial_batch: int = ini('cuda', 'trial_batch', 16384)
-    precision: str = ini('cuda', 'precision', 'auto')
-    mixed_return_atol: float = ini('cuda', 'mixed_return_atol', 1e-6)
-    mixed_error_safety: float = ini('cuda', 'mixed_error_safety', 16.)
+    precision: str = ini('cuda', 'precision', 'paired')
+    return_atol: float = ini('cuda', 'return_atol', 1e-6)
+    perpetual_host_cells: int = ini('cuda', 'perpetual_host_cells', 100000)
 
     def __post_init__(self):
         if self.streams <= 0 or self.candidate_batch <= 0 or self.trial_batch <= 0:
             raise ValueError('[cuda] stream count and batch sizes must be positive')
-        if self.precision not in ('auto', 'paired', 'f64'):
-            raise ValueError('[cuda] precision must be auto, paired or f64')
-        if not (math.isfinite(self.mixed_return_atol) and self.mixed_return_atol > 0 and self.mixed_error_safety >= 1):
-            raise ValueError('[cuda] error budget must be positive with safety >= 1')
+        if self.precision not in ('mixed', 'paired'):
+            raise ValueError('[cuda] precision must be mixed or paired')
+        if not (math.isfinite(self.return_atol) and self.return_atol > 0):
+            raise ValueError('[cuda] return error budget must be positive')
+        if self.perpetual_host_cells < 0:
+            raise ValueError('[cuda] perpetual_host_cells must be nonnegative')
 
 
 @dataclass(frozen=True)

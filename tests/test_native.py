@@ -57,7 +57,7 @@ class KernelTests(unittest.TestCase):
         self.W = np.full((T, S), 1.0 / S)
 
     def returns(self, weights, spec):
-        result = self.executor.simulate(weights[None], self.executor.device_spec(spec), 0, 252., 'f64')
+        result = self.executor.simulate(weights[None], self.executor.device_spec(spec), 0, 252., 'native')
         self.assertIsNone(result.risk)
         return result.returns[0]
 

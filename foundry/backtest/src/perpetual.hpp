@@ -1,13 +1,8 @@
-/* One scalar recurrence compiled for both the native CPU and CUDA executors.
+/* Native CPU recurrence for the explicit isolated-perpetual model.
  * Inputs have passed the data boundary. Stages: gap, funding, daily rebalance,
  * adverse-mark touch, close. No cash-market normalization or financing rules. */
 #pragma once
-
-#ifdef __CUDACC__
-#define PERP_HD __host__ __device__
-#else
-#define PERP_HD
-#endif
+#include "perpetual_output.hpp"
 
 namespace bt {
 
@@ -21,25 +16,18 @@ struct PerpetualInput {
     double leverage;
 };
 
-struct PerpetualOutput {
-    double *returns, *funding, *trading_fees, *liquidation_fees, *isolated_loss_cap;
-    long long* liquidations;
-    unsigned char* liquidation_events;
-    long long* first_liquidation;
-    unsigned char* bankrupt;
-    double *ending_equity, *max_gross;
-};
 
-PERP_HD inline double perp_abs(double x) { return x < 0.0 ? -x : x; }
-PERP_HD inline double perp_max(double x, double y) { return x > y ? x : y; }
-PERP_HD inline double perp_min(double x, double y) { return x < y ? x : y; }
 
-PERP_HD inline double perp_equity(double cash, const double* bucket, long long assets) {
+inline double perp_abs(double x) { return x < 0.0 ? -x : x; }
+inline double perp_max(double x, double y) { return x > y ? x : y; }
+inline double perp_min(double x, double y) { return x < y ? x : y; }
+
+inline double perp_equity(double cash, const double* bucket, long long assets) {
     for (long long a = 0; a < assets; ++a) cash += bucket[a];
     return cash;
 }
 
-PERP_HD inline void perp_exposure(const double* q, const double* bucket, const double* mark,
+inline void perp_exposure(const double* q, const double* bucket, const double* mark,
                                  double cash, long long assets, double* maximum) {
     double gross = 0.0;
     for (long long a = 0; a < assets; ++a) gross += perp_abs(q[a]) * mark[a];
@@ -48,7 +36,7 @@ PERP_HD inline void perp_exposure(const double* q, const double* bucket, const d
     *maximum = perp_max(*maximum, ratio);
 }
 
-PERP_HD inline void perp_liquidate(const PerpetualInput& in, PerpetualOutput& out,
+inline void perp_liquidate(const PerpetualInput& in, PerpetualOutput& out,
                                  long long event, long long asset, unsigned char stage,
                                  double price, double equity, double* q, double* bucket,
                                  double& cash) {
@@ -66,7 +54,7 @@ PERP_HD inline void perp_liquidate(const PerpetualInput& in, PerpetualOutput& ou
     bucket[asset] = 0.0;
 }
 
-PERP_HD inline void run_perpetual(const PerpetualInput& in, const double* weights,
+inline void run_perpetual(const PerpetualInput& in, const double* weights,
                                  PerpetualOutput out, double* q, double* bucket, double* lastmark) {
     const long long S = in.assets;
     double cash = 1.0, previous_nav = 1.0;

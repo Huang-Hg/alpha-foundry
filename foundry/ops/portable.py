@@ -15,6 +15,11 @@ import numpy as np
 NAN = np.nan
 
 
+def tanh(x):
+    """The small-argument interval rounds exactly to its input."""
+    return np.where(np.abs(x) < 3.7252902984619140625e-9, x, np.tanh(x))
+
+
 # ---------------------------------------------------------------- shared window machinery
 def _nan_free(bad, w):
     """Rows t >= w-1 whose window [t-w+1, t] holds no `bad` cell."""
@@ -298,6 +303,13 @@ def ts_slope(x, w):
     return out
 
 
+def _constant_window(x, w):
+    row = np.arange(len(x))[:, None]
+    changed = np.concatenate((np.ones((1, x.shape[1]), dtype=bool), x[1:] != x[:-1]))
+    last_change = np.maximum.accumulate(np.where(changed, row, 0), axis=0)
+    return row - last_change + 1 >= w
+
+
 def ts_corr(a, b, w):
     """Pearson (ddof 1) from five running sums; a pair with either side NaN counts as missing."""
     bad = _both(a, b)
@@ -306,7 +318,7 @@ def ts_corr(a, b, w):
     ma, mb = sa / w, sb / w
     cov = (sab - ma * sb) / (w - 1)
     va, vb = (saa - ma * sa) / (w - 1), (sbb - mb * sb) / (w - 1)
-    ok = _nan_free(bad, w) & (va > 0) & (vb > 0)
+    ok = _nan_free(bad, w) & (va > 0) & (vb > 0) & ~_constant_window(a, w) & ~_constant_window(b, w)
     return np.where(ok, cov / np.sqrt(np.where(ok, va * vb, 1.0)), NAN)
 
 
@@ -314,7 +326,8 @@ def ts_cov(a, b, w):
     bad = _both(a, b)
     a0, b0 = np.where(bad, 0.0, a), np.where(bad, 0.0, b)
     sa, sb, sab = _running([a0, b0, a0 * b0], w)
-    return np.where(_nan_free(bad, w), (sab - sa / w * sb) / (w - 1), NAN)
+    constant = _constant_window(a, w) | _constant_window(b, w)
+    return np.where(_nan_free(bad, w), np.where(constant, 0., (sab - sa / w * sb) / (w - 1)), NAN)
 
 
 # ---------------------------------------------------------------- time series: recursions and shifts
@@ -562,7 +575,7 @@ def ts_median(x, w):
 
 IMPL = {
     'abs': np.abs, 'neg': np.negative, 'sign': sign, 'log': log, 'square': lambda x: x * x, 'sqrt': sqrt,
-    'tanh': np.tanh, 'inv': inv, 's_log_1p': lambda x: np.copysign(np.log1p(np.abs(x)), x),
+    'tanh': tanh, 'inv': inv, 's_log_1p': lambda x: np.copysign(np.log1p(np.abs(x)), x),
     'not': lambda x: np.where(np.isnan(x), NAN, np.where(x > 0, 0.0, 1.0)),
     'is_nan': lambda x: np.isnan(x).astype(np.float64),
     'add': np.add, 'sub': np.subtract, 'mul': np.multiply, 'div': div,

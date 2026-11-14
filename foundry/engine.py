@@ -54,6 +54,7 @@ class Engine:
         self.slots = self.xp.maximum(self.universe.sum(1, keepdims=True), 1).astype(self.xp.float64)
         self.spec = executor.device_spec(loaded.host_spec)
         self.years = M.Years(loaded.window.stat_dates, self.xp)
+        self.recency_weights = M.recency(loaded.window.stat_dates, settings.portfolio.recent_halflife_days, self.xp)
         self.top_days = max(1, int((len(self.dates) - self.start) * 0.01))
         self.candidate_batch, self.trial_batch = resources.batch_sizes(settings.cuda, self.panel.shape)
         self.commit_batch = self.candidate_batch if executor.parallel_trials else 1
@@ -123,9 +124,9 @@ class Engine:
         return False
 
     @resource_scope
-    def evaluate(self, exprs: list[str], report=True, precision='f64', null_shift=False) -> list[EvaluationRow]:
+    def evaluate(self, exprs: list[str], report=True, null_shift=False) -> list[EvaluationRow]:
         """Evaluate candidates without publishing state; device books/returns belong to this runtime."""
-        xp = self.xp
+        xp, precision = self.xp, self.precision
         self.resources.start_batch()
         streams = self.resources.streams
         caches = [{} for _ in streams]
@@ -165,7 +166,7 @@ class Engine:
     def _measure(self, rows, ids, books, finite, report, precision):
         xp = self.xp
         if report:
-            for i, stats, good in zip(ids, self.metrics(books, precision=precision), self.to_host(finite).tolist()):
+            for i, stats, good in zip(ids, self.metrics(books), self.to_host(finite).tolist()):
                 row = rows[i]
                 row.ok, row.error = good, None if good else INVALID
                 row.book, row.returns = stats.book, stats.returns
@@ -173,7 +174,7 @@ class Engine:
                 row.risk = stats.risk
                 row.maxdd = stats.metrics.maxdd
             return rows
-        result = self.returns(books, precision)
+        result = self.returns(books)
         status = self.to_host(xp.stack((finite, result.valid), axis=1)).tolist()
         risks = self._risk_summaries(result.risk, len(result.books))
         for j, (i, (good, fine)) in enumerate(zip(ids, status)):
@@ -184,12 +185,13 @@ class Engine:
         return rows
 
     @resource_scope
-    def evaluate_sources(self, sources, report=True, precision='f64', null_shift=False):
+    def evaluate_sources(self, sources, report=True, null_shift=False):
         """Snapshot-scoped measurements; returned buffers are borrowed read-only.
 
         Each caller gets its own mutable row. Portfolio verdicts are recomputed.
         """
-        if not report or precision != 'f64':
+        precision = self.precision
+        if not report:
             return self._compute_sources(sources, report, precision, null_shift)
         keys = [(self.context.id, source, precision, null_shift) for source in sources]
         found = {key: self._reports[key] for key in keys if key in self._reports}
@@ -209,7 +211,7 @@ class Engine:
         rows = [EvaluationRow(source, True, None, precision) for source in sources]
         formulas = [i for i, source in enumerate(sources) if isinstance(source, Formula)]
         if formulas:
-            computed = self.evaluate([sources[i].expression for i in formulas], report, precision, null_shift)
+            computed = self.evaluate([sources[i].expression for i in formulas], report, null_shift)
             for i, row in zip(formulas, computed):
                 rows[i] = row
         for kind in ('signals', 'target_weights', 'target_exposure'):
@@ -258,16 +260,12 @@ class Engine:
         return self.universe / self.slots
 
     @resource_scope
-    def simulate(self, W, precision='f64'):
-        if precision not in self.executor.precisions:
-            raise ValueError(f'executor does not support {precision}; planned policy is {self.precision}')
-        return self.executor.simulate(W, self.spec, self.start, self.ppy, precision)
+    def simulate(self, W):
+        return self.executor.simulate(W, self.spec, self.start, self.ppy, self.precision)
 
     @resource_scope
-    def blend(self, W, U, owners, weights, precision):
-        if precision not in self.executor.precisions:
-            raise ValueError(f'executor does not support {precision}; planned policy is {self.precision}')
-        return self.executor.blend(W, U, owners, weights, self.spec, self.start, self.ppy, precision, self.trial_batch)
+    def blend(self, W, U, owners, weights):
+        return self.executor.blend(W, U, owners, weights, self.spec, self.start, self.ppy, self.precision, self.trial_batch)
 
     @resource_scope
     def fingerprints(self, W):
@@ -281,9 +279,9 @@ class Engine:
         return W
 
     @resource_scope
-    def returns(self, books, precision='f64'):
+    def returns(self, books):
         W = self._stack(books)
-        result = self.simulate(W, precision)
+        result = self.simulate(W)
         rt = result.returns[:, self.start:]
         return ReturnBatch(W, rt, M.sound(rt, self.xp), result.statistics[:, 3], result.risk)
 
@@ -301,22 +299,22 @@ class Engine:
                 for v, count, timestamp, failed in zip(scalars, counts, timestamps, bankrupt)]
 
     @resource_scope
-    def metrics(self, books, result=None, precision='f64') -> list[StatsRow]:
+    def metrics(self, books, result=None) -> list[StatsRow]:
         """Compute one semantic report; transfer only report scalars to the host."""
         xp = self.xp
         W = self._stack(books)
-        result = self.simulate(W, precision) if result is None else result
+        result = self.simulate(W) if result is None else result
         rr, st = result.returns, result.statistics
         rt, wt = rr[:, self.start:], W[:, self.start:]
         lg = xp.log1p(rt)
         gross = xp.abs(wt).sum(2)
         turnover = xp.abs(xp.diff(wt, axis=1)).sum(2).mean(1)
-        ann = st[:, 1] if precision == 'paired' else rt.mean(1) * self.ppy
-        sh = xp.where(st[:, 2] > 0, st[:, 0], 0) if precision == 'paired' else M.sharpe(rt, self.ppy, xp)
+        ann = st[:, 1]
+        sh = xp.where(st[:, 2] > 0, st[:, 0], 0)
         total = rt.sum(1)
         concentration = xp.where(total > 0, xp.sort(rt, axis=1)[:, -self.top_days:].sum(1)
                                  / xp.where(total > 0, total, 1), xp.inf)
-        vals = xp.stack((sh, ann, st[:, 3], M.cagr(rt, self.ppy, xp), st[:, 4], turnover,
+        vals = xp.stack((sh, ann, st[:, 3], self.backend.measure(rt, self.recency_weights, self.ppy).cagr, st[:, 4], turnover,
                          gross.mean(1), ann / xp.maximum(turnover * self.ppy, 1e-12) * 1e4,
                          xp.abs(wt).max(axis=(1, 2)), concentration), axis=1)
         yearly = xp.stack((self.years.sharpe(rt, self.ppy), self.years.share(gross > 1e-9), self.years.total(lg)), axis=2)

@@ -29,17 +29,22 @@ def prepare_backend(name: str) -> Backend:
     if name == 'cuda':
         import cupy as cp
         from foundry.ops import cuda
+        from foundry.numeric.cuda import Moments
+        moments = Moments()
         operators = cuda.prepare()
         return Backend(name, cp, operators.IMPL, operators.unsupported, operators.max_window,
-                       operators.max_pair_window, cp.asnumpy, operators.close)
+                       operators.max_pair_window, cp.asnumpy, moments.measure,
+                       lambda: (operators.close(), moments.close()))
     if name == 'cpu':
         from foundry.ops import cpu
+        from foundry.numeric.host import measure
         return Backend(name, np, cpu.IMPL, _all_supported, MAX_WINDOW, MAX_WINDOW,
-                       np.asarray, _close_host_backend)
+                       np.asarray, measure, _close_host_backend)
     if name == 'portable':
         from foundry.ops import portable
+        from foundry.numeric.host import measure
         return Backend(name, np, portable.IMPL, _all_supported, MAX_WINDOW, MAX_WINDOW,
-                       np.asarray, _close_host_backend)
+                       np.asarray, measure, _close_host_backend)
     raise ValueError(f'Unknown execution backend: {name}')
 
 
@@ -182,15 +187,12 @@ class Runtime:
         self.close()
 
 
-def plan_precision(requested, supported, screening):
-    required = {'auto': {'f64', 'mixed'}, 'paired': {'f64', 'paired'}, 'f64': {'f64'}}[requested]
-    if required <= screening:
-        return PrecisionPlan(requested, requested, 'requested_policy_supported', tuple(sorted(supported)))
-    if supported == frozenset({'f64'}):
-        return PrecisionPlan(requested, 'f64', 'executor_f64_only', ('f64',))
-    if screening == frozenset({'f64'}):
-        return PrecisionPlan(requested, 'f64', 'risk_screening_requires_f64', tuple(sorted(supported)))
-    raise ValueError(f'unsupported precision policy {requested}: executor supports {sorted(supported)}')
+def plan_precision(requested, supported):
+    effective = 'native' if supported == frozenset({'native'}) else requested
+    if effective not in supported:
+        raise ValueError(f'unsupported precision policy {requested}: {sorted(supported)}')
+    reason = 'validated_native_path' if effective == 'native' else 'fixed_study_policy'
+    return PrecisionPlan(requested, effective, reason, tuple(sorted(supported)))
 
 
 def open_runtime(settings: Settings, study: Study) -> Runtime:
@@ -203,8 +205,8 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             resources = CudaResources(cp, settings.cuda.streams)
             prepare_execution = cuda.prepare
             if study.market == 'crypto_perpetual':
-                from foundry.backtest import perpetual_cuda
-                prepare_execution = lambda: perpetual_cuda.prepare(settings.cuda.mixed_return_atol, settings.portfolio.metric_atol)
+                from foundry.backtest import perpetual_cpu, perpetual_cuda
+                prepare_execution = lambda: perpetual_cuda.prepare(perpetual_cpu.prepare(), settings.cuda.perpetual_host_cells)
         elif name in ('cpu', 'portable'):
             from foundry.backtest import cpu
             resources = HostResources()
@@ -222,7 +224,7 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             cleanup.callback(executor.close)
             loaded = load_study(settings, study, backend)
             context = study_snapshot(loaded, settings, plan_precision(settings.cuda.precision,
-                                      executor.precisions, executor.screening_precisions))
+                                      executor.precisions))
             engine = Engine(loaded, backend, executor, resources, settings, context)
             cleanup.callback(engine.close)
         runtime = Runtime(settings, loaded, backend, executor, resources, engine)

@@ -37,7 +37,7 @@ def host_result(result, to_host):
 class HandCalculatedAccounts:
     """Shared assertions execute each implementation against independent arithmetic."""
     def run_book(self, spec, book, start=0):
-        result = self.executor.simulate(self.xp.asarray(book), self.executor.device_spec(spec), start, 365., 'f64')
+        result = self.executor.simulate(self.xp.asarray(book), self.executor.device_spec(spec), start, 365., 'native')
         self.assertIsNotNone(result.risk)
         return host_result(result, self.to_host)
 
@@ -242,7 +242,7 @@ class HandCalculatedAccounts:
         trials = cap_book(base[None] + scales[:, None, None] * books[owners], Allocation(5., True), np)
         expected = self.run_book(spec, trials, start=1)
         actual = self.executor.blend(self.xp.asarray(books), self.xp.asarray(base), self.xp.asarray(owners),
-                                     self.xp.asarray(scales), self.executor.device_spec(spec), 1, 365., 'f64', 2)
+                                     self.xp.asarray(scales), self.executor.device_spec(spec), 1, 365., 'native', 2)
         actual = host_result(actual, self.to_host)
         np.testing.assert_allclose(actual.returns, expected.returns[:, 1:], rtol=0, atol=1e-14)
         np.testing.assert_allclose(actual.statistics, expected.statistics, rtol=0, atol=1e-12)

@@ -217,7 +217,7 @@ class ArrayMarketTests(unittest.TestCase):
                 batch_size = engine.commit_batch
                 engine.commit_batch = 1
                 expected = serial.commit(candidates, serial.context.id)
-                engine.commit_batch = batch_size
+                engine.commit_batch = 2
                 actual = batched.commit(candidates, batched.context.id)
                 self.assertEqual(serial.portfolio.library, batched.portfolio.library)
                 for a, b in zip(expected.rows, actual.rows):
@@ -225,6 +225,11 @@ class ArrayMarketTests(unittest.TestCase):
                                      (b.id, b.accepted, b.weight, b.verdict.reason))
                 self.assertEqual(expected.before, actual.before)
                 self.assertEqual(expected.context, actual.context)
+                engine.commit_batch = batch_size
+                full_research = research_for(runtime)
+                full = full_research.commit(candidates, full_research.context.id)
+                self.assertEqual([(r.accepted,r.weight) for r in full.rows],
+                                 [(r.accepted,r.weight) for r in actual.rows])
                 # A fresh writer fails at the only publication point; the live
                 # portfolio and version must remain unchanged after evaluation.
                 if any(row.accepted for row in actual.rows):

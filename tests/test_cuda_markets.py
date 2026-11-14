@@ -39,34 +39,22 @@ class MarketDispatchTests(unittest.TestCase):
                     self.assertEqual([(c.name, c.passed) for c in a.proposal.checks],
                                      [(c.name, c.passed) for c in b.proposal.checks])
 
-    def test_decisions_weights_and_threshold_sides_match_f64(self):
+    def test_decisions_and_weights_near_admission_thresholds(self):
         for name in ('us_equity', 'a_share', 'crypto_spot'):
-            with self.subTest(market=name), runtime_for(name) as runtime:
-                engine = runtime.engine
-                rows = engine.evaluate(EXPRESSIONS)
-                paired_rows = engine.evaluate(EXPRESSIONS, precision='paired')
-                self.assertTrue(all(r.ok for r in rows))
-                for expected, actual in zip(rows, paired_rows):
-                    cp.testing.assert_array_equal(actual.book > 0, expected.book > 0)
-                    cp.testing.assert_allclose(actual.returns, expected.returns, rtol=0, atol=1e-10)
-                    for key in ('sharpe', 'ann_ret', 'cagr', 'maxdd', 'total_ret'):
-                        self.assertAlmostEqual(getattr(actual.metrics, key), getattr(expected.metrics, key), delta=1e-8)
-                ref = research_for(runtime).portfolio.reference
-                exact = admission.proposals(engine, rows, ref, 'f64')
-                paired = admission.proposals(engine, rows, ref, 'paired')
-                for expected, actual in zip(exact, paired):
-                    self.assertEqual((actual.passed, actual.weight), (expected.passed, expected.weight))
-                    self.assertEqual([(c.name, c.passed) for c in actual.checks],
-                                     [(c.name, c.passed) for c in expected.checks])
-                    for key in ('wsharpe', 'sharpe', 'cagr', 'maxdd', 'recent_growth'):
-                        self.assertAlmostEqual(getattr(actual, key), getattr(expected, key), delta=1e-8)
-                threshold = exact[0].wsharpe - ref.wsharpe
-                for offset in (-1e-7, 1e-7):
-                    boundary = replace(ref, cfg=replace(ref.cfg, min_sharpe_gain=threshold + offset),
-                                       precision_errors={})
-                    a = admission.proposals(engine, rows[:1], boundary, 'f64')[0]
-                    b = admission.proposals(engine, rows[:1], boundary, 'paired')[0]
-                    self.assertEqual((a.passed, a.weight), (b.passed, b.weight))
+            with self.subTest(market=name), runtime_for(name, 'cpu') as host, runtime_for(name) as device:
+                hrows,drows = host.engine.evaluate(EXPRESSIONS),device.engine.evaluate(EXPRESSIONS)
+                href,dref = research_for(host).portfolio.reference,research_for(device).portfolio.reference
+                base = admission.proposals(host.engine,hrows,href)
+                for i,proposal in enumerate(base):
+                    threshold = proposal.wsharpe-href.wsharpe
+                    for offset in (-1e-7,1e-7):
+                        hboundary=replace(href,cfg=replace(href.cfg,min_sharpe_gain=threshold+offset))
+                        dboundary=replace(dref,cfg=replace(dref.cfg,min_sharpe_gain=threshold+offset))
+                        a=admission.proposals(host.engine,[hrows[i]],hboundary)[0]
+                        b=admission.proposals(device.engine,[drows[i]],dboundary)[0]
+                        self.assertEqual(a.passed,b.passed)
+                        self.assertAlmostEqual(a.weight,b.weight,delta=1e-10)
+                        self.assertEqual([c.passed for c in a.checks],[c.passed for c in b.checks])
 
     def test_full_universes_keep_all_execution_rules(self):
         executor = cuda.prepare()
@@ -78,7 +66,7 @@ class MarketDispatchTests(unittest.TestCase):
                 weights = np.stack([runtime.engine.signal_to_book(signal) for signal in
                                     (np.ones(panel.shape), (panel['close'] > panel['open']).astype(float))])
                 weights[:, :window.start] = 0
-                reference = runtime.executor.simulate(weights, runtime.executor.device_spec(spec), window.start, market.ppy, 'f64').returns
+                reference = runtime.executor.simulate(weights, runtime.executor.device_spec(spec), window.start, market.ppy, 'native').returns
                 device = executor.device_spec(spec)
                 actual = executor.simulate(cp.asarray(weights), device, window.start, market.ppy, 'paired')
                 self.assertEqual(device.backend, 'cuda')
@@ -88,7 +76,7 @@ class MarketDispatchTests(unittest.TestCase):
                 base = cp.asarray(weights[0] * .8)
                 trial = base[None] + scales[:, None, None] * cp.asarray(weights)[owners]
                 trial /= cp.maximum(1., trial.sum(2, keepdims=True))
-                expected = runtime.executor.simulate(cp.asnumpy(trial), runtime.executor.device_spec(spec), window.start, market.ppy, 'f64').returns[:, window.start:]
+                expected = runtime.executor.simulate(cp.asnumpy(trial), runtime.executor.device_spec(spec), window.start, market.ppy, 'native').returns[:, window.start:]
                 actual = executor.blend(cp.asarray(weights), base, owners, scales, device, window.start,
                                             market.ppy, 'paired', 2)
                 np.testing.assert_allclose(cp.asnumpy(actual.returns), expected, atol=1e-10, rtol=0)

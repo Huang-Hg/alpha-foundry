@@ -34,7 +34,7 @@ class CudaPointInTimeTests(unittest.TestCase):
         for name in ('us_equity', 'a_share', 'crypto_spot'):
             with self.subTest(market=name), runtime_for(name) as runtime:
                 full = runtime.engine
-                rows = full.evaluate(EXPRESSIONS, precision='paired')
+                rows = full.evaluate(EXPRESSIONS)
                 cutoffs = [str(full.dates[full.start + (len(full.dates) - full.start) * n // 4])
                            for n in (2, 3)]
                 for cutoff in cutoffs:
@@ -45,7 +45,7 @@ class CudaPointInTimeTests(unittest.TestCase):
                         for field in short.panel.fields:
                             cp.testing.assert_allclose(short.panel[field], full.panel[field][:stop, indices],
                                                        rtol=1e-12, atol=1e-12)
-                        for actual, expected in zip(short.evaluate(EXPRESSIONS, precision='paired'), rows):
+                        for actual, expected in zip(short.evaluate(EXPRESSIONS), rows):
                             cp.testing.assert_allclose(actual.book, expected.book[:stop, indices], rtol=1e-12, atol=1e-12)
                             cp.testing.assert_array_equal(actual.book > 0, expected.book[:stop, indices] > 0)
                             cp.testing.assert_allclose(actual.returns, expected.returns[:stop-full.start], rtol=0, atol=1e-11)
@@ -64,7 +64,7 @@ class CudaPointInTimeTests(unittest.TestCase):
                 with dirty_runtime:
                     stop = int(np.searchsorted(full.dates, np.datetime64(cutoffs[0]), side='right'))
                     self.assertNotEqual(dirty_runtime.engine.context.data_snapshot, full.context.data_snapshot)
-                    for actual, expected in zip(dirty_runtime.engine.evaluate(EXPRESSIONS, precision='paired'), rows):
+                    for actual, expected in zip(dirty_runtime.engine.evaluate(EXPRESSIONS), rows):
                         cp.testing.assert_array_equal(actual.book[:stop], expected.book[:stop])
                         cp.testing.assert_array_equal(actual.returns[:stop-full.start], expected.returns[:stop-full.start])
 
@@ -95,7 +95,7 @@ class CudaPointInTimeTests(unittest.TestCase):
             weights = cp.stack([engine.equal_weight(), engine.equal_weight()])
             at = (engine.start + len(engine.dates)) // 2
             weights[1, at] = 0
-            returns = engine.simulate(weights, precision='paired').returns
+            returns = engine.simulate(weights).returns
             cp.testing.assert_array_equal(returns[0, :at+1], returns[1, :at+1])
             self.assertGreater(float(cp.abs(returns[0, at+1:]-returns[1, at+1:]).max()), 0.)
 

@@ -44,18 +44,6 @@ class Delta(TypedDict, total=False):
     capacity: float
 
 
-class Precision(TypedDict, total=False):
-    """How an admission was computed under CUDA mixed precision (admission.py)."""
-    mode: str
-    refined: bool
-    calibration_error: float
-    return_envelope: float
-    over_budget: bool
-    unstable: bool
-    fp64_trials: int
-    fp32_trials: int
-
-
 class CandidateReport(TypedDict, total=False):
     """One evaluated expression; the status keeps the newest eight. A candidate that fails G1 carries only
     expr, log_reward, passed, g1, g2 (g3), rho, utility and error."""
@@ -72,7 +60,6 @@ class CandidateReport(TypedDict, total=False):
     utility: Optional[float]
     weight: float
     delta: Delta
-    precision: Optional[Precision]           # portfolio objective
     backend: str
     error: Optional[str]
     # Single objective: the candidate's own book, and the Sharpe its correlations require.
@@ -122,7 +109,6 @@ class SearchStatus(Source, total=False):
     low_corr: GlidingInt
     accepted: GlidingInt
     behavior_duplicates: GlidingInt
-    fp64_refined: GlidingInt
     weight_trials: GlidingInt
     probe_evaluations: GlidingInt
     reweight_evaluations: GlidingInt

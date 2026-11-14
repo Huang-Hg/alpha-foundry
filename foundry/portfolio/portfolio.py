@@ -21,5 +21,5 @@ class Portfolio:
     def accepted(self, row, verdict):
         proposal = verdict.proposal
         assert verdict.passed and verdict.source == row.source
-        assert proposal.reference_version == self.version and proposal.backend.endswith('-f64')
+        assert proposal.reference_version == self.version
         return Portfolio(self.engine, self.library.add(row.source, proposal.weight), self.null_shift)

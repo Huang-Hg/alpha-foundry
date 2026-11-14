@@ -1,6 +1,7 @@
 """CUDA isolated-perpetual verification on the authorized Colab worker."""
 from dataclasses import asdict, fields, replace
 from pathlib import Path
+from unittest.mock import patch
 import tempfile
 import unittest
 
@@ -29,7 +30,7 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cfg = settings_for('crypto_perpetual')
-        cls.executor = perpetual_cuda.prepare(cfg.cuda.mixed_return_atol, cfg.portfolio.metric_atol)
+        cls.executor = perpetual_cuda.prepare(perpetual_cpu.prepare(), cfg.cuda.perpetual_host_cells)
 
     @classmethod
     def tearDownClass(cls):
@@ -47,6 +48,31 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
         self.assertEqual(actual[0], actual[1])
         self.assertEqual(actual[2], actual[3])
         self.assertNotEqual(actual[0], actual[-1])
+
+    def test_small_accounts_choose_host_before_launching_cuda(self):
+        spec=flat_spec(days=3,assets=3)
+        book=cp.asarray(target(spec,[[2.,-1.,1.]]))
+        device=self.executor.device_spec(spec)
+        with patch.object(self.executor,'simulate_device',side_effect=AssertionError('unexpected CUDA launch')):
+            result=self.executor.simulate(book,device,0,365.,'native')
+        self.assertIsInstance(result.returns,cp.ndarray)
+        cp.testing.assert_allclose(result.returns,0.,rtol=0,atol=1e-12)
+
+    def test_direct_cuda_preserves_adjacent_funding_and_touch_decisions(self):
+        cpu=perpetual_cpu.prepare();self.addCleanup(cpu.close)
+        for risk in ('funding','touch'):
+            for side in (-1,0,1):
+                spec=flat_spec(days=2);book=target(spec,[[5.]])
+                name,boundary=('funding_rate',.195) if risk=='funding' else ('mark_low',4./.04975)
+                changed=getattr(spec,name).copy()
+                changed[25]=np.nextafter(boundary,-np.inf if side<0 else np.inf) if side else boundary
+                spec=replace(spec,**{name:changed})
+                expected=cpu.simulate(book,cpu.device_spec(spec),0,365.,'native')
+                actual=host_result(self.executor.simulate_device(cp.asarray(book),self.executor.device_spec(spec),0,365.),cp.asnumpy)
+                with self.subTest(risk=risk,side=side):
+                    np.testing.assert_allclose(actual.returns,expected.returns,rtol=0,atol=1e-12)
+                    for name in ('liquidation_events','liquidations','first_liquidation_ms','bankrupt'):
+                        np.testing.assert_array_equal(getattr(actual.risk,name),getattr(expected.risk,name))
 
     def test_cpu_cuda_batch_tail_matches_all_cashflows_and_event_flags(self):
         cpu = perpetual_cpu.prepare()
@@ -66,9 +92,9 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
                 book = rng.normal(size=(35, *spec.shape))
                 book *= 5. / np.abs(book).sum(2, keepdims=True)
                 book[0] = 0.
-                expected = cpu.simulate(book, cpu.device_spec(spec), 1, 365., 'f64')
+                expected = cpu.simulate(book, cpu.device_spec(spec), 1, 365., 'native')
                 actual = host_result(self.executor.simulate(cp.asarray(book), self.executor.device_spec(spec),
-                                                           1, 365., 'f64'), cp.asnumpy)
+                                                           1, 365., 'native'), cp.asnumpy)
                 np.testing.assert_allclose(actual.returns, expected.returns, rtol=1e-12, atol=1e-12)
                 np.testing.assert_allclose(actual.statistics, expected.statistics, rtol=1e-10, atol=1e-10)
                 for field in fields(expected.risk):
@@ -81,7 +107,7 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
                         np.testing.assert_allclose(second, first, rtol=1e-12, atol=1e-12, err_msg=field.name)
                 self.assertGreater(actual.risk.liquidations.sum(), 0)
 
-    def test_reduced_precision_refines_funding_and_touch_threshold_neighbors(self):
+    def test_funding_and_touch_threshold_neighbors(self):
         cpu = perpetual_cpu.prepare()
         self.addCleanup(cpu.close)
         for risk in ('funding', 'touch'):
@@ -93,16 +119,20 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
                 changed = getattr(spec, name).copy()
                 changed[25] = value
                 spec = replace(spec, **{name: changed})
-                expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'f64')
+                expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'native')
                 ds = self.executor.device_spec(spec)
-                for precision in self.executor.precisions:
+                for precision in ('native',):
                     with self.subTest(risk=risk, side=side, precision=precision):
                         actual = host_result(self.executor.simulate(cp.asarray(book), ds, 0, 365., precision), cp.asnumpy)
-                        np.testing.assert_array_equal(actual.returns, expected.returns)
+                        np.testing.assert_allclose(actual.returns, expected.returns, rtol=0, atol=1e-10)
                         for field in fields(expected.risk):
-                            np.testing.assert_equal(getattr(actual.risk, field.name), getattr(expected.risk, field.name))
+                            first,second=getattr(actual.risk,field.name),getattr(expected.risk,field.name)
+                            if field.name=='model' or second.dtype.kind in 'biu':
+                                np.testing.assert_equal(first,second)
+                            else:
+                                np.testing.assert_allclose(first,second,rtol=1e-10,atol=1e-10)
 
-    def test_reduced_precision_exponent_domain_uses_reference(self):
+    def test_price_units_do_not_change_account_semantics(self):
         cpu = perpetual_cpu.prepare()
         self.addCleanup(cpu.close)
         for price in (1.e-40, 1.e40):
@@ -110,14 +140,18 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
             names = ('trade_open', 'mark_open', 'mark_high', 'mark_low', 'mark_close', 'funding_mark')
             spec = replace(spec, **{name: np.full_like(getattr(spec, name), price) for name in names})
             book = target(spec, [[5.], [-5.]])
-            expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'f64')
+            expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'native')
             ds = self.executor.device_spec(spec)
-            for precision in ('mixed', 'paired'):
+            for precision in ('native',):
                 with self.subTest(price=price, precision=precision):
                     actual = host_result(self.executor.simulate(cp.asarray(book), ds, 0, 365., precision), cp.asnumpy)
-                    np.testing.assert_array_equal(actual.returns, expected.returns)
+                    np.testing.assert_allclose(actual.returns, expected.returns, rtol=0, atol=1e-10)
                     for field in fields(expected.risk):
-                        np.testing.assert_equal(getattr(actual.risk, field.name), getattr(expected.risk, field.name))
+                        first,second=getattr(actual.risk,field.name),getattr(expected.risk,field.name)
+                        if field.name=='model' or second.dtype.kind in 'biu':
+                            np.testing.assert_equal(first,second)
+                        else:
+                            np.testing.assert_allclose(first,second,rtol=1e-10,atol=1e-10)
 
     def test_partial_days_and_inactive_warp_lanes_preserve_the_event_grid(self):
         from foundry.backtest.perpetual import ARRAY_FIELDS
@@ -127,12 +161,12 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
         book = target(spec, [[2., -2., 1.]])
         cpu = perpetual_cpu.prepare()
         self.addCleanup(cpu.close)
-        expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'f64')
-        actual = host_result(self.executor.simulate(cp.asarray(book), self.executor.device_spec(spec), 0, 365., 'f64'), cp.asnumpy)
+        expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'native')
+        actual = host_result(self.executor.simulate(cp.asarray(book), self.executor.device_spec(spec), 0, 365., 'native'), cp.asnumpy)
         np.testing.assert_allclose(actual.returns, expected.returns, rtol=0, atol=1e-12)
         np.testing.assert_array_equal(actual.risk.liquidation_events, expected.risk.liquidation_events)
 
-    def test_fee_insolvency_threshold_is_refined_in_every_precision(self):
+    def test_fee_insolvency_threshold_neighbors(self):
         cpu = perpetual_cpu.prepare()
         self.addCleanup(cpu.close)
         for side in (-np.inf, 80./(1.-.0004), np.inf):
@@ -142,14 +176,27 @@ class PerpetualCudaTests(HandCalculatedAccounts, unittest.TestCase):
             spec = replace(spec, mark_open=mark, mark_high=mark, mark_low=mark,
                            mark_close=mark, funding_mark=mark, trade_open=trade)
             book = target(spec, [[5.]])
-            expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'f64')
+            expected = cpu.simulate(book, cpu.device_spec(spec), 0, 365., 'native')
             ds = self.executor.device_spec(spec)
-            for precision in self.executor.precisions:
+            for precision in ('native',):
                 with self.subTest(side=side, precision=precision):
                     actual = host_result(self.executor.simulate(cp.asarray(book), ds, 0, 365., precision), cp.asnumpy)
-                    np.testing.assert_array_equal(actual.returns, expected.returns)
+                    np.testing.assert_allclose(actual.returns, expected.returns, rtol=0, atol=1e-10)
                     np.testing.assert_array_equal(actual.risk.bankrupt, expected.risk.bankrupt)
-                    np.testing.assert_array_equal(actual.risk.trading_fees, expected.risk.trading_fees)
+                    np.testing.assert_allclose(actual.risk.trading_fees, expected.risk.trading_fees, rtol=0, atol=1e-10)
+
+
+class PerpetualDeviceRulesTests(HandCalculatedAccounts, unittest.TestCase):
+    """Exercise the actual device kernel even for hand-sized accounts."""
+    xp, to_host = cp, staticmethod(cp.asnumpy)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.executor = perpetual_cuda.prepare(perpetual_cpu.prepare(), 0)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.executor.close()
 
 
 class PerpetualResearchTests(unittest.TestCase):
@@ -167,9 +214,10 @@ class PerpetualResearchTests(unittest.TestCase):
                     engine = runtime.engine
                     research = Research(engine, store, arrays)
                     plan = engine.context.precision
-                    supported = ('f64', 'mixed', 'paired') if backend == 'cuda' else ('f64',)
-                    self.assertEqual((plan.requested, plan.effective, plan.supported), ('paired', 'f64', supported))
-                    self.assertEqual(plan.reason, 'risk_screening_requires_f64' if backend == 'cuda' else 'executor_f64_only')
+                    supported = ('native',)
+                    effective = 'native'
+                    self.assertEqual((plan.requested, plan.effective, plan.supported), ('paired', effective, supported))
+                    self.assertEqual(plan.reason, 'validated_native_path')
                     self.assertEqual(engine.allocation.max_gross, settings.crypto_perpetual.leverage)
                     self.assertTrue(engine.allocation.allow_short)
                     self.assertEqual(engine.ppy, 365.)
@@ -205,13 +253,9 @@ class PerpetualResearchTests(unittest.TestCase):
                     expected_book[:engine.start] = 0.
                     np.testing.assert_allclose(engine.to_host(leveraged.book), expected_book, rtol=0, atol=1e-14)
                     self.assertGreater(np.abs(expected_book).sum(1).max(), 1.)
-                    self.assertTrue(all(row.precision == 'f64' and row.risk is not None for row in device.rows))
-                    if backend == 'cpu':
-                        with self.assertRaisesRegex(ValueError, 'does not support paired'):
-                            engine.simulate(leveraged.book[None], precision='paired')
-                    else:
-                        low = engine.simulate(leveraged.book[None], precision='paired')
-                        cp.testing.assert_allclose(low.returns[0, engine.start:], leveraged.returns, rtol=0, atol=1e-10)
+                    self.assertTrue(all(row.precision == effective and row.risk is not None for row in device.rows))
+                    with self.assertRaises(TypeError):
+                        engine.simulate(leveraged.book[None], precision='paired')
                     direct = evaluation_result(research.evaluate(candidates, context.id))
                     wire = server.dispatch(schema.parse(dict(jsonrpc='2.0', id='evaluate',
                         method='research.evaluate', params=dict(context=context.id, candidates=[asdict(c) for c in candidates]))))
