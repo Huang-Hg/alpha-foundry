@@ -8,9 +8,13 @@ extern "C" __global__ void perpetual(
     long long events, long long days, long long books, double leverage,
     double* returns, double* funding_out, double* trading_fees, double* liquidation_fees, double* isolated_loss_cap,
     long long* liquidations, unsigned char* liquidation_events,
-    long long* first_liquidation, unsigned char* bankrupt, double* ending_equity, double* max_gross) {
+    long long* first_liquidation, unsigned char* bankrupt, double* ending_equity, double* max_gross,
+    const unsigned char* uncertain,const double* stats,double metric_atol) {
     const long long b = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (b >= books) return;
+    // Explicit numerical refinement: ill-conditioned Sharpe or a risk boundary
+    // uses the original scalar FP64 operation order. No host synchronization.
+    if (!uncertain[b] && !(fabs(stats[b*5+1])>metric_atol && stats[b*5+2]<=metric_atol)) return;
     bt::PerpetualInput in {times, day, rebalance, trade, open, high, low, close,
                           funding, funding_mark, maintenance, fee, liquidation_fee,
                           events, days, ASSETS, leverage};
@@ -21,6 +25,11 @@ extern "C" __global__ void perpetual(
         bankrupt + b, ending_equity + b, max_gross + b
     };
     double q[ASSETS], bucket[ASSETS], lastmark[ASSETS];
+    for(long long t=0;t<days;t++) {
+        out.returns[t]=out.funding[t]=out.trading_fees[t]=out.liquidation_fees[t]=out.isolated_loss_cap[t]=0.;
+        out.liquidations[t]=0;
+    }
+    for(long long j=0;j<events*ASSETS;j++) out.liquidation_events[j]=0;
     bt::run_perpetual(in, weights + b * days * ASSETS, out, q, bucket, lastmark);
 }
 

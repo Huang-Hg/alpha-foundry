@@ -77,6 +77,8 @@ class _DeviceSpec:
         return (*base[:5], *extra[:2], base[5], extra[2], np.int32(self.flags))
 
 class Executor:
+    parallel_trials = True
+    screening_precisions = frozenset({'f64', 'mixed', 'paired'})
     precisions = frozenset({'f64', 'mixed', 'paired'})
 
     def __init__(self):
