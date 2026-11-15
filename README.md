@@ -37,15 +37,15 @@ bash build.sh
 python -m foundry --help
 ```
 
-Choose the market, data directory, dates and backend in [config/config.ini](config/config.ini). Market datasets and private portfolios are not bundled. CPU execution needs no GPU; CUDA additionally needs CuPy matching the installed CUDA major.
+Choose the market, data directory, dates and backend in [config/config.ini](config/config.ini). The repository includes [test snapshots for all four markets](data/README.md), including 64-contract perpetual data; cloning brings the files required by the integration fixtures. CPU execution needs no GPU; CUDA additionally needs CuPy matching the installed CUDA major.
 
-To build a public perpetual dataset, configure `[crypto_perpetual]` and run:
+To build a new perpetual snapshot, configure `[crypto_perpetual]` and import into a new directory:
 
 ```bash
-python -m foundry import-perpetual data/crypto_perpetual
+python -m foundry import-perpetual data/crypto_perpetual_new
 ```
 
-The importer preserves Binance source archives, verifies official checksums and publishes an immutable dataset manifest. Set `[market] name = crypto_perpetual` to research that dataset.
+The importer preserves Binance source archives, verifies official checksums and publishes an immutable dataset manifest. Set `[market] name = crypto_perpetual` and `[crypto_perpetual] data_dir` to the new directory to research that snapshot.
 
 ## Connect your program or agent
 

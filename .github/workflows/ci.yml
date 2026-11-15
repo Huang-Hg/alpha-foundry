@@ -7,7 +7,7 @@ on:
   schedule:
     - cron: '17 3 * * 1'   # weekly (Mon 03:17 UTC): catch numpy/gcc drift on loose >= pins
 
-# CI has no GPU and no market data: it builds the native extensions and runs the tests that need neither
+# CPU CI builds the native extensions and runs tests independent of the bundled market snapshots and GPUs
 # (formula layer, native ABI and kernel invariants, search policy, dashboard layout). The data and GPU suites
 # (tests/test_markets.py, tests/test_production.py, tests/test_portfolio.py, tests/test_search.py) run on authorized cloud compute.
 env:

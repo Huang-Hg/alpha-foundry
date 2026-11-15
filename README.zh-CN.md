@@ -37,15 +37,15 @@ bash build.sh
 python -m foundry --help
 ```
 
-在 [config/config.ini](config/config.ini) 中选择市场、数据目录、研究日期与后端。仓库不附带行情和私有组合；CPU 无需 GPU，CUDA 后端需另外安装与环境匹配的 CuPy。
+在 [config/config.ini](config/config.ini) 中选择市场、数据目录、研究日期与后端。仓库附带[四个市场的测试快照](data/README.md)，包含 64 合约永续数据，clone 后即可获得集成测试所需文件。CPU 无需 GPU，CUDA 后端需另外安装与环境匹配的 CuPy。
 
-想先用公开永续数据体验，可配置 `[crypto_perpetual]` 后导入：
+需要生成新的永续快照时，可配置 `[crypto_perpetual]` 后导入新目录：
 
 ```bash
-python -m foundry import-perpetual data/crypto_perpetual
+python -m foundry import-perpetual data/crypto_perpetual_new
 ```
 
-导入器下载 Binance 官方归档、核验校验和、保留来源并发布不可变数据清单。随后设置 `[market] name = crypto_perpetual`，使用该数据开始研究。
+导入器下载 Binance 官方归档、核验校验和、保留来源并发布不可变数据清单。随后设置 `[market] name = crypto_perpetual`，并将 `[crypto_perpetual] data_dir` 指向新目录，即可使用该快照研究。
 
 ## 接入自己的程序或 agent
 

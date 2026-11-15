@@ -1,0 +1,14 @@
+{
+  "schema": "crypto-spot-daily-v1",
+  "source": "preserved Quantiacs daily panel",
+  "retrieved_at": "unrecorded",
+  "features": "raw vendor UTC daily OHLCV; no precomputed fitted features imported",
+  "execution_prices": "daily OHLC; one-way research fee",
+  "publication": "publication timestamps and revision vintages unavailable; no complete vendor PIT claim",
+  "membership": "stored historical liquid flag at close; original eligibility publication unavailable; missing delisting settlement",
+  "source_file": "data/qnt_crypto/panel.parquet",
+  "source_sha256": "252d6d5daf0bcd0aa1b169b5213e7d126c2ef1dd62909bd2a91c417e20c4650e",
+  "history_start": "2015-01-01 00:00:00",
+  "asof": "2025-12-31",
+  "stored_assets": 73
+}
