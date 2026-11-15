@@ -265,19 +265,33 @@ void fm_cs_rank(const double* x, double* out, int64_t T, int64_t S) {
     }
 }
 
+// Canonical logical reduction tree, independent of the host thread count.
+// CUDA cs_core uses 256 lanes and two 32-lane shuffle trees in this order.
+static double row_reduce(double (&lanes)[256]) {
+    for(int base=0;base<256;base+=32)
+        for(int offset=16;offset;offset/=2)
+            for(int lane=0;lane<32-offset;++lane)lanes[base+lane]+=lanes[base+lane+offset];
+    double groups[32]={0.};
+    for(int group=0;group<8;++group)groups[group]=lanes[group*32];
+    for(int offset=16;offset;offset/=2)
+        for(int lane=0;lane<32-offset;++lane)groups[lane]+=groups[lane+offset];
+    return groups[0];
+}
+
 void fm_cs_zscore(const double* x, double* out, int64_t T, int64_t S) {
     #pragma omp parallel for schedule(static)
     for (int64_t t = 0; t < T; t++) {
-        double sum = 0.0, sum_sq = 0.0;
+        double sums[256]={0.},squares[256]={0.};
         int64_t n = 0;
         for (int64_t s = 0; s < S; s++) {
             double v = x[t * S + s];
-            if (!isnan(v)) { sum += v; sum_sq += v * v; n++; }
+            if (!isnan(v)) { sums[s%256] += v; squares[s%256] += v * v; n++; }
         }
         if (n < 2) {
             for (int64_t s = 0; s < S; s++) out[t * S + s] = NAN;
             continue;
         }
+        double sum=row_reduce(sums),sum_sq=row_reduce(squares);
         double mean = sum / (double)n;
         double var  = (sum_sq - mean * sum) / (double)(n - 1);
         if (var <= 0.0) {
@@ -296,17 +310,17 @@ void fm_cs_zscore(const double* x, double* out, int64_t T, int64_t S) {
 void fm_cs_demean(const double* x, double* out, int64_t T, int64_t S) {
     #pragma omp parallel for schedule(static)
     for (int64_t t = 0; t < T; t++) {
-        double sum = 0.0;
+        double sums[256]={0.};
         int64_t n = 0;
         for (int64_t s = 0; s < S; s++) {
             double v = x[t * S + s];
-            if (!isnan(v)) { sum += v; n++; }
+            if (!isnan(v)) { sums[s%256] += v; n++; }
         }
         if (n == 0) {
             for (int64_t s = 0; s < S; s++) out[t * S + s] = NAN;
             continue;
         }
-        double mean = sum / (double)n;
+        double mean = row_reduce(sums) / (double)n;
         for (int64_t s = 0; s < S; s++) {
             double v = x[t * S + s];
             out[t * S + s] = isnan(v) ? NAN : (v - mean);
@@ -319,11 +333,12 @@ void fm_cs_demean(const double* x, double* out, int64_t T, int64_t S) {
 void fm_cs_scale(const double* x, double* out, int64_t T, int64_t S) {
     #pragma omp parallel for schedule(static)
     for (int64_t t = 0; t < T; t++) {
-        double sum_abs = 0.0;
+        double sums[256]={0.};
         for (int64_t s = 0; s < S; s++) {
             double v = x[t * S + s];
-            if (!isnan(v)) sum_abs += fabs(v);
+            if (!isnan(v)) sums[s%256] += fabs(v);
         }
+        double sum_abs=row_reduce(sums);
         if (sum_abs <= 1e-12) {
             for (int64_t s = 0; s < S; s++) out[t * S + s] = NAN;
             continue;

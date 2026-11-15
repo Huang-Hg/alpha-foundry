@@ -91,6 +91,12 @@ extern "C" __global__ void k_pair(const double* a,const double* b,double* out,in
 // Native zscore/snr use direct two-pass population variance, including their
 // strict sd > 1e-12 rule. Reconstructing variance from raw moments changes
 // constant-window validity through cancellation.
+extern "C" __global__ void k_pair2(const double* a,const double* b,double* out,int T,int S,int mode) {
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if(i>=T*S)return;
+    out[i]=i<S?NAN:two_point_pair(a[i-S],a[i],b[i-S],b[i],mode);
+}
+
 extern "C" __global__ void k_standardize(const double* x,double* out,int T,int S,int w,int mode) {
     int i=blockIdx.x*blockDim.x+threadIdx.x;
     if(i>=T*S)return;
@@ -118,6 +124,56 @@ extern "C" __global__ void k_recursive(const double* x, const double* y, const d
         else { if(!isnan(v)){prev=v;last=t;} }
         out[i]=(mode==2&&(last<0||t-last>=window))?NAN:prev;
     }
+}
+
+// The non-NaN mean exists before a full window is available, unlike ts_mean.
+extern "C" __global__ void k_av_diff(const double* x,double* out,int T,int S,int w) {
+    int s=blockIdx.x*blockDim.x+threadIdx.x;
+    if(s>=S)return;
+    double sum=0.;int count=0;
+    for(int t=0;t<T;++t) {
+        int i=t*S+s;double v=x[i];
+        if(!isnan(v)){sum+=v;++count;}
+        if(t>=w) {double old=x[i-w*S];if(!isnan(old)){sum-=old;--count;}}
+        out[i]=count>0&&!isnan(v)?v-sum/double(count):NAN;
+    }
+}
+
+// One pass owns the extrema and their derived value, with no intermediate panels.
+extern "C" __global__ void k_range(const double* x,double* out,int T,int S,int w,int mode,double shift) {
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if(i>=T*S)return;
+    if(i/S<w-1){out[i]=NAN;return;}
+    int first=i-(w-1)*S;double lo=x[first],hi=lo;
+    if(isnan(lo)){out[i]=NAN;return;}
+    for(int k=1;k<w;++k) {
+        double v=x[first+k*S];if(isnan(v)){out[i]=NAN;return;}
+        lo=fmin(lo,v);hi=fmax(hi,v);
+    }
+    double denominator=hi-lo;
+    out[i]=mode==1?(hi>0.?(x[i]-hi)/hi:NAN):
+        (mode==2?(denominator!=0.?(x[i]-lo)/denominator+shift:NAN):
+                  (hi>lo?(x[i]-lo)/denominator:0.5));
+}
+
+// Five modes share one chronological window scan, matching the CPU definition.
+extern "C" __global__ void k_regression(const double* y,const double* x,double* out,int T,int S,int w,int mode) {
+    int i=blockIdx.x*blockDim.x+threadIdx.x;
+    if(i>=T*S)return;
+    if(i/S<w-1){out[i]=NAN;return;}
+    if(w==2){out[i]=two_point_regression(y[i-S],y[i],x[i-S],x[i],mode);return;}
+    double sx=0.,sy=0.,sxx=0.,sxy=0.,syy=0.;
+    for(int k=0;k<w;++k) {
+        int j=i-(w-1-k)*S;double xv=x[j],yv=y[j];
+        if(isnan(xv)||isnan(yv)){out[i]=NAN;return;}
+        sx+=xv;sy+=yv;sxx+=xv*xv;sxy+=xv*yv;syy+=yv*yv;
+    }
+    double n=double(w),dxx=n*sxx-sx*sx;
+    if(dxx==0.){out[i]=NAN;return;}
+    double cov=n*sxy-sx*sy,beta=cov/dxx,alpha=(sy-beta*sx)/n;
+    double fit=alpha+beta*x[i],dyy=n*syy-sy*sy;
+    out[i]=mode==1?alpha:mode==2?beta:mode==3?fit:
+           mode==4?(dyy==0.?NAN:cov*cov/(dxx*dyy)):y[i]-fit;
 }
 // ts_decay_exp_window(x, w, factor): weights factor^j over the last w rows, normalised.
 extern "C" __global__ void k_decay(const double* x,double* out,int T,int S,int w,double factor) {

@@ -19,6 +19,7 @@
 
 #include <algorithm>    /* std::sort */
 #include <vector>       /* per-thread / per-column scratch */
+#include "../two_point.hpp"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -119,17 +120,18 @@ void fm_ts_mad(const double* x, double* out, int64_t T, int64_t S, int64_t w, in
         if (vlo > vhi) { for (int64_t t = 0; t < T; t++) out[t * ldo + s] = NAN; continue; }
         for (int64_t t = 0; t < vlo; t++)      out[t * ldo + s] = NAN;
         for (int64_t t = vhi + 1; t < T; t++)  out[t * ldo + s] = NAN;
-        double sum = 0.0;
         int64_t cnt_nan = 0;
         for (int64_t t = vlo; t <= vhi; t++) {
             double v = x[t * ldx + s];
-            if (isnan(v)) cnt_nan++; else sum += v;
+            if (isnan(v)) cnt_nan++;
             if (t - vlo >= w) {
                 double old = x[(t - w) * ldx + s];
-                if (isnan(old)) cnt_nan--; else sum -= old;
+                if (isnan(old)) cnt_nan--;
             }
             if (t - vlo >= w - 1 && cnt_nan == 0) {
-                double mean = sum / (double)w;
+                double anchor=x[(t-w+1)*ldx+s],centered=0.;
+                for(int64_t k=t-w+1;k<=t;++k)centered+=x[k*ldx+s]-anchor;
+                double mean=anchor+centered/(double)w;
                 double mad = 0.0;
                 for (int64_t k = t - w + 1; k <= t; k++) {
                     mad += fabs(x[k * ldx + s] - mean);
@@ -327,6 +329,11 @@ void fm_ts_snr(const double* x, double* out, int64_t T, int64_t S, int64_t w, in
  * columns (observed up to ~40% divergence vs GPU on kurt), so O(w)/output two-pass is used: slower than
  * incremental, but accurate. */
 void fm_ts_skew(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    if(w==2) {
+        for(int64_t t=0;t<T;++t)for(int64_t s=0;s<S;++s)
+            out[t*ldo+s]=t==0?NAN:two_point_moment(x[(t-1)*ldx+s],x[t*ldx+s],3);
+        return;
+    }
     #pragma omp parallel for schedule(static)
     for (int64_t s = 0; s < S; s++) {
         int64_t vlo, vhi;
@@ -357,6 +364,11 @@ void fm_ts_skew(const double* x, double* out, int64_t T, int64_t S, int64_t w, i
 
 /* ts_kurt: rolling 4th standardised central moment = E[((x - mu) / sigma)^4] - 3 (excess kurtosis). Two-pass central moments; see fm_ts_skew. */
 void fm_ts_kurt(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    if(w==2) {
+        for(int64_t t=0;t<T;++t)for(int64_t s=0;s<S;++s)
+            out[t*ldo+s]=t==0?NAN:two_point_moment(x[(t-1)*ldx+s],x[t*ldx+s],4);
+        return;
+    }
     #pragma omp parallel for schedule(static)
     for (int64_t s = 0; s < S; s++) {
         int64_t vlo, vhi;
@@ -609,37 +621,18 @@ void fm_ts_ema(const double* x, double* out, int64_t T, int64_t S, int64_t span,
 
 /* WMA: weight[i] = i + 1 (oldest = 1, newest = w). Weight sum = w*(w+1)/2.
  *
- * O(T*S) sliding-window implementation (was O(T*S*W), ~250x faster at W=288):
- *   Let SUM[t]  = sum_{i=0..w-1} x[t-w+1+i]
- *       WSUM[t] = sum_{i=0..w-1} (i+1) * x[t-w+1+i]
- *   Then WSUM[t+1] - WSUM[t] = -SUM[t] + w * x[t+1]   (uses OLD SUM containing the outgoing item)
- *        SUM[t+1]  = SUM[t] - x[t-w+1] + x[t+1]
- *   Both updates are O(1).
- *
- * NaN handling: treat NaN as 0 in SUM/WSUM while counting NaNs separately in cnt_nan; cnt_nan > 0 -> emit NaN.
- *               The SUM/WSUM recurrence identity still holds because NaN contributes 0 on both sides.
+ * Rescan in the CUDA/portable order. A departing observation cannot leave a
+ * cancellation residue in a later all-zero window and create a false position.
  */
 void fm_ts_wma(const double* x, double* out, int64_t T, int64_t S, int64_t w, int64_t ldx, int64_t ldo) {
     double wsum = (double)w * ((double)w + 1.0) / 2.0;
     #pragma omp parallel for schedule(static)
     for (int64_t s = 0; s < S; s++) {
-        double SUM = 0.0, WSUM = 0.0;
-        int64_t cnt_nan = 0;
         for (int64_t t = 0; t < T; t++) {
-            double v = x[t * ldx + s];
-            int missing = isnan(v);
-            double clean = missing ? 0.0 : v;
-            if (t < w) {
-                if (!missing) { SUM += v; WSUM += (double)(t + 1) * v; }
-            } else {
-                double drop = x[(t - w) * ldx + s];
-                int drop_nan = isnan(drop);
-                WSUM = WSUM - SUM + (double)w * clean;
-                SUM = SUM - (drop_nan ? 0.0 : drop) + clean;
-                cnt_nan -= drop_nan;
-            }
-            cnt_nan += missing;
-            out[t * ldo + s] = (t >= w - 1 && cnt_nan == 0) ? (WSUM / wsum) : NAN;
+            if(t<w-1){out[t*ldo+s]=NAN;continue;}
+            double weighted=0.;
+            for(int64_t k=0;k<w;++k)weighted+=(double)(k+1)*x[(t-w+1+k)*ldx+s];
+            out[t*ldo+s]=weighted/wsum;
         }
     }
 }
@@ -685,6 +678,11 @@ void fm_ts_rank(const double* x, double* out, int64_t T, int64_t S, int64_t w, i
 
 void fm_ts_corr(const double* a, const double* b, double* out, int64_t T, int64_t S, int64_t w,
                 int64_t lda_, int64_t ldb, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    if(w==2) {
+        for(int64_t t=0;t<T;++t)for(int64_t s=0;s<S;++s)
+            out[t*ldo+s]=t==0?NAN:two_point_pair(a[(t-1)*lda_+s],a[t*lda_+s],b[(t-1)*ldb+s],b[t*ldb+s],0);
+        return;
+    }
     std::vector<int64_t> vbuf;                                  /* Fallback [lo|hi] when rng is NULL (RAII) */
     const int64_t *vlo, *vhi;
     if (rng_lo) { vlo = rng_lo; vhi = rng_hi; }
@@ -747,6 +745,11 @@ void fm_ts_corr(const double* a, const double* b, double* out, int64_t T, int64_
 
 void fm_ts_cov(const double* a, const double* b, double* out, int64_t T, int64_t S, int64_t w,
                int64_t lda_, int64_t ldb, int64_t ldo, const int64_t* rng_lo, const int64_t* rng_hi) {
+    if(w==2) {
+        for(int64_t t=0;t<T;++t)for(int64_t s=0;s<S;++s)
+            out[t*ldo+s]=t==0?NAN:two_point_pair(a[(t-1)*lda_+s],a[t*lda_+s],b[(t-1)*ldb+s],b[t*ldb+s],1);
+        return;
+    }
     std::vector<int64_t> vbuf;                                  /* Fallback [lo|hi] when rng is NULL (RAII) */
     const int64_t *vlo, *vhi;
     if (rng_lo) { vlo = rng_lo; vhi = rng_hi; }

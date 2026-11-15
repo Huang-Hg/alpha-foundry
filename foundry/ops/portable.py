@@ -152,8 +152,14 @@ def trade_when(entry, alpha, exit_):
 
 # ---------------------------------------------------------------- cross-sectional (one row = one day)
 def _row_sums(cols):
-    """Row sums over the assets in column order (the reference loops over s)."""
-    return _seq(cols[:, j] for j in range(cols.shape[1]))
+    """The canonical 256-lane tree, shared with CPU/CUDA cross sections."""
+    lanes=np.zeros((len(cols),256))
+    for j in range(cols.shape[1]):lanes[:,j%256]+=cols[:,j]
+    groups=lanes.reshape(len(cols),8,32)
+    for offset in (16,8,4,2,1):groups[:,:,:32-offset]=groups[:,:,:32-offset]+groups[:,:,offset:]
+    row=np.zeros((len(cols),32));row[:,:8]=groups[:,:,0]
+    for offset in (16,8,4,2,1):row[:,:32-offset]=row[:,:32-offset]+row[:,offset:]
+    return row[:,0]
 
 
 def cs_rank(x):
@@ -240,24 +246,8 @@ def ts_av_diff(x, w):
 
 
 def ts_wma(x, w):
-    """Linear weights 1..w (newest heaviest), bootstrapped over rows 0..w-1, then updated in O(1)."""
-    T, S = x.shape
-    out = np.full(x.shape, NAN)
-    if T < w:
-        return out
-    nan = np.isnan(x)
-    x0 = np.where(nan, 0.0, x)
-    wsum = w * (w + 1.0) / 2.0
-    s, ws = np.zeros(S), np.zeros(S)
-    for i in range(w):
-        s = s + x0[i]
-        ws = ws + (i + 1.0) * x0[i]
-    out[w - 1] = ws / wsum
-    for t in range(w, T):
-        ws = ws - s + w * x0[t]
-        s = s - x0[t - w] + x0[t]
-        out[t] = ws / wsum
-    return np.where(_nan_free(nan, w), out, NAN)
+    """Linear weights 1..w in the canonical oldest-to-newest window order."""
+    return _rescan([x],w,lambda rows:_seq((i+1)*r for i,r in enumerate(rows))/(w*(w+1.)/2.))
 
 
 def _slope_sums(x, rows, cols, w):
@@ -312,6 +302,10 @@ def _constant_window(x, w):
 
 def ts_corr(a, b, w):
     """Pearson (ddof 1) from five running sums; a pair with either side NaN counts as missing."""
+    if w==2:
+        return _rescan([a,b],w,lambda aa,bb:np.where(
+            np.isfinite(aa[0])&np.isfinite(aa[1])&np.isfinite(bb[0])&np.isfinite(bb[1])&
+            (aa[0]!=aa[1])&(bb[0]!=bb[1]),np.where((aa[1]>aa[0])==(bb[1]>bb[0]),1.,-1.),NAN))
     bad = _both(a, b)
     a0, b0 = np.where(bad, 0.0, a), np.where(bad, 0.0, b)
     sa, sb, sab, saa, sbb = _running([a0, b0, a0 * b0, a0 * a0, b0 * b0], w)
@@ -323,6 +317,10 @@ def ts_corr(a, b, w):
 
 
 def ts_cov(a, b, w):
+    if w==2:
+        return _rescan([a,b],w,lambda aa,bb:np.where(
+            np.isfinite(aa[0])&np.isfinite(aa[1])&np.isfinite(bb[0])&np.isfinite(bb[1]),
+            (aa[1]-aa[0])*(bb[1]-bb[0])/2.,NAN))
     bad = _both(a, b)
     a0, b0 = np.where(bad, 0.0, a), np.where(bad, 0.0, b)
     sa, sb, sab = _running([a0, b0, a0 * b0], w)
@@ -384,6 +382,8 @@ def _moments(w, powers):
 
 
 def ts_skew(x, w):
+    if w==2:
+        return _rescan([x],w,lambda rows:np.where(np.isfinite(rows[0])&np.isfinite(rows[1])&(rows[0]!=rows[1]),0.,NAN))
     def fn(rows):
         _, (m2, m3) = _moments(w, (2, 3))(rows)
         pos = m2 > 0
@@ -392,6 +392,8 @@ def ts_skew(x, w):
 
 
 def ts_kurt(x, w):
+    if w==2:
+        return _rescan([x],w,lambda rows:np.where(np.isfinite(rows[0])&np.isfinite(rows[1])&(rows[0]!=rows[1]),-2.,NAN))
     def fn(rows):
         _, (m2, m4) = _moments(w, (2, 4))(rows)
         pos = m2 > 0
@@ -420,9 +422,11 @@ def ts_snr(x, w):
 
 
 def ts_mad(x, w):
-    """Mean absolute deviation from the window mean of its own scalar running sum (not ts_mean's lane order)."""
-    mean = _running([np.where(np.isnan(x), 0.0, x)], w)[0][w - 1:] / w
-    return _rescan([x], w, lambda rows: _seq(np.abs(r - mean) for r in rows) / w)
+    """Direct centered windows; constant windows have exactly zero deviation."""
+    def measured(rows):
+        anchor=rows[0];mean=anchor+_seq(r-anchor for r in rows)/w
+        return _seq(np.abs(r-mean) for r in rows)/w
+    return _rescan([x],w,measured)
 
 
 def ts_decay_exp_window(x, w, f):
@@ -494,6 +498,12 @@ def ts_regression(y, x, w, rettype):
     rt = math.floor(rettype + 0.5)
 
     def fn(ys, xs):
+        if w==2:
+            ok=np.isfinite(xs[0])&np.isfinite(xs[1])&np.isfinite(ys[0])&np.isfinite(ys[1])&(xs[0]!=xs[1])
+            beta=(ys[1]-ys[0])/np.where(ok,xs[1]-xs[0],1.)
+            if rt==4:return np.where(ok&(ys[0]!=ys[1]),1.,NAN)
+            value=ys[0]-beta*xs[0] if rt==1 else beta if rt==2 else ys[1] if rt==3 else np.zeros_like(beta)
+            return np.where(ok,value,NAN)
         sx = sy = sxx = sxy = syy = 0.0
         for yv, xv in zip(ys, xs):
             sx, sy = sx + xv, sy + yv
