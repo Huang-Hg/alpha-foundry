@@ -126,7 +126,11 @@ def calibrate(port: ResidentPort, population: CalibrationPopulation) -> SingleGa
 def drawdown_window(port: ResidentPort, returns: FloatArray) -> DrawdownWindow:
     xp, dates = port.xp, port.stat_dates
     wealth = xp.concatenate((xp.ones(1), xp.cumprod(1 + returns)))
-    peaks = xp.maximum.accumulate(wealth)
+    peaks = wealth.copy()
+    offset = 1
+    while offset < len(peaks):
+        peaks[offset:] = xp.maximum(peaks[offset:], peaks[:-offset])
+        offset *= 2
     ratios = wealth / peaks - 1
     trough = int(xp.argmin(ratios))
     peak = int(xp.argmax(wealth[:trough + 1]))
