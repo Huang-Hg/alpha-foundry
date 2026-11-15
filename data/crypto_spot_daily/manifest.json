@@ -1,0 +1,12 @@
+{
+  "schema": "crypto-spot-daily-v1",
+  "source": "historical UTC daily spot panel",
+  "retrieved_at": "unrecorded",
+  "features": "raw UTC daily OHLCV; no precomputed fitted features imported",
+  "execution_prices": "daily OHLC; one-way research fee",
+  "publication": "publication timestamps and revision vintages unavailable",
+  "membership": "stored historical liquid flag at close; original eligibility publication unavailable; missing delisting settlement",
+  "history_start": "2015-01-01 00:00:00",
+  "asof": "2025-12-31",
+  "stored_assets": 73
+}
