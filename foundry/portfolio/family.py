@@ -11,11 +11,11 @@ kept the best of what it tried). So every formula (the seed) is expanded and its
            costs and exposure, no information about the days it trades - how often admission passes on noise here
 Every variant goes through production admission against the current portfolio and is read as the change it makes
 to the portfolio: full-period Sharpe (the gain, primary), CAGR and max drawdown. Verdict per seed:
-  成立   the grid passes at least MIN_PASS_RATE, at least MIN_TWIN_RATIO times its twins' rate, and the plateau centre
-         (the grid point whose one-rung neighbours do best) passes and holds a position on at least MIN_ATTEND of days
-  稀疏   all of that except the attendance: the gain comes from a handful of days
-  尖峰   the seed itself passes but its neighbourhood does not: a lucky point, not a hypothesis
-  无效   neither
+  holds    the grid passes at least MIN_PASS_RATE, at least MIN_TWIN_RATIO times its twins' rate, and the plateau centre
+           (the grid point whose one-rung neighbours do best) passes and holds a position on at least MIN_ATTEND of days
+  sparse   all of that except the attendance: the gain comes from a handful of days
+  spike    the seed itself passes but its neighbourhood does not: a lucky point, not a hypothesis
+  invalid  neither
 The number of variants is the multiple-testing count of the round.
 """
 from __future__ import annotations
