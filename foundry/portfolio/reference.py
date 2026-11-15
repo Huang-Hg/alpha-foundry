@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from types import ModuleType
 
-from foundry.config import PortfolioConfig, SearchConfig
+from foundry.config import PortfolioConfig
 from foundry.portfolio.library import Member
 from foundry.types import Backend, FloatArray, Metrics, ReturnMeasure, Source, StatsRow
 
@@ -27,13 +27,12 @@ class Reference:
     xp: ModuleType
     cfg: PortfolioConfig
     measure: ReturnMeasure
-    search: SearchConfig
     version: str
 
     @staticmethod
     def build(U: FloatArray, measured: StatsRow, p: FloatArray, ppy: float,
               members: tuple[Member, ...], seed: bool, backend: Backend,
-              cfg: PortfolioConfig, search: SearchConfig, version: str) -> 'Reference':
+              cfg: PortfolioConfig, version: str) -> 'Reference':
         """Derive reference moments without owning evaluation or mutable state."""
         xp = backend.xp
         moments = backend.measure(measured.returns, p, ppy)
@@ -41,4 +40,4 @@ class Reference:
         return Reference(U, measured.book, measured.returns, p, measured.metrics,
                          measured.metrics.sharpe, measured.metrics.cagr, measured.metrics.maxdd,
                          ws, growth, len(members), seed, tuple(m.source for m in members),
-                         xp, cfg, backend.measure, search, version)
+                         xp, cfg, backend.measure, version)

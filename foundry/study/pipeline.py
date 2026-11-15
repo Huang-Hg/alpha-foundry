@@ -322,7 +322,8 @@ class Pipeline:
         for part in self.batches(missing):
             for key, row in zip(part, self.evaluate_sources([key.source for key in part], delayed=delayed)):
                 source = key.source
-                assert row.ok, (source, row.error)
+                if not row.ok:
+                    raise ValueError(f'portfolio member cannot be evaluated: {source!r}: {row.error}')
                 found[key] = (row.book, row.returns)
         for key in keys:
             self.cache.members[key] = found[key]

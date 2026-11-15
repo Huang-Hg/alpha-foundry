@@ -52,6 +52,10 @@ def walk_forward(session: Session, fit: Callable[[FoldView], Model],
                  complexity: Sequence[float] | None = None) -> WalkForwardResult:
     """Fit each fold once and predict one decision row from its causal prefix.
 
+    Requires an in-process Session with a resident data view; sessions returned
+    by foundry.connect cannot supply callback features. Remote clients can
+    register causal ArrayBatch outputs and evaluate them through their Session.
+
     Fit receives only [fit_start, fit_through]. Predict receives a fresh owned
     [fit_start, decision_row] prefix and must return floating (candidates, assets).
     Expanding folds keep fit_start fixed; rolling folds advance it explicitly.

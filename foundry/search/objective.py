@@ -5,6 +5,7 @@ from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 
+from foundry.config import SearchConfig
 from foundry.search.archive import Archive, BehaviorState, standardized
 from foundry.search.diagnostics import (
     CalibrationPopulation,
@@ -24,6 +25,7 @@ from foundry.types import (
     EvaluationRow,
     FloatArray,
     PortfolioView,
+    Proposal,
     ReweightResult,
     SingleGate,
     Verdict,
@@ -80,6 +82,20 @@ class SingleValues:
     rho_members: float
 
 
+def normalized_violation(proposal: Proposal, cfg: SearchConfig) -> float:
+    """Normalize raw admission margins for discovery rewards, never for verdicts."""
+    if not proposal.valid:
+        return float('inf')
+    scales = (cfg.violation_scale_wsharpe, cfg.violation_scale_sharpe,
+              cfg.violation_scale_cagr, cfg.violation_scale_growth)
+    distance = 0.
+    for check, scale in zip(proposal.checks[:4], scales):
+        if check.required is None:
+            return float('inf')
+        distance += max(check.required - check.delta, 0.) / scale
+    return distance + any(check.name == 'capacity' and not check.passed for check in proposal.checks)
+
+
 class PortfolioObjective:
     name = 'portfolio'
     gate: SingleGate | None = None
@@ -91,7 +107,7 @@ class PortfolioObjective:
         down = ref.rr < 0
         co_loss = xp.sum(xp.maximum(-returns, 0) * down, axis=1) / xp.maximum(xp.sum(xp.abs(returns), axis=1), 1e-12)
         proposals = [verdict.proposal for verdict in batch.verdicts]
-        inputs = xp.asarray([[proposal.passed, proposal.utility, proposal.violation,
+        inputs = xp.asarray([[proposal.passed, proposal.utility, normalized_violation(proposal, port.settings.search),
                               port.normalized_complexity(row.source)]
                              for proposal, row in zip(proposals, batch.rows)])
         feasible = inputs[:, 0].astype(xp.bool_) & low_corr
@@ -159,7 +175,11 @@ class SingleObjective:
 
 
 class Discovery:
-    """One immutable portfolio/archive epoch, shared by formulas and registered arrays."""
+    """One immutable epoch for an in-process Session and its ResidentPort.
+
+    Remote sessions from foundry.connect do not expose resident tensors. Use
+    their evaluate, diagnose, judge_family and commit methods instead.
+    """
     COUNTERS = ('requested', 'unique_evaluations', 'g1', 'g2', 'low_corr', 'behavior_duplicates', 'weight_trials')
 
     def __init__(self, session: Session, archive: Archive | None = None,

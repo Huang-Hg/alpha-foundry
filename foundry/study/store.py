@@ -200,9 +200,7 @@ def implementation_digest() -> str:
 def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: PrecisionPlan) -> StudySnapshot:
     admission = asdict(settings.portfolio)
     admission.pop('artifact_dir')
-    proposal_scales = {name: getattr(settings.search, name) for name in (
-        'violation_scale_wsharpe', 'violation_scale_sharpe', 'violation_scale_cagr', 'violation_scale_growth')}
-    configuration = digest(dict(operators=asdict(settings.expr), admission=admission, proposal_scales=proposal_scales,
+    configuration = digest(dict(operators=asdict(settings.expr), admission=admission,
         precision=precision.effective, return_atol=settings.cuda.return_atol,
         perpetual_host_cells=settings.cuda.perpetual_host_cells))
     values = dict(study=loaded.study, data_snapshot=loaded.panel.snapshot,

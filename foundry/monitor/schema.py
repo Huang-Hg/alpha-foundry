@@ -83,7 +83,13 @@ def candidate_name(report) -> str:
 
 def validate_status(state):
     """Reject obsolete mining layouts at the file boundary; waiting has no record."""
-    if state and state.get('kind') != 'service':
+    if state and state.get('kind') == 'service':
+        phases = get_args(get_type_hints(ServiceStatus)['phase'])
+        if state.get('phase') not in phases:
+            raise ValueError('service status contains an unknown lifecycle phase')
+        if state['phase'] == 'failed' and not isinstance(state.get('error'), str):
+            raise ValueError('failed service status requires its error message')
+    elif state:
         required = set(get_type_hints(_record(MiningStatus)))
         if not required.issubset(state):
             raise ValueError('mining status does not match the current nested telemetry contract')
@@ -146,7 +152,8 @@ class ServiceStatus(Source, total=False):
     protocol: str
     kind: Literal['service']
     market: str
-    phase: Literal['warm', 'serve', 'stopping', 'stopped']
+    phase: Literal['warm', 'serve', 'stopping', 'stopped', 'failed']
+    error: str | None
     warm: str                                # what warm-up is doing
     pid: int
     port: int

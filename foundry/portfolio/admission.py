@@ -127,14 +127,17 @@ def proposals(rows: Sequence[EvaluationRow], ref: Reference, trials: TrialPlan,
     tie = feasible & (utility >= score.max(1)[:, None] - utility_atol)
     best = xp.argmax(tie & (cagr >= xp.where(tie, cagr, -xp.inf).max(1)[:, None] - cfg.metric_atol), axis=1)
     margins = delta - required
-    scales = xp.asarray([ref.search.violation_scale_wsharpe, ref.search.violation_scale_sharpe, ref.search.violation_scale_cagr,
-                         ref.search.violation_scale_growth])
-    violation = xp.maximum(-margins / scales, 0).sum(2) + xp.where(capacity, 0., 1.)
-    minimum = xp.where(valid, violation, xp.inf).min(1)
-    # Project the same metric tolerance into the normalized violation units.
-    # Sorted weights make numerically tied rejected trials choose the smallest.
+    # Rejected trials use portfolio-owned scales only. Search reward parameters
+    # cannot select a diagnostic weight or enter the hard admission contract.
+    scales = xp.asarray([cfg.sharpe_scale, cfg.sharpe_scale,
+                         max(abs(ref.cagr), cfg.growth_scale),
+                         max(abs(ref.recent_growth), cfg.growth_scale)])
+    distance = xp.maximum(-margins / scales, 0).sum(2) + xp.where(capacity, 0., 1.)
+    minimum = xp.where(valid, distance, xp.inf).min(1)
+    # Project the metric tolerance into distance units. Sorted weights make
+    # numerically tied rejected trials choose the smallest weight.
     tie_atol = cfg.metric_atol * (1 / scales).sum()
-    near = xp.argmax(valid & (violation <= minimum[:, None] + tie_atol), axis=1)
+    near = xp.argmax(valid & (distance <= minimum[:, None] + tie_atol), axis=1)
     chosen = xp.where(passed, best, near)
     ix = xp.arange(B)
     mine = xp.where(va > 0, ma / xp.sqrt(xp.where(va > 0, va, 1)) * ppy ** 0.5, 0)
@@ -143,7 +146,7 @@ def proposals(rows: Sequence[EvaluationRow], ref: Reference, trials: TrialPlan,
     report = xp.stack((passed, valid.any(1), weights[ix, chosen], ws[ix, chosen], sh[ix, chosen], cagr[ix, chosen],
                        growth[ix, chosen], dd[ix, chosen], unique.sum(1), capacity[ix, chosen], mine, rho, need), axis=1)
     report = xp.concatenate((report, delta[ix, chosen], checks[ix, chosen], utility[ix, chosen, None],
-                             violation[ix, chosen, None], required[ix, chosen]), axis=1)
+                             required[ix, chosen]), axis=1)
     out = []
     for row, v in zip(rows, to_host(report).tolist()):
         row.view = (v[10], v[12], v[11])
@@ -151,16 +154,18 @@ def proposals(rows: Sequence[EvaluationRow], ref: Reference, trials: TrialPlan,
             out.append(Proposal(False, (), ('所有试探组合均产生非有限收益或破产',), 0., int(v[8]),
                                 backend_label, ref.version, False))
             continue
-        checks = [ConstraintCheck(key, bool(v[17 + j]), v[13 + j]) for j, key in enumerate(KEYS)]
-        vetoes = [f'{label} ({v[13 + j]:+.6f},要求 ≥ {v[23 + j]:+.6f})' for j, label in enumerate(LABELS) if not v[17 + j]]
+        checks = [ConstraintCheck(key, bool(v[17 + j]), v[13 + j],
+                                  None if v[22 + j] == float('inf') else v[22 + j])
+                  for j, key in enumerate(KEYS)]
+        vetoes = [f'{label} ({v[13 + j]:+.6f},要求 ≥ {v[22 + j]:+.6f})' for j, label in enumerate(LABELS) if not v[17 + j]]
         if not v[9]:
-            checks.append(ConstraintCheck('capacity', False, float(cfg.max_members - ref.n - 1)))
+            checks.append(ConstraintCheck('capacity', False, float(cfg.max_members - ref.n - 1), 0.))
             vetoes.append('组合成员数超过上限')
         if not v[0]:
             vetoes.insert(0, f'{int(v[8])} 个权重点未找到可行组合;以下为约束违反最小的试探点')
         out.append(Proposal(bool(v[0]), tuple(checks), tuple(vetoes), v[2], int(v[8]),
                             backend_label, ref.version, True,
-                            v[3], v[4], v[5], v[6], v[7], v[21], v[22]))
+                            v[3], v[4], v[5], v[6], v[7], v[21]))
     return tuple(out)
 
 

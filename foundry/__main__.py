@@ -6,7 +6,7 @@
   serve | status | stop | attach [HOST] | detach | mirror HOST REMOTE LOCAL
   mine OUTPUT                       run the configured mining program
   import-perpetual OUTPUT            import verified public USD-M archives
-  benchmark OUTPUT                  validate and compare CPU/CUDA performance
+  benchmark OUTPUT                  validate and compare native engine performance
   calibrate RUN | monitor | preview
 
 Start or attach the service explicitly. request never starts a local GPU process.
@@ -96,7 +96,7 @@ def cmd_mine(a):
 def cmd_calibrate(a):
     from foundry.search import calibrate
     settings = configure(**a.parameters)
-    calibrate.report(Path(a.run), settings.portfolio, settings.search)
+    calibrate.report(Path(a.run), settings.search)
 
 
 def cmd_monitor(a):
@@ -119,7 +119,8 @@ def cmd_import_perpetual(a):
 
 def cmd_benchmark(a):
     from foundry.api import benchmark
-    print(benchmark(a.output, **a.parameters))
+    print(benchmark(a.output, suite=a.suite, sizes=a.sizes, assets=a.assets,
+                    spectre_python=a.spectre_python, **a.parameters))
 
 
 def main():
@@ -149,6 +150,10 @@ def main():
     s.add_argument('output')
     s = sub.add_parser('benchmark')
     s.add_argument('output')
+    s.add_argument('--suite', choices=('foundry', 'frameworks'), default='foundry')
+    s.add_argument('--sizes', type=int, nargs='+')
+    s.add_argument('--assets', type=int, default=8)
+    s.add_argument('--spectre-python', help='isolated interpreter containing the pinned Spectre revision')
     s = sub.add_parser('calibrate')
     s.add_argument('run')
     s = sub.add_parser('monitor')

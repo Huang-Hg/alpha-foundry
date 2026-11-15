@@ -25,8 +25,9 @@ class Library:
     def version(self):
         return hashlib.sha256(repr((PROTOCOL, self.study, self.members)).encode()).hexdigest()
 
-    def add(self, source, weight):
-        assert 0 < weight <= 1
+    def add(self, source: Source, weight: float) -> 'Library':
+        if not 0 < weight <= 1:
+            raise ValueError('member weight must be in (0, 1]')
         members = self.members or (SEED,)
         if source in {m.source for m in members}:
             members = tuple(Member(m.source, m.weight + weight) if m.source == source else m for m in members)

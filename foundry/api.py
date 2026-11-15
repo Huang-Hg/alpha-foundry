@@ -102,7 +102,19 @@ def import_perpetual(output: str | Path, **parameters: Unpack[Parameters]):
     return acquire(Path(output), configure(market='crypto_perpetual', **parameters).market, publish)
 
 
-def benchmark(output: str | Path, *, sizes=(1, 64, 4096), **parameters: Unpack[Parameters]):
-    """Run validation and CPU/CUDA benchmarks, then generate the report bundle."""
+def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8,
+              spectre_python=None, **parameters: Unpack[Parameters]):
+    """Run the selected native benchmark suite and generate its report bundle."""
+    if suite == 'frameworks':
+        import sys
+        from validation.benchmarks.competition.run import run
+        if parameters:
+            raise ValueError('frameworks uses its published common trading contract; omit research parameters')
+        return run(output, sizes=(1, 16, 64) if sizes is None else tuple(sizes), assets=assets,
+                   spectre_python=sys.executable if spectre_python is None else spectre_python)
+    if suite != 'foundry':
+        raise ValueError('benchmark suite must be foundry or frameworks')
+    if assets != 8 or spectre_python is not None:
+        raise ValueError('assets and spectre_python apply only to the frameworks suite')
     from validation.benchmarks.run import run
-    return run(output, sizes=sizes, **parameters)
+    return run(output, sizes=(1, 64, 4096) if sizes is None else tuple(sizes), **parameters)

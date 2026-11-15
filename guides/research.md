@@ -42,7 +42,7 @@ Omit the portfolio path to keep the library in memory. Registered arrays still u
 
 Reports bind their study snapshot and portfolio version. Another writer changing that context raises `ContextConflict`; call `session.refresh()` and evaluate again explicitly. There is no silent retry of a stale decision.
 
-Snapshot identity includes the four `Search.violation_scale_*` parameters because they affect rejected-trial numerical reports. Search epoch counts and monitoring settings do not change that causal identity.
+Admission reports expose each constraint's raw `delta` and `required` threshold; a null threshold means the requirement is unattainable. Search normalizes these margins independently. Tuning the four `Search.violation_scale_*` parameters changes discovery rewards without changing the study snapshot, registered-array identity or hard admission rules. Rejected diagnostic trial weights use portfolio-owned scales. Correcting this snapshot definition changes old snapshot IDs once; explicitly register old snapshot-bound arrays again instead of reusing their old handles.
 
 ### Parameters and discovery
 

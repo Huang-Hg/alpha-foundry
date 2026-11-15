@@ -237,6 +237,8 @@ class Server:
                                 connection.sendall(json.dumps(error_response(None, error)).encode() + b'\n')
                             except OSError:
                                 pass
+        except Exception as error:
+            self._fatal(error)
         finally:
             self.request_stop()
             self._selector.unregister(self.sock)
@@ -247,12 +249,20 @@ class Server:
             self.join_handlers()
             self.stopped = True
             try:
-                self.portfile.unlink(missing_ok=True)
-                if self.failure is None:
+                try:
+                    self.portfile.unlink(missing_ok=True)
+                except OSError as error:
+                    if self.failure is None:
+                        self.failure = error
+                    else:
+                        self.failure.add_note(f'Endpoint cleanup also failed: {error}')
+                try:
                     self._publish()
-            except OSError as error:
-                if self.failure is None:
-                    self.failure = error
+                except OSError as error:
+                    if self.failure is None:
+                        self.failure = error
+                    else:
+                        self.failure.add_note(f'Final status publication also failed: {error}')
             finally:
                 self.close()
         if self.failure is not None:

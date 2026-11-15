@@ -366,9 +366,12 @@ class EvaluationRow:
 
 @dataclass(frozen=True)
 class ConstraintCheck:
+    """Raw metric change and threshold; None means an unattainable +infinity threshold."""
+
     name: str
     passed: bool
     delta: float
+    required: float | None
 
 
 @dataclass
@@ -387,7 +390,6 @@ class Proposal:
     recent_growth: float = float('nan')
     maxdd: float = float('nan')
     utility: float = float('nan')
-    violation: float = float('inf')
 
 
 @dataclass(frozen=True)

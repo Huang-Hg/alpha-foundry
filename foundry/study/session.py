@@ -59,7 +59,7 @@ class Ledger:
             U[:pipeline.start] = 0
             measured = pipeline.metrics([cap_book(U, pipeline.allocation, xp)])[0]
             reference = Reference.build(U, measured, pipeline.recency_weights, pipeline.ppy, members,
-                not library.members, pipeline.backend, pipeline.portfolio_cfg, pipeline.settings.search, library.version)
+                not library.members, pipeline.backend, pipeline.portfolio_cfg, library.version)
             return Portfolio(library, reference)
 
     def _admit(self, rows, portfolio: Portfolio):

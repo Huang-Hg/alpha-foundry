@@ -4,6 +4,8 @@
 
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
 
+[原生框架对比](frameworks-pro6000-20261115/README.zh-CN.md) 使用相同日线现货输入和交易规则，单独比较 Foundry、Spectre、vectorbt Numba/Rust 与 Freqtrade。共用入口为 `python -m foundry benchmark OUTPUT --suite frameworks`，安装与口径见[方法说明](../framework-benchmark.zh-CN.md)。该受限对比测量账户执行，不包含组合准入。
+
 [架构重构验收](arch-v2-pro6000-20261115/README.zh-CN.md) 在 RTX PRO 6000 Blackwell Server（97887 MiB）上测量源码 `fa2acfd`。公开回归为 512 项通过、1 项跳过、7061 个子用例通过，耗时 247.05 秒；JUnit 的 7574 个条目包含子用例。66 个算子的 124 个窗口用例全部通过。4096 条公式完整用例 CUDA 耗时 2.879063 秒、CPU 耗时 93.723696 秒，加速 32.55 倍；两端均接纳 28 个候选，无决策不一致或数值误差超限。独立私有生产审计在未改动的旧工件上失败，没有通过重录基线掩盖。
 
 在授权 GPU 环境中只需一个入口：

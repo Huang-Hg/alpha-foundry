@@ -4,6 +4,8 @@
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
 
+The [native framework comparison](frameworks-pro6000-20261115/README.md) separately compares Foundry with Spectre, vectorbt Numba/Rust and Freqtrade on identical daily spot inputs and trading rules. The shared entry is `python -m foundry benchmark OUTPUT --suite frameworks`; see the [setup and method](../framework-benchmark.md). This restricted comparison measures execution, not portfolio admission.
+
 The [architecture-refactor run](arch-v2-pro6000-20261115/README.md) measured source `fa2acfd` on RTX PRO 6000 Blackwell Server (97887 MiB). Public regression results were 512 passed, 1 skipped and 7061 passed subtests in 247.05 s; the 7574 JUnit entries include subtests. All 124 window cases across 66 operators passed. The 4096-formula complete case took 2.879063 s on CUDA versus 93.723696 s on CPU (32.55×); 28 candidates were admitted on both, with zero decision mismatches or numerical tolerance exceedances. The private production audit failed separately on an unchanged legacy artifact, not on a newly recorded baseline.
 
 Run one command on the authorized GPU:

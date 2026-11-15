@@ -484,6 +484,8 @@ class ServiceHeader(Header):
 
     def state(self, ctx):
         st = ctx.st
+        if st['phase'] == 'failed':
+            return '服务失败', RED, '✕'
         if st['phase'] == 'warm':
             return '预热中', ACCENT, None
         if st['phase'] == 'stopping':
@@ -502,6 +504,9 @@ class Job(Component):
     """Two rows: the job on the GPU (whose, which stage, how far), or what the service is waiting for."""
     def rows(self, ctx, width):
         st, cur = ctx.st, ctx.st.get('cur')
+        if st['phase'] == 'failed':
+            return [Row().add('服务失败  ', RED, True).add(st['error'], INK2).cells(width),
+                    bar(0, width, RED, BASE)]
         if st['phase'] == 'warm':
             return [Row().add('预热  ', INK3).add(st.get('warm') or '', INK2).cells(width), bar(0, width, ACCENT, BASE)]
         if not cur:
