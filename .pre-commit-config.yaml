@@ -1,0 +1,22 @@
+minimum_pre_commit_version: '4.3.0'
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c # v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-symlinks
+      - id: detect-private-key
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: ef6cf06c079dd6b299dfc720b0f14400c9d168e1 # v0.17.5
+    hooks:
+      - id: ruff-check
+        args: [--select, 'E9,F821,F822', --no-cache]
+        files: ^(foundry|validation)/
+  - repo: https://github.com/rhysd/actionlint
+    rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+    hooks:
+      - id: actionlint

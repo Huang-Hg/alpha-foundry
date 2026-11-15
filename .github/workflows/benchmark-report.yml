@@ -2,31 +2,104 @@ name: Benchmark evidence
 
 on:
   pull_request:
-    paths:
-      - 'guides/benchmarks/**'
-      - '.github/workflows/benchmark-report.yml'
+    branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: benchmark-evidence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   report:
-    runs-on: ubuntu-latest
+    name: Benchmark evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
       - name: Verify saved evidence
         working-directory: guides/benchmarks/current
         run: sha256sum -c SHA256SUMS
-      - name: Publish the cloud measurement summary
-        shell: bash
+      - name: Verify selected data snapshots
+        run: sha256sum -c data/SHA256SUMS
+      - name: Bind evidence to the proposed source
+        shell: python
         run: |
-          echo 'Download benchmark-evidence for linked HTML, CSV and raw measurements.' >> "$GITHUB_STEP_SUMMARY"
-          cat guides/benchmarks/current/report.md >> "$GITHUB_STEP_SUMMARY"
+          import hashlib
+          import json
+          from pathlib import Path
+          import tarfile
+
+          root = Path('guides/benchmarks/current')
+          summary = json.loads((root / 'summary.json').read_text())
+          result = json.loads((root / 'benchmark.json').read_text())
+          evidence = result['foundry']
+          if summary['schema'] != 'foundry-benchmark-v1' or evidence['schema'] != summary['schema']:
+              raise SystemExit('Unsupported benchmark evidence schema')
+          if not summary['passed'] or summary['operator_count'] != 66:
+              raise SystemExit('The saved benchmark is incomplete or failed')
+          if set(summary['comparisons']) != {'1', '64', '4096'}:
+              raise SystemExit('Required candidate batch measurements are missing')
+          if not all(row['passed'] for row in summary['comparisons'].values()):
+              raise SystemExit('CPU/CUDA parity failed')
+
+          def canonical(content):
+              return content.replace(b'\r\n', b'\n').rstrip() + b'\n'
+
+          suffixes = {'.py', '.cpp', '.cu', '.cuh', '.hpp', '.h'}
+          tracked = {p.as_posix() for folder in ('foundry', 'validation')
+                     for p in Path(folder).rglob('*') if p.suffix in suffixes}
+          manifest = evidence['source_sha256']
+          recorded = {name for name in manifest if name.startswith(('foundry/', 'validation/'))}
+          if tracked != recorded:
+              raise SystemExit('Source coverage changed; publish a new authorized cloud run')
+          changed = []
+          with tarfile.open(root / 'source.tar.gz') as archive:
+              for name, digest in manifest.items():
+                  measured = archive.extractfile(name).read()
+                  if hashlib.sha256(measured).hexdigest() != digest:
+                      raise SystemExit(f'Measured source checksum failed: {name}')
+                  if name != 'foundry/benchmark_report.py' and canonical(Path(name).read_bytes()) != canonical(measured):
+                      changed.append(name)
+          renderer = Path('foundry/benchmark_report.py').read_bytes()
+          if hashlib.sha256(renderer).hexdigest() != summary['report_renderer_sha256']:
+              raise SystemExit('Regenerate the saved reports with the current renderer')
+          corpus = Path('guides/benchmarks/fixtures/us-formulas.json').read_bytes()
+          if hashlib.sha256(corpus).hexdigest() != evidence['corpus_sha256']:
+              raise SystemExit('Formula corpus differs from the measured workload')
+          if changed:
+              raise SystemExit('Cloud evidence is stale for: ' + ', '.join(changed))
+          print('Saved cloud evidence matches this source; no numerical code was executed')
+      - name: Publish the cloud measurement summary
+        env:
+          REPORT_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          import re
+
+          base = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/blob/"
+                  f"{os.environ['REPORT_REVISION']}/guides/benchmarks/current/")
+          report = Path('guides/benchmarks/current/report.md').read_text()
+          report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + base + match[1] + ')', report)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('This job verifies saved Colab evidence; it does not execute numerical tests.\n\n')
+              output.write(report)
       - name: Preserve benchmark evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: benchmark-evidence-${{ github.sha }}
+          name: benchmark-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: guides/benchmarks/current/
           if-no-files-found: error
           retention-days: 30
+          compression-level: 0

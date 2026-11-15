@@ -1,0 +1,11 @@
+name: Foundry static security analysis
+paths:
+  - foundry
+  - validation
+  - .github/workflows
+paths-ignore:
+  - guides/benchmarks/current
+  - guides/benchmarks/archive
+  - data
+queries:
+  - uses: security-extended

@@ -1,0 +1,2 @@
+# Static repository tooling only; no research runtime or GPU dependencies.
+pre-commit>=4.3,<5
