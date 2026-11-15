@@ -76,4 +76,6 @@ Agents can export the machine contract with `python -m foundry schema schema.jso
 
 Python owns research and integration; C++ and CUDA own the numerical kernels. A modular monolith keeps market semantics independent of transport, storage and device choice. Tests cover PIT behavior, market rules, numerical/decision agreement and atomic state changes. Performance claims distinguish setup, resident computation and complete use cases.
 
+See the [66-operator and 4,096-formula benchmark](guides/benchmarks/operator66.md) for measured throughput and accuracy on Colab PRO 6000.
+
 Foundry supplies research infrastructure. A passing backtest or admission decision is not evidence of out-of-sample profitability.

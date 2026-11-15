@@ -19,8 +19,9 @@ _NAN = '\ntemplate<typename T> __device__ __forceinline__ T qnan();\ntemplate<> 
 class Ops:
 
     def __init__(self):
-        self._OPS = cp.RawModule(code=(_KERNELS / 'ops.cu').read_text(encoding='utf-8'), options=('--std=c++14',))
-        self._PATHS = cp.RawModule(code=(_KERNELS / 'paths.cu').read_text(encoding='utf-8'), options=('--std=c++14', '--fmad=false'))
+        contract = _KERNELS.parent.joinpath('two_point.hpp').read_text(encoding='utf-8')
+        self._OPS = cp.RawModule(code=contract+'\n'+'\n'.join((_KERNELS / name).read_text(encoding='utf-8') for name in ('ops.cu','select.cu')), options=('--std=c++14', '--fmad=false'))
+        self._PATHS = cp.RawModule(code=contract+'\n'+(_KERNELS / 'paths.cu').read_text(encoding='utf-8'), options=('--std=c++14', '--fmad=false'))
         self._PROPS = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
         self._WARP = self._PROPS['warpSize']
         self._OPTIN = self._PROPS['sharedMemPerBlockOptin']
@@ -28,8 +29,8 @@ class Ops:
         self._SHBUDGET = min(self._OPTIN, self._PROPS['sharedMemPerMultiprocessor'] // 3)
         self._k_moment, self._k_ext, self._k_ema, self._k_cs, self._k_cs_rank = (self._OPS.get_function(n) for n in ('k_moment', 'k_ext', 'k_ema', 'k_cs', 'k_cs_rank'))
         self._k_pair, self._k_slope, self._k_standardize, self._k_std = (self._PATHS.get_function(n) for n in ('k_pair', 'k_slope', 'k_standardize', 'k_std'))
+        self._median = {size:self._OPS.get_function(f'k_median{size}') for size in (32,128,512,2048)}
         self._DYNMAX = min((self._optin_max(f) for f in (self._k_moment, self._k_ext, self._k_cs_rank)))
-        self._DUMMY = cp.zeros(1, dtype=D)
         self.max_window = self._max_window()
         self.max_pair_window = MAX_WINDOW
         self._sign = cp.ElementwiseKernel('T x', 'T o', 'o = isnan(x) ? x : (x > (T)0 ? (T)1 : (x < (T)0 ? (T)-1 : (T)0));', 'fm_sign')
@@ -48,12 +49,6 @@ class Ops:
         self._left_tail = self._ew('left_tail', 'T a, float64 k', 'o = (a > (T)k) ? qnan<T>() : a;')
         self._right_tail = self._ew('right_tail', 'T a, float64 k', 'o = (a < (T)k) ? qnan<T>() : a;')
         self._if_else = self._ew('if_else', 'T c, T a, T b', 'o = isnan(c) ? qnan<T>() : ((c > 0) ? a : b);')
-        self._safe_div = self._ew('safe_div', 'T n, T d', 'o = (fabs((double)d) < 1e-12) ? qnan<T>() : (T)(n / d);')
-        self._chanpos = self._ew('chanpos', 'T x, T lo, T hi', 'o = (isnan(x) || isnan(lo) || isnan(hi)) ? qnan<T>() : ((hi > lo) ? (T)((x - lo) / (hi - lo)) : (T)0.5);')
-        self._ddown = self._ew('ddown', 'T x, T mx', 'o = (mx > (T)0) ? (T)((x - mx) / mx) : qnan<T>();')
-        self._scale = self._ew('scale_fin', 'T x, T lo, T hi, float64 k', 'T d = hi - lo; o = (fabs((double)d) < 1e-12) ? qnan<T>() : (T)((x - lo) / d + k);')
-        self._avd_pre = cp.ElementwiseKernel('T x', 'T xz, T fm', 'bool f = isfinite(x); xz = f ? x : (T)0; fm = (T)(f ? 1 : 0);', 'fx_avd_pre')
-        self._avd_post = self._ew('avd_post', 'T x, T s, T n', 'o = (isfinite(x) && n > 0) ? (T)(x - s / n) : qnan<T>();')
         self.IMPL = dict(abs=cp.abs, neg=lambda x: -x, sign=self._sign, log=self._log, square=lambda x: x * x, sqrt=self._sqrt, tanh=self._tanh, inv=self._inv, s_log_1p=self._s_log_1p, **{'not': self._not}, is_nan=self._is_nan, add=lambda a, b: a + b, sub=lambda a, b: a - b, mul=lambda a, b: a * b, div=self._div, max=cp.maximum, min=cp.minimum, gt=self._pred('gt', 'a > b'), lt=self._pred('lt', 'a < b'), **{'and': self._pred('and', '(a > 0) && (b > 0)'), 'or': self._pred('or', '(a > 0) || (b > 0)')}, equal=self._pred('equal', 'a == b'), not_equal=self._pred('not_equal', 'a != b'), greater_equal=self._pred('ge', 'a >= b'), less_equal=self._pred('le', 'a <= b'), add_const=lambda x, k: x + D(k), mul_const=lambda x, k: x * D(k), pow_const=lambda x, k: self._pow(x, D(k)), left_tail=lambda x, k: self._left_tail(x, float(k)), right_tail=lambda x, k: self._right_tail(x, float(k)), hump=self.hump, if_else=self._if_else, trade_when=self.trade_when, cs_rank=self.cs_rank, cs_zscore=lambda x: self._cs(x, 0), cs_demean=lambda x: self._cs(x, 1), cs_scale=lambda x: self._cs(x, 2), ts_mean=self.ts_mean, ts_std=self.ts_std, ts_max=self.ts_max, ts_min=self.ts_min, ts_sum=self.ts_sum, ts_rank=self.ts_rank, ts_arg_max=self.ts_arg_max, ts_arg_min=self.ts_arg_min, ts_ema=self.ts_ema, ts_wma=self.ts_wma, ts_ref=self.ts_ref, ts_delta=self.ts_delta, ts_skew=self.ts_skew, ts_kurt=self.ts_kurt, ts_mad=self.ts_mad, ts_slope=self.ts_slope, ts_chanpos=self.ts_chanpos, ts_ddown=self.ts_ddown, ts_zscore=self.ts_zscore, ts_snr=self.ts_snr, ts_backfill=self.ts_backfill, ts_median=self.ts_median, ts_av_diff=self.ts_av_diff, ts_decay_exp_window=self.ts_decay_exp_window, ts_scale=self.ts_scale, ts_quantile=self.ts_quantile, ts_corr=self.ts_corr, ts_cov=self.ts_cov, ts_regression=self.ts_regression)
         assert set(self.IMPL) == set(OPS), set(OPS) ^ set(self.IMPL)
 
@@ -78,6 +73,7 @@ class Ops:
         return lo
 
     def window_cap(self, op: str) -> int:
+        if op=='ts_median':return max(self._median)
         return self.max_pair_window if OPS[op].kind == 'pair' else self.max_window
 
     def unsupported(self, tree):
@@ -92,17 +88,12 @@ class Ops:
                 out.append(f'{n.op}@w={n.window}>{self.window_cap(n.op)}')
         return out
 
-    def _moment(self, x, w, op, kmode, K):
+    def _moment(self, x, w, op):
         T, S = x.shape
         out = cp.empty_like(x)
         ss, tt = self._tile(w)
-        self._k_moment(((S + ss - 1) // ss, (T + tt - 1) // tt), (ss, tt), (x, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op), K, np.int32(kmode)), shared_mem=(tt + w - 1) * ss * _ELEM)
+        self._k_moment(((S + ss - 1) // ss, (T + tt - 1) // tt), (ss, tt), (x, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op)), shared_mem=(tt + w - 1) * ss * _ELEM)
         return out
-
-    def _first_valid(self, x):
-        """First valid value of every column (skew/kurt centering anchor); an all-NaN column -> 0."""
-        fin = ~cp.isnan(x)
-        return cp.where(fin.any(axis=0), x[fin.argmax(axis=0), cp.arange(x.shape[1])], 0).astype(D)
 
     def _ext(self, x, w, op):
         T, S = x.shape
@@ -114,29 +105,32 @@ class Ops:
     def _pair(self, a, b, w, op):
         T, S = a.shape
         out = cp.empty_like(a)
-        self._k_pair(((S + 127) // 128,), (128,), (a, b, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op)))
+        if w==2:
+            self._PATHS.get_function('k_pair2')(((T*S+127)//128,),(128,),(a,b,out,np.int32(T),np.int32(S),np.int32(op)))
+            return out
+        self._k_pair(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (a, b, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op)))
         return out
 
     def ts_sum(self, x, w):
-        return self._moment(x, w, 0, 0, self._DUMMY)
+        return self._moment(x, w, 0)
 
     def ts_mean(self, x, w):
-        return self._moment(x, w, 1, 0, self._DUMMY)
+        return self._moment(x, w, 1)
 
     def ts_std(self, x, w):
         T, S = x.shape
         out = cp.empty_like(x)
-        self._k_std(((S + 127) // 128,), (128,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        self._k_std(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
         return out
 
     def ts_mad(self, x, w):
-        return self._moment(x, w, 5, 0, self._DUMMY)
+        return self._moment(x, w, 5)
 
     def ts_skew(self, x, w):
-        return self._moment(x, w, 3, 1, self._first_valid(x))
+        return self._moment(x, w, 3)
 
     def ts_kurt(self, x, w):
-        return self._moment(x, w, 4, 1, self._first_valid(x))
+        return self._moment(x, w, 4)
 
     def ts_max(self, x, w):
         return self._ext(x, w, 0)
@@ -150,7 +144,7 @@ class Ops:
     def ts_slope(self, x, w):
         T, S = x.shape
         out = cp.empty_like(x)
-        self._k_slope(((S + 127) // 128,), (128,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        self._k_slope(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
         return out
 
     def ts_rank(self, x, w):
@@ -171,7 +165,7 @@ class Ops:
     def ts_ema(self, x, span):
         T, S = x.shape
         out = cp.empty_like(x)
-        self._k_ema(((S + 127) // 128,), (128,), (x, out, np.int32(T), np.int32(S), np.int32(span)))
+        self._k_ema(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(span)))
         return out
 
     def ts_ref(self, x, w):
@@ -194,7 +188,7 @@ class Ops:
     (A bitonic sort was 8-12x slower on every real universe, 299-666 assets: its barriers cost more than the count.)"""
         T, S = x.shape
         out = cp.empty_like(x)
-        self._k_cs_rank((T,), (256,), (x, out, np.int32(S)), shared_mem=S * _ELEM)
+        self._k_cs_rank((T,), (256,), (x, out, np.int32(S)), shared_mem=S * 8)
         return out
 
     def _ew(self, name, params, body):
@@ -217,19 +211,28 @@ class Ops:
     def ts_snr(self, x, w):
         return self._standardize(x, w, 1)
 
+    def _range(self, x, w, mode, shift=0.):
+        T, S = x.shape
+        out = cp.empty_like(x)
+        self._PATHS.get_function('k_range')(((T*S+127)//128,), (128,),
+            (x, out, np.int32(T), np.int32(S), np.int32(w), np.int32(mode), np.float64(shift)))
+        return out
+
     def ts_chanpos(self, x, w):
-        return self._chanpos(x, self.ts_min(x, w), self.ts_max(x, w))
+        return self._range(x, w, 0)
 
     def ts_ddown(self, x, w):
-        return self._ddown(x, self.ts_max(x, w))
+        return self._range(x, w, 1)
 
     def ts_scale(self, x, w, k):
-        return self._scale(x, self.ts_min(x, w), self.ts_max(x, w), float(k))
+        return self._range(x, w, 2, k)
 
     def ts_av_diff(self, x, w):
-        """x - mean(x, w) with the mean ignoring NaN: sums of zero-filled values and of finiteness flags."""
-        xz, fm = self._avd_pre(x)
-        return self._avd_post(x, self.ts_sum(xz, w), self.ts_sum(fm, w))
+        T, S = x.shape
+        out = cp.empty_like(x)
+        self._PATHS.get_function('k_av_diff')(((S+self._WARP-1)//self._WARP,), (self._WARP,),
+            (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        return out
 
     def ts_quantile(self, x, w, driver):
         """Plotting position p = (r + 0.5)/w of the rank within the window, through the inverse CDF of the driver."""
@@ -243,34 +246,16 @@ class Ops:
         return ndtri(p.astype(cp.float64)).astype(D)
 
     def ts_regression(self, y, x, w, rettype):
-        """Rolling OLS y ~ a + b x from rolling sums; a NaN on either side voids both sums."""
-        m = cp.isfinite(x) & cp.isfinite(y)
-        xm = cp.where(m, x, cp.nan).astype(D)
-        ym = cp.where(m, y, cp.nan).astype(D)
-        n = float(w)
-        Sx, Sy = (self.ts_sum(xm, w), self.ts_sum(ym, w))
-        Sxx, Sxy = (self.ts_sum(xm * xm, w), self.ts_sum(xm * ym, w))
-        dxx = n * Sxx - Sx * Sx
-        beta = self._safe_div(n * Sxy - Sx * Sy, dxx)
-        alpha = (Sy - beta * Sx) / n
-        code = int(round(float(rettype)))
-        if code == 1:
-            return alpha.astype(D)
-        if code == 2:
-            return beta.astype(D)
-        fit = alpha + beta * x
-        if code == 3:
-            return fit.astype(D)
-        if code == 4:
-            Syy = self.ts_sum(ym * ym, w)
-            cov = n * Sxy - Sx * Sy
-            return self._safe_div(cov * cov, dxx * (n * Syy - Sy * Sy)).astype(D)
-        return (y - fit).astype(D)
+        T, S = x.shape
+        out = cp.empty_like(x)
+        self._PATHS.get_function('k_regression')(((T*S+127)//128,), (128,),
+            (y, x, out, np.int32(T), np.int32(S), np.int32(w), np.int32(round(float(rettype)))))
+        return out
 
     def _recursive(self, x, y, z, mode, window=0, k=0.0):
         T, S = x.shape
         out = cp.empty_like(x)
-        self._PATHS.get_function('k_recursive')(((S + 127) // 128,), (128,), (x, y, z, out, np.int32(T), np.int32(S), np.int32(mode), np.int32(window), np.float64(k)))
+        self._PATHS.get_function('k_recursive')(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, y, z, out, np.int32(T), np.int32(S), np.int32(mode), np.int32(window), np.float64(k)))
         return out
 
     def trade_when(self, entry, alpha, exit_):
@@ -289,17 +274,11 @@ class Ops:
         return out
 
     def ts_median(self, x, w):
-        """Window sort in bounded chunks of days; a window with a NaN is NaN."""
+        """Integer selection with one bounded scratch window per lane."""
         T, S = x.shape
-        out = cp.full_like(x, cp.nan)
-        if T < w:
-            return out
-        view = cp.lib.stride_tricks.sliding_window_view(x, w, axis=0)
-        for lo in range(0, T - w + 1, 128):
-            v = view[lo:lo + 128]
-            s = cp.sort(v, axis=2)
-            mid = s[:, :, w // 2] if w % 2 else (s[:, :, w // 2] + s[:, :, w // 2 - 1]) * 0.5
-            out[lo + w - 1:lo + w - 1 + len(v)] = cp.where(cp.isnan(v).any(2), cp.nan, mid)
+        out = cp.empty_like(x)
+        capacity=next(size for size in self._median if size>=w)
+        self._median[capacity](((T*S+127)//128,),(128,),(x,out,np.int32(T),np.int32(S),np.int32(w)))
         return out
 
     def close(self):

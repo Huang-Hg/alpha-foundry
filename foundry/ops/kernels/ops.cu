@@ -21,7 +21,7 @@ template<typename T> __device__ __forceinline__ T* shmem() {
  * ========================================================================== */
 template<typename T>
 __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
-                            int Tt, int S, int w, int op, const T* __restrict__ Kcol, int kmode) {
+                            int Tt, int S, int w, int op) {
     T* sh = shmem<T>();
     int SS = blockDim.x, TT = blockDim.y;
     int strip_s0 = blockIdx.x * SS, tile_t0 = blockIdx.y * TT;
@@ -40,25 +40,26 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
     if (s >= S || t >= Tt) return;
     long long o = (long long)t * S + s;
 
-    T K = (kmode == 1) ? Kcol[s] : sh[ty * SS + sx];
-    T s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+    if(w==2 && (op==3 || op==4)) {
+        out[o]=two_point_moment(sh[ty*SS+sx],sh[(ty+1)*SS+sx],op);
+        return;
+    }
+
+    T K = sh[ty * SS + sx];
+    T s1 = 0;
     int bad = 0;
     for (int k = 0; k < w; k++) {
         T v = sh[(ty + k) * SS + sx];
         if (isnan(v)) { bad = 1; break; }
-        T d = v - K;
-        s1 += d;
-        if (op >= 2 && op != 5) { T d2 = d * d; s2 += d2;
-            if (op >= 3) { s3 += d2 * d;
-                if (op >= 4) s4 += d2 * d2; } }
+        s1 += (op == 3 || op == 4) ? v : v - K;
     }
     if (bad) { out[o] = (T)nan(""); return; }
 
     T wd = (T)w, res;
-    if (op == 0)      res = s1 + wd * K;                          /* sum  */
-    else if (op == 1) res = (s1 + wd * K) / wd;                   /* mean */
+    if (op == 0)      res = fma(wd,K,s1);                        /* sum  */
+    else if (op == 1) res = fma(wd,K,s1) / wd;                   /* mean */
     else if (op == 5) {                                           /* mad = mean(|x-mean|) */
-        T mean = (s1 + wd * K) / wd, mad = 0;
+        T mean = K + s1 / wd, mad = 0;
         for (int k = 0; k < w; k++) mad += fabs(sh[(ty + k) * SS + sx] - mean);
         res = mad / wd;
     } else {                                                      /* skew/kurt: two-pass central moments per window */
@@ -66,13 +67,12 @@ __device__ void moment_core(const T* __restrict__ x, T* __restrict__ out,
          * Same algorithm and oldest->newest order as CPU fm_ts_skew/kurt -> bitwise match (replaces incremental power
          * sums, which diverged from GPU on real f64 panels on ~40% of kurt cells; two-pass keeps near-constant windows
          * identical too). */
-        T mean = 0;
-        for (int k = 0; k < w; k++) mean += sh[(ty + k) * SS + sx];
-        mean /= wd;
+        T mean = s1 / wd;
         T m2 = 0, m3 = 0, m4 = 0;
         for (int k = 0; k < w; k++) {
             T d = sh[(ty + k) * SS + sx] - mean, d2 = d * d;
-            m2 += d2; m3 += d2 * d; m4 += d2 * d2;
+            m2 += d2;
+            if (op == 3) m3 += d2 * d; else m4 += d2 * d2;
         }
         m2 /= wd; m3 /= wd; m4 /= wd;
         if (m2 <= (T)0) { out[o] = (T)nan(""); return; }            /* constant window -> NaN */
@@ -206,33 +206,42 @@ __device__ void cs_core(const T* __restrict__ x, T* __restrict__ out, int S, int
 }
 
 
-/* cs_rank: per-row cross-sectional average rank in [0, 1]; full row NaN if n < 2. One block per row in shared, O(n^2) count. */
+// IEEE order as integer keys: preserve every input bit, merge signed zero, and
+// reserve the largest key for NaN. Counting ranks needs no floating arithmetic.
+__device__ __forceinline__ unsigned long long rank_key(double value) {
+    if (isnan(value)) return ~0ULL;
+    unsigned long long bits = (unsigned long long)__double_as_longlong(value);
+    if ((bits << 1) == 0) bits = 0;
+    return (bits >> 63) ? ~bits : bits ^ (1ULL << 63);
+}
+
+/* cs_rank: per-row cross-sectional average rank in [0, 1]; full row NaN if n < 2. */
 template<typename T>
 __device__ void cs_rank_core(const T* __restrict__ x, T* __restrict__ out, int S) {
-    T* r = shmem<T>();
+    unsigned long long* r = shmem<unsigned long long>();
     int t = blockIdx.x; const T* row = x + (long long)t * S; T* orow = out + (long long)t * S;
     int tid = threadIdx.x, B = blockDim.x;
-    for (int s = tid; s < S; s += B) r[s] = row[s];
+    for (int s = tid; s < S; s += B) r[s] = rank_key(row[s]);
     __shared__ int nval; if (tid == 0) nval = 0;
     __syncthreads();
-    int ln = 0; for (int s = tid; s < S; s += B) if (!isnan(r[s])) ln++;
+    int ln = 0; for (int s = tid; s < S; s += B) if (r[s] != ~0ULL) ln++;
     atomicAdd(&nval, ln); __syncthreads();
     int n = nval;
     if (n < 2) { for (int s = tid; s < S; s += B) orow[s] = (T)nan(""); return; }
     for (int s = tid; s < S; s += B) {
-        T v = r[s];
-        if (isnan(v)) { orow[s] = (T)nan(""); continue; }
+        unsigned long long v = r[s];
+        if (v == ~0ULL) { orow[s] = (T)nan(""); continue; }
         int cl = 0, ce = 0;
-        for (int j = 0; j < S; j++) { T u = r[j]; if (isnan(u)) continue;
+        for (int j = 0; j < S; j++) { unsigned long long u = r[j]; if (u == ~0ULL) continue;
             if (u < v) cl++; else if (u == v) ce++; }
         orow[s] = ((T)cl + (T)0.5 * (T)(ce - 1)) / (T)(n - 1);
     }
 }
 
 
-/* Formula values are always double: comparisons, ranks and state machines amplify rounding (the mixed-precision
- * path is confined to the backtest kernel). */
-extern "C" __global__ void k_moment(const double* x, double* o, int T, int S, int w, int op, const double* K, int km) { moment_core<double>(x, o, T, S, w, op, K, km); }
+/* Wide interchange preserves downstream predicates; selection uses integer
+ * keys. Arithmetic is fixed before evaluation, never retried at another precision. */
+extern "C" __global__ void k_moment(const double* x, double* o, int T, int S, int w, int op) { moment_core<double>(x, o, T, S, w, op); }
 extern "C" __global__ void k_ext(const double* x, double* o, int T, int S, int w, int op) { ext_core<double>(x, o, T, S, w, op); }
 extern "C" __global__ void k_ema(const double* x, double* o, int T, int S, int span) { ema_core<double>(x, o, T, S, span); }
 extern "C" __global__ void k_cs(const double* x, double* o, int S, int op) { cs_core<double>(x, o, S, op); }

@@ -67,13 +67,19 @@ The A-share artifact retains full quotes for 365 historical constituents and app
 
 Execution specifications contain open eligibility, costs, directional freezes and carrying costs. Kernels do not infer market rules from stock codes. CPU/CUDA retain the same full asset universe and shared metric semantics.
 
-The precision acceptance budget is **query + ordered commit ≤ 2× the single-FP32 comparison**, on the same device, input candidates, order and market rules. Data loading, registration and JIT are reported separately and cannot dilute this ratio. A kernel-only speedup does not establish compliance. Native arithmetic is an explicit measured exception, not a second execution of a low-precision result.
+The precision acceptance budget is **query + ordered commit ≤ 1.5× the single-FP32 comparison**, on the same device, input candidates, order and market rules. Data loading, registration and JIT are reported separately and cannot dilute this ratio. A kernel-only speedup does not establish compliance. Native arithmetic is an explicit measured exception, not a second execution of a low-precision result. Qualification applies to the measured workload; the earlier 2× results below do not establish this tighter budget.
 
 The numerical policy is fixed for the study and shared by query, weight trials and commit. `mixed` and `paired` select cash-account arithmetic; perpetual accounts and CPU use the explicit `native` policy. The API exposes the effective choice and no longer accepts a per-query precision override. Reports do not contain refinement counters. Wide arrays at interchange boundaries do not imply that all arithmetic is wide, nor that the whole pipeline is FP32.
 
 CUDA reductions, weighted moments and log growth use two FP32 components. Integer exponents preserve the wealth range. Leading-term/correction normalization uses Quick-Two-Sum; arbitrary leading terms still use Two-Sum, and FMA retains product residuals. The error-transform basis is [Hida, Li and Bailey](https://www.davidhbailey.com/dhbpapers/arith15.pdf). Centered weighted variance avoids spurious variance for constant returns; zero variance has Sharpe zero on both backends. Feasible utility ties use the configured metric tolerance, then CAGR and the smallest tied weight. These are shared semantics, not backend-specific admission thresholds. Accuracy checks cover returns, cashflows, liquidation events, chosen weights and both sides of decision thresholds. Historical bitwise baselines are not silently rerecorded when the protocol or numerical semantics change.
 
 The operator contract also makes finite constant-window covariance exactly zero and its correlation undefined. Tiny tanh values use the correctly rounded identity on CPU, CUDA and portable backends. A candidate relying on cancellation noise from a constant covariance now has no valid signal; this is an intentional bug fix, not a widened acceptance tolerance.
+
+Two-observation windows use their closed forms: nonconstant Pearson correlation is exactly ±1, skew is zero, excess kurtosis is −2, and an identifiable two-point regression has zero residual and reproduces its last observation. Constant inputs and missing values retain their defined invalidity. This removes cancellation artifacts across all three backends. CUDA `ts_av_diff` now includes available nonmissing observations during warmup, and `ts_scale` and regression use the CPU's exact zero-denominator rule. These are explicit numerical corrections; historical artifacts are not rerecorded.
+
+MAD uses a directly centered window mean, WMA sums the current window oldest first, and cross-sectional reductions share one logical 256-lane tree across all three backends. Departed observations cannot leave a spurious MAD/WMA position, and identical cross-sectional inputs use the same rounding order. The fixed reduction order is a numerical contract, independent of host thread count.
+
+The [66-operator audit and 4,096-formula workflow](benchmarks/operator66.md) includes individual timing/error results, precision trials and the scope of the current 1.5× qualification.
 
 ## Development and validation
 
@@ -103,7 +109,7 @@ PYTHONPATH=tests python -m unittest test_cuda_backtest test_cuda_statistics test
 
 Performance reports distinguish loading, transfer/JIT, resident batches and complete use cases, and state GPU, full universe, precision and observed error.
 
-### Numerical validation: PRO 6000
+### Historical PRO 6000 validation under the former 2× budget
 
 The fixed-policy implementation passed 182 tests on Colab RTX PRO 6000 Blackwell Server Edition (97,887 MiB, driver 580.82.07; Python 3.13.16, NumPy 2.4.6, CuPy 14.0.1). Builds, smoke, CPU references, GPU tests and endpoint timing all ran there. The legacy private `production/regression.npz` lacks the current protocol/study identity: `test_production` was excluded and that artifact was not rewritten. This is not a claim of bitwise reproduction of the legacy portfolio.
 

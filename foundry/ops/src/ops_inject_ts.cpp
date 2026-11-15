@@ -7,6 +7,7 @@
  */
 
 #include "ops.hpp"
+#include "../two_point.hpp"
 
 #define _USE_MATH_DEFINES        /* Needed for M_PI on MSVC/ucrt (must precede math.h) */
 #include <math.h>                /* Matches ops_xs.cpp: unqualified isnan / M_PI */
@@ -319,6 +320,11 @@ void fm_ts_quantile(const double* x, double* out, int64_t T, int64_t S, int64_t 
 void fm_ts_regression(const double* y, const double* x, double* out, int64_t T, int64_t S,
                       int64_t w, double rettype, int64_t ldy, int64_t ldx, int64_t ldo) {
     int rt = (int)llround(rettype);
+    if(w==2) {
+        for(int64_t t=0;t<T;++t)for(int64_t s=0;s<S;++s)
+            out[t*ldo+s]=t==0?NAN:two_point_regression(y[(t-1)*ldy+s],y[t*ldy+s],x[(t-1)*ldx+s],x[t*ldx+s],rt);
+        return;
+    }
     #pragma omp parallel for schedule(static)
     for (int64_t s = 0; s < S; s++) {
         for (int64_t t = 0; t < T; t++) {

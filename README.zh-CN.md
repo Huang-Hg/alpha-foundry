@@ -76,4 +76,6 @@ AI agent 可通过 `python -m foundry schema schema.json` 导出机器协议，�
 
 Python 负责研究与接入，C++/CUDA 负责数值核。模块化单体将市场语义与传输、存储、设备选择分开。测试保护 PIT、交易规则、精度与决策一致性，以及组合提交的原子性；性能报告区分准备开销、驻留计算和完整用例。
 
+实测速度与精度见 [Colab PRO 6000：66 算子及 4096 条公式基准](guides/benchmarks/operator66.md)。
+
 Foundry 提供研究工具。回测通过或候选获准接纳，不代表已经证明样本外盈利。
