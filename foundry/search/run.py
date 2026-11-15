@@ -10,7 +10,7 @@ from foundry.adapters.files import publish
 from foundry.adapters.library import FileLibraryStore, MemoryLibraryStore, member_from_json
 from foundry.adapters.arrays import FileArrayStore
 from foundry.adapters.serialization import json_value
-from foundry.parameters import ROOT, Settings, path
+from foundry.config import ROOT, Settings, path
 from foundry.portfolio.library import PROTOCOL, Library
 from foundry.research import Research
 from foundry.runtime import configured_study, open_runtime

@@ -28,7 +28,7 @@ def _combine(parts) -> int:
 @dataclass(frozen=True, eq=False)
 class Node:
     kind: str
-    op: object
+    op: str | float
     window: Optional[int]
     children: Tuple['Node', ...]
     hash: int

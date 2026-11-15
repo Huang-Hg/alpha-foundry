@@ -7,7 +7,7 @@ execution kernel, statistics, admission and search are shared by every market.
 from __future__ import annotations
 
 from foundry.core.panel import Field
-from foundry.contracts import Backend, LoadedStudy, MarketData, Study
+from foundry.types import Backend, LoadedStudy, MarketData, Study
 
 
 class Market:

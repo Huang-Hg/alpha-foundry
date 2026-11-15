@@ -20,6 +20,7 @@ from typing import Optional
 import numpy as np
 
 EPS = 1e-7                                    # minimum positive executable price
+BACKTEST_SEMANTIC_VERSION = 'paired-cash-hourly-isolated-warp-v1'
 
 
 def ffill(x: np.ndarray) -> np.ndarray:

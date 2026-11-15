@@ -2,10 +2,10 @@
 from collections.abc import Mapping, Sequence
 import hashlib
 
-from foundry.candidates import ArrayBatch, Formula
-from foundry.research_types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
+from foundry.types import ArrayBatch, Formula
+from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
                                    FamilySeed, RegisteredBatch, WeightReport)
-from foundry.session_types import SessionBackend
+from foundry.types import SessionBackend
 
 
 FormulaInput = str | Sequence[str] | Mapping[str, str]
@@ -72,10 +72,10 @@ class Session:
         return result
 
     def register(self, values, *, kind, ids, grid: DataGrid, producer,
-                 observed_through, fit_through) -> RegisteredBatch:
+                 observed_through, fit_through, complexity=None) -> RegisteredBatch:
         """Register model outputs; coordinates and information cutoffs remain explicit."""
         batch = ArrayBatch(kind, tuple(ids), values, grid.snapshot, producer, grid.dates, grid.assets,
-                           observed_through, fit_through)
+                           observed_through, fit_through, None if complexity is None else tuple(complexity))
         return self._backend.register(batch, self._context.id)
 
     def explore(self, formulas: FormulaInput, *, hypothesis: str):

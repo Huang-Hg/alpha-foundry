@@ -1,9 +1,9 @@
 """JSON-RPC contract. Validation occurs only at the external request boundary."""
 from jsonschema import validate
-from foundry.parameters import Parameters, configure
+from foundry.config import Parameters, configure
 from foundry.portfolio.library import PROTOCOL
-from foundry.portfolio.family import FamilyResult
-from foundry.research_types import (Candidate, CommitReport, EvaluationReport, FamilySeed, PortfolioReport,
+from foundry.types import FamilyResult
+from foundry.types import (Candidate, CommitReport, EvaluationReport, FamilySeed, PortfolioReport,
                                    RegisteredBatch, WeightCommit, WeightReport)
 from foundry.adapters.serialization import parameter_values, schema_for
 
@@ -57,11 +57,19 @@ def result(request,value):
 
 def describe():
     defaults = {}
+    variants = []
+    parameters = schema_for(Parameters)
     for market in ('us_equity', 'a_share', 'crypto_spot', 'crypto_perpetual'):
         settings = configure(market=market)
         defaults[market] = parameter_values(settings)
+        allowed = set(defaults[market])
+        variant = dict(parameters, properties={name: value for name, value in parameters['properties'].items()
+                                              if name in allowed})
+        variant['properties']['market'] = dict(const=market)
+        variant['required'] = [] if market == 'us_equity' else ['market']
+        variants.append(variant)
     return dict(protocol=PROTOCOL,request=REQUEST,methods=METHODS,
-                parameters=schema_for(Parameters), defaults=defaults,
+                parameters=dict(oneOf=variants), defaults=defaults,
                 responses={'research.evaluate':schema_for(EvaluationReport),
                            'research.commit':schema_for(CommitReport),
                            'research.register_batch':schema_for(RegisteredBatch),

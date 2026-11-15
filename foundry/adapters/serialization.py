@@ -3,11 +3,11 @@ from dataclasses import MISSING, asdict, fields, is_dataclass
 import math
 import types
 from typing import Literal, get_args, get_origin, get_type_hints, is_typeddict
-from foundry.candidates import ArraySource, EqualWeight, Formula, Source
+from foundry.types import ArraySource, EqualWeight, Formula, Source
 from foundry.ops.registry import OPS, ARITY, COST, MIN_WINDOW, MAX_WINDOW
-from foundry.parameters import PARAMETER_GROUPS
+from foundry.config import PARAMETER_GROUPS
 from foundry.portfolio.library import PROTOCOL
-from foundry.research_types import (Candidate, CandidateReport, CommitReport, CommitResult,
+from foundry.types import (Candidate, CandidateReport, CommitReport, CommitResult,
                                    EvaluationReport, Metrics, RiskSummary)
 
 
@@ -124,7 +124,7 @@ def schema_for(kind):
 def parameter_values(settings):
     """Expose the resolved public parameter names, rather than internal assembly fields."""
     return dict(market=settings.market.name, backend=settings.execution.backend,
-                **asdict(getattr(settings, settings.market.name)),
+                **{key: value for key, value in asdict(settings.market).items() if key != 'name'},
                 **{name: asdict(getattr(settings, field)) for name, (field, _) in PARAMETER_GROUPS.items()})
 
 

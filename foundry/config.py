@@ -15,17 +15,13 @@ def path(value: str) -> Path:
 
 
 @dataclass(frozen=True)
-class MarketConfig:
-    name: str = 'us_equity'
-
-
-@dataclass(frozen=True)
 class ExecutionConfig:
     backend: str = 'cuda'
 
 
 @dataclass(frozen=True)
 class UsEquityConfig:
+    name: Literal['us_equity'] = field(default='us_equity', init=False)
     data_dir: str = './data/us_equity_daily'
     start: str = '2025-07-01'
     end: str = '2026-06-30'
@@ -35,6 +31,7 @@ class UsEquityConfig:
 
 @dataclass(frozen=True)
 class AShareConfig:
+    name: Literal['a_share'] = field(default='a_share', init=False)
     data_dir: str = './data/a_share_pit'
     start: str = '2024-03-01'
     end: str = '2026-06-30'
@@ -45,6 +42,7 @@ class AShareConfig:
 
 @dataclass(frozen=True)
 class CryptoSpotConfig:
+    name: Literal['crypto_spot'] = field(default='crypto_spot', init=False)
     data_dir: str = './data/crypto_spot_daily'
     start: str = '2024-01-01'
     end: str = '2025-12-31'
@@ -53,6 +51,7 @@ class CryptoSpotConfig:
 
 @dataclass(frozen=True)
 class CryptoPerpetualConfig:
+    name: Literal['crypto_perpetual'] = field(default='crypto_perpetual', init=False)
     data_dir: str = './data/crypto_perpetual'
     history_start: str = '2025-01-01'
     start: str = '2025-07-01'
@@ -107,20 +106,20 @@ class PortfolioConfig:
     max_members: int = 40
     sharpe_scale: float = 0.1
     growth_scale: float = 0.02
-    violation_scale_wsharpe: float = 0.081
-    violation_scale_sharpe: float = 0.063
-    violation_scale_cagr: float = 0.079
-    violation_scale_growth: float = 0.024
+
 
     def __post_init__(self):
         if not all(math.isfinite(x) and x > 0 for x in (
-                self.metric_atol, self.weight_sum_atol, self.sharpe_scale, self.growth_scale, self.violation_scale_wsharpe, self.violation_scale_sharpe,
-                self.violation_scale_cagr, self.violation_scale_growth)):
-            raise ValueError('Admission parameters utility and violation scales must be positive and finite')
+                self.metric_atol, self.weight_sum_atol, self.sharpe_scale, self.growth_scale)):
+            raise ValueError('Admission parameters utility scales must be positive and finite')
 
 
 @dataclass(frozen=True)
 class SearchConfig:
+    violation_scale_wsharpe: float = 0.081
+    violation_scale_sharpe: float = 0.063
+    violation_scale_cagr: float = 0.079
+    violation_scale_growth: float = 0.024
     mode: str = 'gfn'
     seed_portfolio: str = 'equal'
     objective: str = 'portfolio'
@@ -142,6 +141,10 @@ class SearchConfig:
     reweight_every: int = 5
 
     def __post_init__(self):
+        if not all(math.isfinite(x) and x > 0 for x in (
+                self.violation_scale_wsharpe, self.violation_scale_sharpe,
+                self.violation_scale_cagr, self.violation_scale_growth)):
+            raise ValueError('Search violation scales must be positive and finite')
         if not (self.mode in ('gfn','random') and self.seed_portfolio in ('current','equal')
                 and self.objective in ('portfolio','single')
                 and 1 <= self.batch_size <= 8192 and 0 <= self.probes <= self.batch_size
@@ -185,14 +188,13 @@ class MonitorConfig:
     push_seconds: float = 2.0
 
 
+MarketConfig = UsEquityConfig | AShareConfig | CryptoSpotConfig | CryptoPerpetualConfig
+
+
 @dataclass(frozen=True)
 class Settings:
-    market: MarketConfig = field(default_factory=MarketConfig)
+    market: MarketConfig = field(default_factory=UsEquityConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
-    a_share: AShareConfig = field(default_factory=AShareConfig)
-    us_equity: UsEquityConfig = field(default_factory=UsEquityConfig)
-    crypto_spot: CryptoSpotConfig = field(default_factory=CryptoSpotConfig)
-    crypto_perpetual: CryptoPerpetualConfig = field(default_factory=CryptoPerpetualConfig)
     expr: ExprConfig = field(default_factory=ExprConfig)
     cuda: CudaConfig = field(default_factory=CudaConfig)
     portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
@@ -234,14 +236,22 @@ PARAMETER_GROUPS = dict(cuda=('cuda', CudaConfig), admission=('portfolio', Portf
 def configure(**parameters: Unpack[Parameters]) -> Settings:
     """Resolve one explicit parameter set against the selected market's defaults."""
     settings = Settings()
-    market = MarketConfig(parameters.pop('market', settings.market.name))
-    execution = ExecutionConfig(parameters.pop('backend', settings.execution.backend))
-    selected = {'us_equity': settings.us_equity, 'a_share': settings.a_share,
-                'crypto_spot': settings.crypto_spot, 'crypto_perpetual': settings.crypto_perpetual}[market.name]
+    name = parameters.pop('market', settings.market.name)
+    factories = {'us_equity': UsEquityConfig, 'a_share': AShareConfig,
+                 'crypto_spot': CryptoSpotConfig, 'crypto_perpetual': CryptoPerpetualConfig}
+    if name not in factories:
+        raise ValueError(f'Unknown market: {name}')
+    backend = parameters.pop('backend', settings.execution.backend)
+    if backend not in ('cpu', 'cuda', 'portable'):
+        raise ValueError(f'Unknown execution backend: {backend}')
     groups = {field_name: parameters.pop(public_name, getattr(settings, field_name))
               for public_name, (field_name, _) in PARAMETER_GROUPS.items()}
-    return replace(settings, market=market, execution=execution,
-                   **groups, **{market.name: replace(selected, **parameters)})
+    for public_name, (field_name, kind) in PARAMETER_GROUPS.items():
+        if not isinstance(groups[field_name], kind):
+            raise TypeError(f'{public_name} requires {kind.__name__}')
+    selected = factories[name](**parameters)
+    return replace(settings, market=selected, execution=ExecutionConfig(backend), **groups)
+
 
 
 def parameters_from_json(record: dict) -> dict:

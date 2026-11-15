@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from foundry.adapters.files import publish
-from foundry.contracts import DataContract, MarketData
+from foundry.types import DataContract, MarketData
 from foundry.perpetual_types import PerpetualData
 
 

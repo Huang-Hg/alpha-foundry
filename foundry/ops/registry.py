@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict
 
+OPS_SEMANTIC_VERSION = 'operators-66-paired-two-point-v1'
+
 # Written arguments of each kind (panels, windows and scalars alike).
 ARITY = {'unary': 1, 'binary': 2, 'binary_const': 2, 'ternary': 3, 'ts': 2, 'ts_param': 3, 'pair': 3, 'pair_param': 4}
 # Tree cost per node kind (leaves included); a formula's cost is the sum over its nodes.

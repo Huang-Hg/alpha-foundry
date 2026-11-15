@@ -33,8 +33,8 @@ def saturation(rows, scales):
     return totals, sum(t >= 4 for t in totals) / len(totals)
 
 
-def report(run_dir: Path, cfg):
-    gain = (cfg.min_sharpe_gain, 0., 0., 0.)
+def report(run_dir: Path, admission, cfg):
+    gain = (admission.min_sharpe_gain, 0., 0., 0.)
     seen, rows, cash = set(), [], 0
     with (run_dir / 'epochs.jsonl').open(encoding='utf-8') as f:
         for line in f:
@@ -66,7 +66,7 @@ def report(run_dir: Path, cfg):
         totals, capped = saturation(rows, scales)
         print(f'{label:16s} ' + ' '.join(f'{s:8.4f}' for s in scales) + f' {capped:8.1%}   '
               + ' / '.join(f'{quantile(totals, q):.2f}' for q in (.01, .1, .5, .9)))
-    print('\nfoundry.Admission(')
+    print('\nfoundry.Search(')
     for name, value in zip(NAMES, rules[chosen]):
         print(f'    {name}={value:.2g},')
     print(')')

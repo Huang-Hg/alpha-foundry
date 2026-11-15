@@ -6,8 +6,8 @@ import numpy as np
 
 from foundry.adapters.data import load_data
 from foundry.adapters.provenance import study_snapshot
-from foundry.parameters import Settings, path
-from foundry.contracts import Backend, LoadedStudy, PrecisionPlan, Study
+from foundry.config import Settings, path
+from foundry.types import Backend, LoadedStudy, PrecisionPlan, Study
 from foundry.engine import Engine
 from foundry.market.a_share import AShare
 from foundry.market.crypto_spot import CryptoSpot
@@ -49,20 +49,19 @@ def prepare_backend(name: str) -> Backend:
 
 
 def configured_study(settings: Settings) -> Study:
-    cfg = {'a_share': settings.a_share, 'us_equity': settings.us_equity,
-           'crypto_spot': settings.crypto_spot, 'crypto_perpetual': settings.crypto_perpetual}[settings.market.name]
+    cfg = settings.market
     return Study(settings.market.name, cfg.start, cfg.end)
 
 
 def load_study(settings: Settings, study: Study, backend: Backend) -> LoadedStudy:
     """Read one artifact snapshot, then compile its market rules without IO."""
-    markets = {'a_share': lambda: AShare(settings.a_share.commission, settings.a_share.transfer_fee,
-                                         settings.a_share.stamp_tax_sell),
-               'us_equity': lambda: UsEquity(settings.us_equity.cost_rate, settings.us_equity.daily_borrow),
-               'crypto_spot': lambda: CryptoSpot(settings.crypto_spot.cost_rate),
-               'crypto_perpetual': lambda: CryptoPerpetual(settings.crypto_perpetual.leverage,
-                    settings.crypto_perpetual.cost_rate, settings.crypto_perpetual.maintenance_rate,
-                    settings.crypto_perpetual.liquidation_fee)}
+    markets = {'a_share': lambda: AShare(settings.market.commission, settings.market.transfer_fee,
+                                         settings.market.stamp_tax_sell),
+               'us_equity': lambda: UsEquity(settings.market.cost_rate, settings.market.daily_borrow),
+               'crypto_spot': lambda: CryptoSpot(settings.market.cost_rate),
+               'crypto_perpetual': lambda: CryptoPerpetual(settings.market.leverage,
+                    settings.market.cost_rate, settings.market.maintenance_rate,
+                    settings.market.liquidation_fee)}
     market = markets[study.market]()
     return market.compile(load_data(settings, study), backend, study)
 

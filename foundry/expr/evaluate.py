@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, Mapping
 
 from foundry.expr.ast import Node
-from foundry.contracts import Backend
+from foundry.types import Backend
 
 
 def evaluate(n: Node, fields: Mapping, backend: Backend, cache: Dict[int, object], universe):

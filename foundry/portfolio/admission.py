@@ -16,7 +16,7 @@ Admission never schedules a second simulation in a different precision.
 """
 from __future__ import annotations
 
-from foundry.research_types import ConstraintCheck, Proposal, Verdict, WeightMetrics
+from foundry.types import ConstraintCheck, Proposal, Verdict, WeightMetrics
 
 
 from foundry.core import metrics as M
@@ -97,8 +97,8 @@ def proposals(engine, rows, ref):
         tie = feasible & (utility >= score.max(1)[:, None] - utility_atol)
         best = xp.argmax(tie & (cagr >= xp.where(tie, cagr, -xp.inf).max(1)[:, None] - cfg.metric_atol), axis=1)
         margins = delta - required
-        scales = xp.asarray([cfg.violation_scale_wsharpe, cfg.violation_scale_sharpe, cfg.violation_scale_cagr,
-                             cfg.violation_scale_growth])
+        scales = xp.asarray([ref.search.violation_scale_wsharpe, ref.search.violation_scale_sharpe, ref.search.violation_scale_cagr,
+                             ref.search.violation_scale_growth])
         violation = xp.maximum(-margins / scales, 0).sum(2) + xp.where(capacity, 0., 1.)
         minimum = xp.where(valid, violation, xp.inf).min(1)
         # Project the same metric tolerance into the normalized violation units.

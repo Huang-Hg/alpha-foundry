@@ -25,7 +25,7 @@ from typing import Dict, List
 
 import paramiko
 
-from foundry.parameters import ROOT
+from foundry.config import ROOT
 from foundry.adapters.files import publish
 from foundry.service.protocol import PORTFILE
 

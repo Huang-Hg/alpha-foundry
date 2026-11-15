@@ -1,13 +1,13 @@
 """Shared read-only evaluation and atomic portfolio commands."""
 import hashlib
 from dataclasses import replace
-from foundry.candidates import ArraySource
+from foundry.types import ArraySource
 
 from foundry.portfolio import admission, family
 from foundry.portfolio.library import Library, Member, SEED
 from foundry.portfolio.portfolio import Portfolio
 from foundry.portfolio.allocation import cap_book
-from foundry.research_types import (Candidate, CandidateResult, CommitResult, ContextConflict, DeviceBatch,
+from foundry.types import (Candidate, CandidateResult, CommitResult, ContextConflict, DeviceBatch,
                                     EvaluationResult, PortfolioReport, ResearchContext, WeightCommit,
                                     WeightReport, WeightTrials)
 

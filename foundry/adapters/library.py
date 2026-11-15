@@ -6,7 +6,7 @@ from pathlib import Path
 from foundry.adapters.files import publish
 from foundry.adapters.serialization import source_from_json
 from foundry.portfolio.library import Library, Member, PROTOCOL
-from foundry.research_types import ContextConflict
+from foundry.types import ContextConflict
 
 
 def member_from_json(record):

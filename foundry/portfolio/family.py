@@ -26,9 +26,8 @@ import random
 import statistics
 
 from foundry.expr.parse import TOKEN, validate
-from dataclasses import dataclass
-from foundry.candidates import Formula
-from foundry.research_types import ResearchContext
+from foundry.types import Formula
+from foundry.types import FamilyPoint, Spread, PlateauPoint, FieldSummary, SkippedFamily, FamilySummary, FamilyResult
 from foundry.ops.registry import OPS, WINDOW_LADDER
 
 GRID_CAP = 2187                                      # 3^7 grid points per seed; sampled beyond
@@ -104,71 +103,6 @@ def neighbourhood(expr, categories):
     return grid, origin, fields
 
 
-@dataclass(frozen=True)
-class FamilyPoint:
-    expr: str
-    passed: bool
-    sharpe: float | None
-    maxdd: float | None
-    attend: float | None
-    gain: float | None
-    d_cagr: float | None
-    d_maxdd: float | None
-
-
-@dataclass(frozen=True)
-class Spread:
-    n: int
-    pass_rate: float
-    median: float | None
-    median_cagr: float | None
-    median_maxdd: float | None
-    p25: float | None
-    p75: float | None
-
-
-@dataclass(frozen=True)
-class PlateauPoint:
-    point: FamilyPoint
-    neighbourhood_median: float
-    neighbours: int
-
-
-@dataclass(frozen=True)
-class FieldSummary:
-    field: str
-    substitutes: int
-    passed: int
-    median_gain: float | None
-
-
-@dataclass(frozen=True)
-class SkippedFamily:
-    id: str
-    expression: str
-    hypothesis: str
-    error: str
-
-
-@dataclass(frozen=True)
-class FamilySummary:
-    id: str
-    hypothesis: str
-    seed: FamilyPoint
-    grid: Spread
-    twins: Spread
-    verdict: str
-    seed_rank: float | None
-    centre: PlateauPoint | None
-    fields: tuple[FieldSummary, ...]
-
-
-@dataclass(frozen=True)
-class FamilyResult:
-    context: ResearchContext
-    families: tuple[FamilySummary, ...]
-    variants: int
-    skipped: tuple[SkippedFamily, ...]
 
 
 def evaluate(research, exprs, delayed, context_id):

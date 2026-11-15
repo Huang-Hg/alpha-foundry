@@ -13,7 +13,7 @@ Start or attach the service explicitly. request never starts a local GPU process
 """
 from __future__ import annotations
 
-from foundry.parameters import configure, parameters_from_json, ROOT
+from foundry.config import configure, parameters_from_json, ROOT
 
 
 import argparse
@@ -95,7 +95,8 @@ def cmd_mine(a):
 
 def cmd_calibrate(a):
     from foundry.search import calibrate
-    calibrate.report(Path(a.run), configure(**a.parameters).portfolio)
+    settings = configure(**a.parameters)
+    calibrate.report(Path(a.run), settings.portfolio, settings.search)
 
 
 def cmd_monitor(a):

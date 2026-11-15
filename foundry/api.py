@@ -2,7 +2,7 @@
 from pathlib import Path
 from typing import Unpack
 
-from foundry.parameters import Parameters, configure
+from foundry.config import Parameters, configure
 
 
 def open(portfolio: str | Path | None = None, **parameters: Unpack[Parameters]):
@@ -51,7 +51,7 @@ def mine(output: str | Path, **parameters: Unpack[Parameters]):
 def import_perpetual(output: str | Path, **parameters: Unpack[Parameters]):
     """Create a verified perpetual dataset from explicit symbols and dates."""
     from foundry.adapters.perpetual_data import import_perpetual as acquire
-    return acquire(Path(output), configure(market='crypto_perpetual', **parameters).crypto_perpetual)
+    return acquire(Path(output), configure(market='crypto_perpetual', **parameters).market)
 
 
 def benchmark(output: str | Path, *, sizes=(1, 64, 4096), **parameters: Unpack[Parameters]):

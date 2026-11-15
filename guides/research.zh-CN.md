@@ -83,7 +83,7 @@ with foundry.open(
 
 `evaluate` 接收公式字符串、公式序列或 `{候选 ID: 公式}`。`report.rows` 的每行含 `metrics`、`risk`、`decision` 和 ID。`commit(report)` 按报告对应的组合版本重新判断准入；评价本身不修改组合。调用者不必构造存储器、快照或版本令牌。
 
-参数直接传入，没有 INI 或隐式配置文件。常用项为 `market`、`backend`、`data_dir`、`start`、`end`；费用与杠杆使用 `cost_rate`、`commission`、`stamp_tax_sell`、`leverage`、`maintenance_rate` 等对应市场参数。高级参数组为 `foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single`、`Monitor`，默认值只在 `foundry/parameters.py` 维护。`foundry.schema()` 返回参数 schema 与各市场默认值，`session.describe()["parameters"]` 返回实际参数。
+参数直接传入，没有 INI 或隐式配置文件。常用项为 `market`、`backend`、`data_dir`、`start`、`end`；费用与杠杆使用 `cost_rate`、`commission`、`stamp_tax_sell`、`leverage`、`maintenance_rate` 等对应市场参数。高级参数组为 `foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single`、`Monitor`，默认值只在 `foundry/config.py` 维护。`foundry.schema()` 返回参数 schema 与各市场默认值，`session.describe()["parameters"]` 返回实际参数。
 
 参数对象不可变，改变设置需打开新会话。`foundry.mine(output, **parameters)`、`foundry.serve(portfolio, **parameters)` 使用同一套参数。CLI 接受相同 schema 的 JSON，例如 `python -m foundry --parameters '{"market":"a_share","backend":"cuda"}' fields`，无需创建配置文件。
 
@@ -126,7 +126,7 @@ with foundry.open() as session:
 
 | 所有者 | 职责 |
 | --- | --- |
-| contracts、candidates、research_types | 研究区间、快照、后端能力、类型化来源/结果与存储端口 |
+| types、config | 研究区间、快照、后端能力、类型化来源/结果与存储端口 |
 | core、expr、market、portfolio | 面板与指标语义、公式、交易规则和准入 |
 | ops、backtest、engine | 基于明确数组和执行规格的 CPU/portable/CUDA 计算 |
 | research | 共用评价、邻域探索和显式版本化提交 |
@@ -147,7 +147,7 @@ Study 固定研究区间；快照进一步绑定数据、执行规格、数值�
 
 公开会话自动装配运行环境与存储。`evaluate` 返回结构化报告，进程内 `evaluate_device` 保留设备持仓和收益。查询不修改组合，`commit` 原子发布完整后继组合。注册复制输入，返回后生产者可复用缓冲区；重新打开组合时验证数组工件和截止点。
 
-`foundry.candidates.ArrayBatch` 包含 `kind`、`ids`、`values`、`snapshot`、`producer`、`dates`、`assets`、`observed_through`、`fit_through`。`values` 是 NumPy/CuPy 的 `float32` 或 `float64 (B,T,S)`，必须覆盖研究快照完整且有序的日期/资产网格。股票与现货的 `signals` 与公式一样经过 `clip(0,1)/当日可持有资产数`，NaN 表示缺失。`target_weights` 是有限、非负的组合比例；无资格资产权重必须为零，单日总敞口不得超过 1。仅对 `Admission.weight_sum_atol` 内的微小超额归一化到 1，更大超额明确拒绝。目标权重继续服从市场执行规则和次日开盘时序。
+`foundry.types.ArrayBatch` 包含 `kind`、`ids`、`values`、`snapshot`、`producer`、`dates`、`assets`、`observed_through`、`fit_through`。`values` 是 NumPy/CuPy 的 `float32` 或 `float64 (B,T,S)`，必须覆盖研究快照完整且有序的日期/资产网格。股票与现货的 `signals` 与公式一样经过 `clip(0,1)/当日可持有资产数`，NaN 表示缺失。`target_weights` 是有限、非负的组合比例；无资格资产权重必须为零，单日总敞口不得超过 1。仅对 `Admission.weight_sum_atol` 内的微小超额归一化到 1，更大超额明确拒绝。目标权重继续服从市场执行规则和次日开盘时序。
 
 两个截止点数组均为 `int64 (B,T)`，使用包含端点的面板行号，范围为 `-1` 到对应决策行；`-1` 表示未使用观测或拟合模型。引擎拒绝未来截止点、错误坐标和旧快照。时间信息来自生产者声明，不能证明外部训练或特征计算没有泄露未来；`producer` 应标识模型/程序版本。`research.describe` 发布完整坐标、快照及这些限制：batch 的 `snapshot` 使用 `context.snapshot.id`，查询/命令的版本令牌使用 `context.id`。
 

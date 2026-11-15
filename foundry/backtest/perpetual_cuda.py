@@ -8,7 +8,7 @@ from foundry.numeric.cuda_source import paired_source
 
 from foundry.backtest.perpetual import (ARRAY_FIELDS, PerpetualSpec,
                                       concatenate_results, simulation_result)
-from foundry.contracts import Allocation
+from foundry.types import Allocation
 from foundry.portfolio.allocation import cap_book
 
 

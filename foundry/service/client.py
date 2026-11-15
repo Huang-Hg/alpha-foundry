@@ -34,7 +34,7 @@ def call(method,params,timeout=900., *, endpoint=None, payload=b''):
                     endpoint=endpoint,payload=payload)
     if 'error' in response:
         if response['error']['code'] == -32009:
-            from foundry.research_types import ContextConflict
+            from foundry.types import ContextConflict
             raise ContextConflict(response['error']['message'])
         raise RuntimeError(response['error']['message'])
     return response['result']

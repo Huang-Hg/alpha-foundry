@@ -8,7 +8,7 @@ import cupy as cp
 import numpy as np
 from foundry.numeric.cuda_source import paired_source
 from foundry.backtest.spec import ExecutionSpec
-from foundry.contracts import SimulationResult
+from foundry.types import SimulationResult
 _KERNELS = Path(__file__).parent / 'kernels'
 MAX_ASSETS = 128
 _FINGERPRINT_SOURCE = r'''

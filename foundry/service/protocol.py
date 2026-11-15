@@ -1,7 +1,7 @@
 """Where the evaluation service lives and what its files are (local runtime state under var/service/)."""
 from __future__ import annotations
 
-from foundry.parameters import ROOT
+from foundry.config import ROOT
 
 HOST = '127.0.0.1'
 STATE = ROOT / 'var' / 'service'

@@ -1,6 +1,7 @@
 """The portfolio's additive book and its reference metrics."""
 from dataclasses import dataclass
-from foundry.contracts import ReturnMeasure
+from foundry.types import ReturnMeasure
+from foundry.config import SearchConfig
 from foundry.portfolio.library import SEED
 from foundry.portfolio.allocation import cap_book
 
@@ -23,6 +24,7 @@ class Reference:
     xp: object
     cfg: object
     measure: ReturnMeasure
+    search: SearchConfig
     version: str = ''
 
     @staticmethod
@@ -40,4 +42,4 @@ class Reference:
             ws, growth = engine.to_host(xp.stack((moments.weighted_sharpe, moments.recent_growth))).tolist()
             return Reference(U, st.book, st.returns, p, st.metrics, st.metrics.sharpe, st.metrics.cagr,
                              st.metrics.maxdd, ws, growth, len(books), seed,
-                             frozenset(m.source for m in members), xp, cfg, engine.backend.measure)
+                             frozenset(m.source for m in members), xp, cfg, engine.backend.measure, engine.settings.search)

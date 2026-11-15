@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from foundry.parameters import path
-from foundry.contracts import DataContract, MarketData
+from foundry.config import path
+from foundry.types import DataContract, MarketData
 from foundry.core.pit import membership
 from foundry.adapters.perpetual_data import load_perpetual
 
@@ -53,9 +53,8 @@ def crypto_grid(frame, asof):
 
 def load_data(settings, study):
     if study.market == 'crypto_perpetual':
-        return load_perpetual(path(settings.crypto_perpetual.data_dir), study)
-    cfg = {'a_share': settings.a_share, 'us_equity': settings.us_equity,
-           'crypto_spot': settings.crypto_spot}[study.market]
+        return load_perpetual(path(settings.market.data_dir), study)
+    cfg = settings.market
     directory = path(cfg.data_dir)
     frame = pd.read_parquet(directory / 'panel.parquet')
     if study.market == 'crypto_spot':

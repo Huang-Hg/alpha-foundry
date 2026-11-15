@@ -1,9 +1,9 @@
 """Search rewards and proposals; research owns evaluation, admission and commits."""
 from collections import OrderedDict
 from dataclasses import dataclass, replace
-from foundry.candidates import Formula
+from foundry.types import Formula
 
-from foundry.research_types import Candidate, ConstraintCheck
+from foundry.types import Candidate, ConstraintCheck
 from foundry.search.policy import CEM
 
 

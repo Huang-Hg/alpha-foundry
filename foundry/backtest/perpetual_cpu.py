@@ -6,7 +6,7 @@ import numpy as np
 from foundry.backtest import _bt
 from foundry.backtest.perpetual import (ARRAY_FIELDS, PerpetualSpec, book_fingerprints, host_statistics,
                                       concatenate_results, simulation_result)
-from foundry.contracts import Allocation
+from foundry.types import Allocation
 from foundry.portfolio.allocation import cap_book
 
 

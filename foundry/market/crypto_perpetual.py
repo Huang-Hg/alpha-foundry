@@ -7,7 +7,7 @@ exact tick ordering, order-book fills, ADL and account VIP fees are not asserted
 import numpy as np
 
 from foundry.backtest.perpetual import PerpetualSpec
-from foundry.contracts import Allocation, LoadedStudy, Window
+from foundry.types import Allocation, LoadedStudy, Window
 from foundry.core.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
 

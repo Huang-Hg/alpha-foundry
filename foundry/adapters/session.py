@@ -1,7 +1,7 @@
 """In-process binding of the public session to the shared research use cases."""
 from foundry.adapters.serialization import describe, evaluation_report
 from foundry.research import Research
-from foundry.research_types import DataGrid, RegisteredBatch
+from foundry.types import DataGrid, RegisteredBatch
 
 
 class LocalBackend:

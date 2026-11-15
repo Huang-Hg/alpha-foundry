@@ -14,7 +14,7 @@ from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from foundry.contracts import Backend
+from foundry.types import Array, Backend
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class Panel:
             self._values[name] = self.backend.xp.ascontiguousarray(f.compute(self.backend, *(self[d] for d in f.deps)))
         return self._values[name]
 
-    def values(self, names=None) -> Dict[str, object]:
+    def values(self, names=None) -> Dict[str, Array]:
         return {k: self[k] for k in (names or self.fields)}
 
     @property

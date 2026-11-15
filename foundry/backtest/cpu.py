@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from foundry.backtest import _bt
 from foundry.backtest.spec import ExecutionSpec
 from foundry.core import metrics
-from foundry.contracts import SimulationResult
+from foundry.types import SimulationResult
 
 
 @dataclass(frozen=True)

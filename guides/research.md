@@ -83,7 +83,7 @@ with foundry.open(
 
 `evaluate` accepts a formula string, sequence of formulas or `{candidate_id: formula}` mapping. Each `report.rows` entry contains `metrics`, `risk`, `decision` and an ID. `commit(report)` rechecks admission against the reviewed portfolio version; evaluation does not change the portfolio. Callers do not construct stores, snapshots or version tokens.
 
-Pass parameters directly; there is no INI or implicit configuration file. Common arguments are `market`, `backend`, `data_dir`, `start` and `end`. Market-specific fees and leverage use `cost_rate`, `commission`, `stamp_tax_sell`, `leverage`, `maintenance_rate` and related fields. Advanced groups are `foundry.CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`, with one set of defaults in `foundry/parameters.py`. `foundry.schema()` returns the parameter schema and market defaults; `session.describe()["parameters"]` reports resolved values.
+Pass parameters directly; there is no INI or implicit configuration file. Common arguments are `market`, `backend`, `data_dir`, `start` and `end`. Market-specific fees and leverage use `cost_rate`, `commission`, `stamp_tax_sell`, `leverage`, `maintenance_rate` and related fields. Advanced groups are `foundry.CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`, with one set of defaults in `foundry/config.py`. `foundry.schema()` returns the parameter schema and market defaults; `session.describe()["parameters"]` reports resolved values.
 
 Parameter objects are immutable; open another session to change settings. `foundry.mine(output, **parameters)` and `foundry.serve(portfolio, **parameters)` use the same parameters. The CLI accepts JSON with the same schema, for example `python -m foundry --parameters '{"market":"a_share","backend":"cuda"}' fields`, without creating a configuration file.
 
@@ -126,7 +126,7 @@ The modular monolith separates the responsibilities below. [Architecture checks]
 
 | Owner | Responsibility |
 | --- | --- |
-| contracts, candidates, research_types | Studies, snapshots, backend capabilities, typed sources/results and storage ports |
+| types, config | Studies, snapshots, backend capabilities, typed sources/results and storage ports |
 | core, expr, market, portfolio | Panel/metric semantics, formulas, trading rules and admission |
 | ops, backtest, engine | CPU/portable/CUDA computation over explicit arrays and execution specifications |
 | research | Shared evaluation, family exploration and explicit versioned commit use cases |
@@ -147,7 +147,7 @@ Old wire, portfolio and checkpoint protocols are rejected explicitly. There are 
 
 Public sessions assemble runtimes and stores. `evaluate` returns structured reports, while in-process `evaluate_device` retains device positions and returns. Queries do not change the portfolio; `commit` publishes an atomic successor. Registration takes an owned copy, and persisted array members are verified when a portfolio reopens.
 
-`ArrayBatch` in `foundry.candidates` carries `kind`, `ids`, `values`, `snapshot`, `producer`, `dates`, `assets`, `observed_through` and `fit_through`. Values are NumPy/CuPy `float32` or `float64` with shape `(B,T,S)` on the complete ordered study grid. For cash markets, `signals` use the same `clip(0,1)/eligible_count` conversion as formulas; NaN represents missing input. `target_weights` are finite nonnegative portfolio fractions, with zero weight on ineligible assets and total daily exposure at most 1. An excess within `Admission.weight_sum_atol` is normalized to 1; a larger excess is rejected. These weights still pass through market execution rules and next-open timing.
+`ArrayBatch` in `foundry.types` carries `kind`, `ids`, `values`, `snapshot`, `producer`, `dates`, `assets`, `observed_through` and `fit_through`. Values are NumPy/CuPy `float32` or `float64` with shape `(B,T,S)` on the complete ordered study grid. For cash markets, `signals` use the same `clip(0,1)/eligible_count` conversion as formulas; NaN represents missing input. `target_weights` are finite nonnegative portfolio fractions, with zero weight on ineligible assets and total daily exposure at most 1. An excess within `Admission.weight_sum_atol` is normalized to 1; a larger excess is rejected. These weights still pass through market execution rules and next-open timing.
 
 Both cutoff arrays are `int64 (B,T)` inclusive row indices, from `-1` through the decision row. `-1` means no observed input or no fitted model. The engine rejects forward cutoffs, wrong axes and a mismatched snapshot. These are producer declarations: they do not prove that external training or feature generation avoided leakage. `producer` must identify the model/program version. `research.describe` publishes the axes, snapshot and these limits; use `context.snapshot.id` in the batch and `context.id` for query/command concurrency.
 

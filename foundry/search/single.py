@@ -7,7 +7,7 @@ The calibration population is local to an archive and immutable study snapshot.
 from collections import OrderedDict
 from dataclasses import dataclass
 import math
-from foundry.candidates import Formula
+from foundry.types import Formula
 
 from foundry.core import metrics as M
 from foundry.search.evaluator import Evaluator, MiningResult

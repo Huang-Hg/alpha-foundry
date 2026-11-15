@@ -8,11 +8,11 @@ import re
 import numpy as np
 
 from foundry.adapters.files import publish
-from foundry.candidates import ArrayBatch, ArraySource
+from foundry.types import ArrayBatch, ArraySource
 
 
-FORMAT = 'candidate-array-v1'
-BUNDLE = 'candidate-batch-v1'
+FORMAT = 'candidate-array-v2'
+BUNDLE = 'candidate-batch-v2'
 ARRAY_KEYS = {'metadata', 'values', 'observed_through', 'fit_through'}
 
 
@@ -46,10 +46,12 @@ def _digest(metadata, arrays):
 def _records(batch):
     metadata = dict(format=FORMAT, kind=batch.kind, snapshot=batch.snapshot,
                     producer=batch.producer, dates=batch.dates, assets=batch.assets)
-    for values, observed, fitted in zip(batch.values, batch.observed_through, batch.fit_through):
+    complexities = (0.,) * len(batch.ids) if batch.complexity is None else batch.complexity
+    for values, observed, fitted, complexity in zip(batch.values, batch.observed_through, batch.fit_through, complexities):
+        metadata = dict(metadata, complexity=complexity)
         arrays = (np.ascontiguousarray(values), np.ascontiguousarray(observed, dtype=np.int64),
                   np.ascontiguousarray(fitted, dtype=np.int64))
-        source = ArraySource(batch.kind, _digest(metadata, arrays), batch.snapshot, batch.producer)
+        source = ArraySource(batch.kind, _digest(metadata, arrays), batch.snapshot, batch.producer, complexity)
         yield source, _encode(metadata, *arrays)
 
 
@@ -58,13 +60,14 @@ def _read(payload, source):
     if metadata['format'] != FORMAT:
         raise ValueError('array artifact protocol differs; register a current bundle')
     actual = ArraySource(metadata['kind'], _digest(metadata, (values, observed, fitted)),
-                         metadata['snapshot'], metadata['producer'])
+                         metadata['snapshot'], metadata['producer'], metadata['complexity'])
     if actual != source:
         raise ValueError('array artifact digest or provenance differs from its source')
     for array in (values, observed, fitted):
         array.setflags(write=False)
     return ArrayBatch(source.kind, (source.digest,), values[None], source.snapshot, source.producer,
-                      tuple(metadata['dates']), tuple(metadata['assets']), observed[None], fitted[None])
+                      tuple(metadata['dates']), tuple(metadata['assets']), observed[None], fitted[None],
+                      (metadata['complexity'],))
 
 
 class FileArrayStore:
@@ -114,7 +117,7 @@ def write_bundle(path: Path, batch: ArrayBatch):
 
 def encode_bundle(batch: ArrayBatch) -> bytes:
     metadata = dict(format=BUNDLE, kind=batch.kind, ids=batch.ids, snapshot=batch.snapshot,
-                    producer=batch.producer, dates=batch.dates, assets=batch.assets)
+                    producer=batch.producer, dates=batch.dates, assets=batch.assets, complexity=batch.complexity)
     return _encode(metadata, batch.values, batch.observed_through, batch.fit_through)
 
 
@@ -127,9 +130,9 @@ def decode_bundle(payload: bytes) -> ArrayBatch:
     metadata, values, observed, fitted = _decode(payload)
     if metadata['format'] != BUNDLE:
         raise ValueError('batch protocol differs; export a current bundle')
-    expected = {'format', 'kind', 'ids', 'snapshot', 'producer', 'dates', 'assets'}
+    expected = {'format', 'kind', 'ids', 'snapshot', 'producer', 'dates', 'assets', 'complexity'}
     if set(metadata) != expected:
         raise ValueError('batch metadata fields differ from the declared format')
     return ArrayBatch(metadata['kind'], tuple(metadata['ids']), values, metadata['snapshot'],
                       metadata['producer'], tuple(metadata['dates']), tuple(metadata['assets']),
-                      observed, fitted)
+                      observed, fitted, None if metadata['complexity'] is None else tuple(metadata['complexity']))

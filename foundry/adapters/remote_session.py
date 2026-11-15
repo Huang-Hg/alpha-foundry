@@ -5,8 +5,8 @@ import numpy as np
 
 from foundry.adapters.arrays import encode_bundle
 from foundry.adapters.serialization import from_json
-from foundry.portfolio.family import FamilyResult
-from foundry.research_types import (CommitReport, DataGrid, EvaluationReport, PortfolioReport,
+from foundry.types import FamilyResult
+from foundry.types import (CommitReport, DataGrid, EvaluationReport, PortfolioReport,
                                    RegisteredBatch, ResearchContext, WeightCommit, WeightReport)
 from foundry.service import client
 

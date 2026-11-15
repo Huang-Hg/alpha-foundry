@@ -1,6 +1,6 @@
 """Loaded perpetual observations, before market rules compile to execution arrays."""
 from dataclasses import dataclass
-from foundry.contracts import MarketData
+from foundry.types import MarketData
 
 
 @dataclass(frozen=True)

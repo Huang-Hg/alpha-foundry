@@ -1,10 +1,10 @@
 """Immutable portfolio membership and version identity."""
 from dataclasses import dataclass
 import hashlib
-from foundry.contracts import Study
-from foundry.candidates import EqualWeight, Source
+from foundry.types import Study
+from foundry.types import EqualWeight, Source
 
-PROTOCOL = 'research-v12'
+PROTOCOL = 'research-v13'
 
 
 @dataclass(frozen=True)

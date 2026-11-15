@@ -1,7 +1,7 @@
 """Host implementation of the common return-moments contract."""
 import numpy as np
 
-from foundry.contracts import ReturnMoments
+from foundry.types import ReturnMoments
 from foundry.core import metrics
 
 

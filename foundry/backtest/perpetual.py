@@ -15,7 +15,7 @@ import hashlib
 
 import numpy as np
 
-from foundry.contracts import ExecutionRiskBatch, SimulationResult
+from foundry.types import ExecutionRiskBatch, SimulationResult
 from foundry.core import metrics
 
 

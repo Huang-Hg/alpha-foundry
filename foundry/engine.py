@@ -10,12 +10,12 @@ from collections import OrderedDict
 from dataclasses import replace
 import hashlib
 
-from foundry.contracts import Backend, LoadedStudy, ReturnBatch, StudySnapshot
-from foundry.candidates import ArraySource, EqualWeight, Formula
+from foundry.types import Backend, LoadedStudy, ReturnBatch, StudySnapshot
+from foundry.types import ArraySource, EqualWeight, Formula
 from foundry.core import metrics as M
 from foundry.expr.evaluate import evaluate
 from foundry.expr.parse import validate
-from foundry.research_types import ContextConflict, EvaluationRow, Metrics, RiskSummary, StatsRow, YearMetrics
+from foundry.types import ContextConflict, EvaluationRow, Metrics, RiskSummary, StatsRow, YearMetrics
 from foundry.portfolio.allocation import cap_book, signal_to_book
 
 
@@ -79,6 +79,9 @@ class Engine:
             raise ValueError('batch candidate IDs must be nonempty and unique')
         if not isinstance(batch.producer, str) or not batch.producer:
             raise ValueError('batch producer must name an immutable model/program version')
+        if batch.complexity is not None and (len(batch.complexity) != len(batch.ids)
+                or any(not 0 <= value <= 1 for value in batch.complexity)):
+            raise ValueError('complexity must contain one normalized value in [0,1] per candidate')
         values = batch.values
         B, T, S = len(batch.ids), *self.panel.shape
         if values.shape != (B, T, S) or values.dtype not in (xp.dtype('float32'), xp.dtype('float64')):

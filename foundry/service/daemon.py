@@ -15,7 +15,7 @@ from foundry.adapters.arrays import decode_bundle
 from foundry.adapters.serialization import (candidate_from_json, describe,
                                             evaluation_result, json_value)
 from foundry.portfolio.library import PROTOCOL
-from foundry.research_types import FamilySeed, ContextConflict, RegisteredBatch
+from foundry.types import FamilySeed, ContextConflict, RegisteredBatch
 from foundry.service import schema
 from foundry.service.protocol import HOST, LOGFILE, PORTFILE, STATE, STATUSFILE
 
