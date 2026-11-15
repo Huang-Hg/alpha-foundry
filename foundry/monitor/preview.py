@@ -7,15 +7,16 @@ are shown as recorded. Every cell is laid out on an explicit character grid, so 
 block glyphs line up exactly as they do in the terminal.
 """
 import html
-from itertools import groupby
 import json
-from pathlib import Path
 import time
+from itertools import groupby
+from pathlib import Path
 
 from rich.cells import cell_len
 
 from . import cells, view
 from .launcher import SOURCE, STATE
+from .schema import validate_status
 
 OUTPUT = STATE/'preview.html'
 # Drawing glyphs are painted by CSS, so the preview does not depend on font coverage.
@@ -44,7 +45,7 @@ figure{margin:0 0 34px}figcaption{margin-bottom:10px;font-size:13px}figcaption s
 
 def load(path):
     path = Path(path)
-    return dict(json.loads(path.read_text(encoding='utf-8-sig')),
+    return dict(validate_status(json.loads(path.read_text(encoding='utf-8-sig'))),
                 _source_mtime=path.stat().st_mtime, _source_name=path.name)
 
 

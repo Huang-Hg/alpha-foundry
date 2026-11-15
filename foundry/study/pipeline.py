@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from functools import wraps
 from types import ModuleType
 from typing import (
@@ -42,6 +42,7 @@ from foundry.types import (
     LoadedStudy,
     Metrics,
     ReturnBatch,
+    ResourceStatus,
     RiskSummary,
     SimulationResult,
     Source,
@@ -72,12 +73,6 @@ Result = TypeVar('Result')
 Arguments = ParamSpec('Arguments')
 DELAY_LAG = (365, 1095)
 INVALID = 'G1 数值无效:含无穷值或全为缺失'
-
-
-@dataclass(frozen=True)
-class ResourceStatus:
-    device: str
-    used_mib: int
 
 
 class DeviceResources(Protocol):

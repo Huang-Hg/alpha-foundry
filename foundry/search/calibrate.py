@@ -38,10 +38,11 @@ def report(run_dir: Path, admission, cfg):
     seen, rows, cash = set(), [], 0
     with (run_dir / 'epochs.jsonl').open(encoding='utf-8') as f:
         for line in f:
-            for r in json.loads(line)['reports']:
-                if not r['g1'] or not r['delta'] or r['expr'] in seen:
+            for r in json.loads(line)['report']['rows']:
+                identity = json.dumps(r['candidate'], sort_keys=True)
+                if not r['g1'] or not r['delta'] or identity in seen:
                     continue
-                seen.add(r['expr'])
+                seen.add(identity)
                 if r['rho'] == 0:               # undefined correlation = all-cash / constant book
                     cash += 1
                     continue

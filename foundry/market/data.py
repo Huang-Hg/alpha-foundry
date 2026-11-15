@@ -63,6 +63,8 @@ def crypto_grid(frame: pd.DataFrame, asof: str) -> tuple[
 
 
 def load_data(settings: Settings, study: Study) -> MarketData | PerpetualData:
+    if study.market != settings.market.name:
+        raise ValueError('study market differs from the selected market configuration')
     import pandas as pd
     import pyarrow.parquet as pq
 

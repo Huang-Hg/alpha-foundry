@@ -89,8 +89,8 @@ def cmd_mirror(a):
 
 
 def cmd_mine(a):
-    from foundry.search import run
-    run.run(Path(a.output), configure(**a.parameters))
+    from foundry import mine
+    mine(Path(a.output), **a.parameters)
 
 
 def cmd_calibrate(a):

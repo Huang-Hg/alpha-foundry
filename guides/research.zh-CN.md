@@ -112,7 +112,7 @@ with foundry.open() as session:
 
 ### 组合操作与生命周期
 
-- `session.explore(formulas, hypothesis="trend")` 探索公式的参数和字段邻域。
+- `session.judge_family(formulas, hypothesis="trend")` 探索公式的参数和字段邻域。
 - `session.portfolio()` 返回成员、权重与指标，`baseline` 标识新研究使用的等权比较基准。
 - `session.trial_weights(matrix)` 评价 `(试探数, 成员数)` 的非负有限构件权重，列顺序与 `portfolio()` 一致。它们不是逐资产目标持仓。
 - `session.commit_weights(trials, index)` 提交选定试探，仍执行统一准入。全零权重表示现金，不恢复为等权仓位。

@@ -11,11 +11,10 @@ to the search grammar, not to hand-written formulas).
 """
 from __future__ import annotations
 
-import re
 from typing import Iterable, TypedDict, cast
 
 from foundry.ops.ast import Node, Tree
-from foundry.ops.registry import ARITY, MAX_WINDOW, MIN_WINDOW, OPS
+from foundry.ops.registry import ARITY, FORMULA_TOKEN, MAX_WINDOW, MIN_WINDOW, OPS
 
 
 class Validation(TypedDict, total=False):
@@ -37,13 +36,10 @@ class ExprError(ValueError):
     """Parse or validation failure; the message carries the position and the fix."""
 
 
-TOKEN = re.compile(r'\s*(?:(?P<num>-?\d+\.?\d*(?:[eE][-+]?\d+)?)|(?P<id>[A-Za-z_][A-Za-z_0-9]*)|(?P<p>[(),]))')
-
-
 def tokens(s: str) -> list[Token]:
     out, i = [], 0
     while i < len(s):
-        m = TOKEN.match(s, i)
+        m = FORMULA_TOKEN.match(s, i)
         if not m:
             if s[i].isspace():
                 i += 1

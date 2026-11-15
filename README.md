@@ -102,7 +102,7 @@ with foundry.open("production/my_portfolio.json") as session:
 | --- | --- |
 | Evaluate one or many formulas | `session.evaluate(formulas)` |
 | Register model outputs | `session.register(values, ...)` |
-| Explore neighbouring parameters and fields | `session.explore(formulas, hypothesis="trend")` |
+| Explore neighbouring parameters and fields | `session.judge_family(formulas, hypothesis="trend")` |
 | Inspect the current portfolio | `session.portfolio()` |
 | Compare batches of portfolio weights | `session.trial_weights(weights)` |
 | Admit candidates or change weights | `session.commit(report)` / `session.commit_weights(trials, index)` |

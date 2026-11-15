@@ -7,8 +7,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <sstream>
@@ -17,24 +17,26 @@
 #include <vector>
 
 namespace {
-constexpr int F=80, H=32, C=16;
+constexpr int H=32;
 struct Action { std::string name; int out,cost; std::vector<int> children; bool ts=false; };
 // nest[i] = time-series operators already stacked above open slot i (windows on windows).
 struct State { std::vector<int> seq,slots{0},nest{0}; int cost=0; };
-struct Forward { std::array<double,F> x{}; std::array<double,H> h{}; std::vector<double> p; };
+struct Forward { std::vector<double> x; std::array<double,H> h{}; std::vector<double> p; explicit Forward(int features):x(features,0){} };
 struct Probe { State state; std::array<int,3> actions; std::array<int,12> ids; };
 void require(bool yes,const char* why) { if(!yes) throw std::runtime_error(why); }
 struct Model {
     std::vector<Action> actions;
     std::vector<double> w1,w2,z,grad1,grad2,gradz;
-    std::array<double,C> context{};
+    int C,F;
+    std::vector<double> context;
     std::mt19937_64 rng;
     std::vector<State> samples;
     std::vector<Probe> probes;
     int maxlen,maxcost,maxts,ordinary=0,epoch=0,trained=-1;
     std::string grammar;
-    Model(const std::string& spec,int len,int cost,int ts,uint64_t seed)
-        :rng(seed),maxlen(len),maxcost(cost),maxts(ts),grammar(spec) {
+    Model(const std::string& spec,int len,int cost,int ts,uint64_t seed,int context_size)
+        :C(context_size),F(0),rng(seed),maxlen(len),maxcost(cost),maxts(ts),grammar(spec) {
+        require(C>0&&C<=std::numeric_limits<int>::max()/H-64,"invalid context dimension");F=C+64;context.assign(C,0);
         require(len>=3 && len<=64 && cost>=3 && cost<=100 && ts>=0 && ts<=64,"invalid grammar budget");
         std::istringstream rows(spec); std::string line;
         while(std::getline(rows,line)) {
@@ -78,14 +80,14 @@ struct Model {
         for(auto it=actions[a].children.rbegin();it!=actions[a].children.rend();++it){s.slots.push_back(*it);s.nest.push_back(nest);}
     }
     Forward forward(const State&s) const {
-        Forward f; f.x[0]=1;
+        Forward f(F); f.x[0]=1;
         for(int i=0;i<C;i++)f.x[1+i]=context[i];
-        f.x[17]=double(s.seq.size())/maxlen;f.x[18]=double(s.cost)/maxcost;f.x[19]=double(s.slots.size())/maxlen;
-        if(!s.slots.empty()) f.x[20+s.slots.back()]=1;
+        f.x[C+1]=double(s.seq.size())/maxlen;f.x[C+2]=double(s.cost)/maxcost;f.x[C+3]=double(s.slots.size())/maxlen;
+        if(!s.slots.empty()) f.x[C+4+s.slots.back()]=1;
         // Position-sensitive hashed prefix features retain ordering and context.
         for(size_t i=0;i<s.seq.size();i++) {
             uint64_t hash=(uint64_t(s.seq[i]+1)*0x9e3779b97f4a7c15ULL)^(uint64_t(i+1)*0xbf58476d1ce4e5b9ULL);
-            f.x[26+hash%54]+=(hash>>63?1.:-1.)/std::sqrt(double(std::max(size_t(1),s.seq.size())));
+            f.x[C+10+hash%54]+=(hash>>63?1.:-1.)/std::sqrt(double(std::max(size_t(1),s.seq.size())));
         }
         for(int j=0;j<H;j++) { double v=0;for(int i=0;i<F;i++)v+=w1[j*F+i]*f.x[i];f.h[j]=std::tanh(v); }
         f.p.assign(actions.size(),0);double maximum=-1e100;
@@ -237,18 +239,19 @@ double gradient_check(Model&m,const double*r,int n){
     }
     return err;
 }
-const char*const MAGIC="foundry-gfn-v1";
-void load(Model&m,const char*path){
-    std::ifstream f(path);require(bool(f),"cannot read checkpoint");std::string magic,spec;int len=0,cost=0,ts=0;
-    std::getline(f,magic);require(magic==MAGIC,"checkpoint protocol mismatch");f>>len>>cost>>ts>>std::quoted(spec);
-    require(len==m.maxlen&&cost==m.maxcost&&ts==m.maxts&&spec==m.grammar,"checkpoint grammar mismatch");
+const char*const MAGIC="foundry-gfn-v2";
+void load(Model&m,const std::string&payload){
+    std::istringstream f(payload);std::string magic,spec;int len=0,cost=0,ts=0,context_size=0;
+    std::getline(f,magic);require(magic==MAGIC,"checkpoint protocol mismatch");f>>len>>cost>>ts>>context_size>>std::quoted(spec);
+    require(len==m.maxlen&&cost==m.maxcost&&ts==m.maxts&&context_size==m.C&&spec==m.grammar,"checkpoint grammar or context dimension mismatch");
     auto a=m.w1,b=m.w2,c=m.z;for(auto*v:{&a,&b,&c})for(auto&x:*v){f>>x;require(bool(f)&&std::isfinite(x),"corrupt checkpoint");}
     auto rng=m.rng;f>>rng;require(bool(f),"corrupt RNG checkpoint");m.w1=a;m.w2=b;m.z=c;m.rng=rng;
     m.samples.clear();m.probes.clear();m.ordinary=0;m.trained=m.epoch;
 }
-void save(const Model&m,const char*path){
-    std::ofstream f(path);require(bool(f),"cannot write checkpoint");f<<MAGIC<<'\n'<<m.maxlen<<' '<<m.maxcost<<' '<<m.maxts<<' '<<std::quoted(m.grammar)<<'\n'<<std::setprecision(17);
-    for(auto*v:{&m.w1,&m.w2,&m.z}){for(double x:*v)f<<x<<' ';f<<'\n';}f<<m.rng;require(bool(f),"checkpoint write failed");
+std::string save(const Model&m){
+    std::ostringstream f;f<<MAGIC<<'\n'<<m.maxlen<<' '<<m.maxcost<<' '<<m.maxts<<' '<<m.C<<' '<<std::quoted(m.grammar)<<'\n'<<std::setprecision(17);
+    for(auto*v:{&m.w1,&m.w2,&m.z}){for(double x:*v)f<<x<<' ';f<<'\n';}f<<m.rng;require(bool(f),"checkpoint serialization failed");
+    return f.str();
 }
 
 // ---- Python binding ----
@@ -285,13 +288,13 @@ int seed_arg(PyObject*obj,void*out) {
 
 const double* cdata(PyArrayObject*a) { return static_cast<const double*>(PyArray_DATA(a)); }
 PyObject* policy_new(PyTypeObject*type,PyObject*args,PyObject*kw) {
-    static const char*names[]={"grammar","max_tokens","max_cost","max_ts_depth","seed",nullptr};
-    const char*spec; int len,cost,ts; uint64_t seed;
-    if(!PyArg_ParseTupleAndKeywords(args,kw,"siiiO&:Policy",const_cast<char**>(names),&spec,&len,&cost,&ts,seed_arg,&seed))
+    static const char*names[]={"grammar","max_tokens","max_cost","max_ts_depth","seed","context_size",nullptr};
+    const char*spec; int len,cost,ts,context_size; uint64_t seed;
+    if(!PyArg_ParseTupleAndKeywords(args,kw,"siiiO&i:Policy",const_cast<char**>(names),&spec,&len,&cost,&ts,seed_arg,&seed,&context_size))
         return nullptr;
     auto*self=reinterpret_cast<PolicyObject*>(type->tp_alloc(type,0));
     if(!self) return nullptr;
-    if(!guarded([&]{ self->model=new Model(spec,len,cost,ts,seed); })) { Py_DECREF(self); return nullptr; }
+    if(!guarded([&]{ self->model=new Model(spec,len,cost,ts,seed,context_size); })) { Py_DECREF(self); return nullptr; }
     return reinterpret_cast<PyObject*>(self);
 }
 
@@ -309,6 +312,7 @@ PyObject* policy_sample(PyObject*obj,PyObject*args,PyObject*kw) {
         return nullptr;
     PyArrayObject*ctx=bt_as_1d_f64(context);
     if(!ctx) return nullptr;
+    const int C=reinterpret_cast<PolicyObject*>(obj)->model->C;
     if(PyArray_DIM(ctx,0)!=C) { Py_DECREF(ctx); PyErr_Format(PyExc_ValueError,"context needs %d values",C); return nullptr; }
     std::vector<std::string> expressions;
     bool ok=run(obj,[&](Model&m){ m.sample(count,probes,cdata(ctx),random); for(const auto&s:m.samples) expressions.push_back(m.expression(s)); });
@@ -345,16 +349,18 @@ PyObject* policy_gradient_check(PyObject*obj,PyObject*rewards) {
     return Py_BuildValue("{s:d}","max_gradient_error",err);
 }
 
-template<class Io> PyObject* policy_file(PyObject*obj,PyObject*arg,Io io) {
-    PyObject*path;
-    if(!PyUnicode_FSConverter(arg,&path)) return nullptr;
-    bool ok=run(obj,[&](Model&m){ io(m,PyBytes_AS_STRING(path)); });
-    Py_DECREF(path);
-    if(!ok) return nullptr;
+PyObject* policy_dump(PyObject*obj,PyObject*) {
+    std::string payload;
+    if(!run(obj,[&](Model&m){ payload=save(m); })) return nullptr;
+    return PyBytes_FromStringAndSize(payload.data(),Py_ssize_t(payload.size()));
+}
+PyObject* policy_load(PyObject*obj,PyObject*arg) {
+    char*data;Py_ssize_t size;
+    if(PyBytes_AsStringAndSize(arg,&data,&size)<0) return nullptr;
+    std::string payload(data,size);
+    if(!run(obj,[&](Model&m){ load(m,payload); })) return nullptr;
     Py_RETURN_NONE;
 }
-PyObject* policy_save(PyObject*obj,PyObject*path) { return policy_file(obj,path,save); }
-PyObject* policy_load(PyObject*obj,PyObject*path) { return policy_file(obj,path,load); }
 
 template<class Fn> PyCFunction method(Fn fn) { return reinterpret_cast<PyCFunction>(reinterpret_cast<void(*)(void)>(fn)); }
 
@@ -364,17 +370,17 @@ PyMethodDef policy_methods[]={
     {"train",method(policy_train),METH_VARARGS|METH_KEYWORDS,
      "train(rewards, epoch, steps, lr, opd) -> dict(loss_before, loss_after, teachers, logz); releases the GIL"},
     {"gradient_check",method(policy_gradient_check),METH_O,"gradient_check(rewards) -> dict(max_gradient_error)"},
-    {"save",method(policy_save),METH_O,"save(path): weights, RNG state and grammar"},
-    {"load",method(policy_load),METH_O,"load(path): restores a checkpoint written under the same grammar"},
+    {"dump",method(policy_dump),METH_NOARGS,"dump() -> bytes: weights, RNG state, grammar and context dimensions"},
+    {"load",method(policy_load),METH_O,"load(payload): restores a checkpoint with the same grammar and context dimensions"},
     {nullptr,nullptr,0,nullptr}};
 
 PyType_Slot policy_slots[]={
     {Py_tp_new,reinterpret_cast<void*>(policy_new)},
     {Py_tp_dealloc,reinterpret_cast<void*>(policy_dealloc)},
     {Py_tp_methods,policy_methods},
-    {Py_tp_doc,const_cast<char*>("Policy(grammar, max_tokens, max_cost, max_ts_depth, seed): typed prefix GFlowNet")},
+    {Py_tp_doc,const_cast<char*>("Policy(grammar, max_tokens, max_cost, max_ts_depth, seed, context_size): typed prefix GFlowNet")},
     {0,nullptr}};
-PyType_Spec policy_spec={"foundry.search._gfn.Policy",int(sizeof(PolicyObject)),0,Py_TPFLAGS_DEFAULT,policy_slots};
+PyType_Spec policy_spec={"foundry.search.proposer._gfn.Policy",int(sizeof(PolicyObject)),0,Py_TPFLAGS_DEFAULT,policy_slots};
 
 PyMethodDef module_methods[]={{nullptr,nullptr,0,nullptr}};
 PyModuleDef module_def={PyModuleDef_HEAD_INIT,"_gfn","Typed prefix GFlowNet policy.",-1,

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from foundry.types import ArraySource
-from foundry.portfolio import admission, family
+from foundry.portfolio import admission
 from foundry.portfolio.reweight import optimize
 from foundry.backtest.weights import prepare as prepare_weights
 from foundry.types import ReweightResult
@@ -16,20 +16,27 @@ from foundry.types import (Candidate, CandidateResult, CommitResult, ContextConf
                                     WeightReport, WeightTrials)
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeVar
+from contextlib import AbstractContextManager
+from types import ModuleType
+from foundry.ops.parse import validate
+from foundry.types import ReturnMoments, Array, HostArray, PortfolioView, ResourceStatus, BoolArray, EqualWeight
 from types import MappingProxyType
 from foundry.config import Settings, path
 from foundry.portfolio.reference import Reference
 from foundry.study.pipeline import Pipeline
 from foundry.study.resources import Runtime, configured_study, open_runtime
-from foundry.study.store import FileArrayStore, MemoryArrayStore, FileLibraryStore, MemoryLibraryStore
+from foundry.study.store import FileArrayStore, FileLibraryStore, MemoryLibraryStore
 from foundry.types import CandidateReport, CommitReport, Source, FloatArray, LibraryStore, ArrayStore
 from foundry.types import DataGrid, RegisteredBatch
 from collections.abc import Mapping, Sequence
 from foundry.types import ArrayBatch, Formula
 from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
                                    FamilySeed, RegisteredBatch, WeightReport)
-from foundry.types import SessionBackend
+from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport
+
+
+Tensor = TypeVar('Tensor', bound=Array)
 
 
 class Ledger:
@@ -103,10 +110,6 @@ class Ledger:
         self.require_context(context_id)
         return self._evaluate_device(sources, report, delayed)
 
-    def evaluate_noise_device(self, sources, context_id):
-        self.require_context(context_id)
-        return self._evaluate_device(sources, True, True)
-
     def _evaluate_device(self, sources, report, delayed):
         rows, verdicts = [], []
         for lo in range(0, len(sources), self.pipeline.candidate_batch):
@@ -169,18 +172,6 @@ class Ledger:
             self.portfolio = working
         return CommitResult(before, self.context, tuple(results))
 
-    def family(self, seeds, context_id):
-        self.require_context(context_id)
-        pipeline = self.pipeline
-        categories = {field: names for names in pipeline.panel.categories().values() for field in names}
-        planned = family.plan(seeds, pipeline.vocabulary, categories, pipeline.expr_cfg.max_cost)
-        real, twins = {}, {}
-        for expressions, delayed, output in ((planned.expressions, False, real), (planned.twin_expressions, True, twins)):
-            for part in pipeline.batches(expressions):
-                batch = self.evaluate_device(tuple(Formula(expr) for expr in part), context_id, report=True, delayed=delayed)
-                output.update(family.points(batch, self.portfolio.reference))
-        return family.judge(planned, real, twins, self.context)
-
     def portfolio_report(self, context_id):
         self.require_context(context_id)
         members = self.portfolio.library.members or (SEED,)
@@ -233,7 +224,7 @@ class Ledger:
     def reweight(self, context_id: str, *, iterations: int = 3, count: int = 32, seed: int = 1) -> ReweightResult:
         self.require_context(context_id)
         if len(self.portfolio.library.members) < 2:
-            return ReweightResult(False, 0)
+            return ReweightResult(self.context, self.context, False, 0)
         pipeline = self.pipeline
         with pipeline.resources.scope():
             weights, books, _ = self.member_states(context_id)
@@ -247,9 +238,9 @@ class Ledger:
             except StopIteration as completed:
                 result = completed.value
             if not result.weights:
-                return ReweightResult(False, result.evaluations)
+                return ReweightResult(self.context, self.context, False, result.evaluations)
             committed = self.commit_weights(result.weights, context_id)
-            return ReweightResult(committed.changed, result.evaluations, committed.utility, result.weights)
+            return ReweightResult(committed.before, committed.context, committed.changed, result.evaluations, committed.utility, result.weights)
 
     def commit_weights(self, weights, context_id):
         with self.pipeline.resources.scope():
@@ -273,9 +264,16 @@ class Ledger:
             return WeightCommit(before, self.context, True, float(trial.utility[0]))
 
 
+@dataclass(frozen=True)
+class DiscoveryServices:
+    diagnose: Callable[[ResidentPort], Diagnostics]
+    judge_family: Callable[[ResidentPort, Sequence[FamilySeed | CandidateGrid]], FamilyResult]
+
+
 class LocalBackend:
-    def __init__(self, runtime: Runtime, research: Ledger, describe: Callable[[Ledger], dict]):
+    def __init__(self, runtime: Runtime, research: Ledger, describe: Callable[[Ledger], dict], discovery: DiscoveryServices):
         self.runtime, self.research, self._describe = runtime, research, describe
+        self.discovery = discovery
 
     def context(self):
         return self.research.context
@@ -309,8 +307,13 @@ class LocalBackend:
             candidates = self.research.register_batch(batch, context)
         return RegisteredBatch(self.research.context, candidates)
 
-    def explore(self, seeds, context):
-        return self.research.family(seeds, context)
+    def judge_family(self, families, context):
+        self.research.require_context(context)
+        return self.discovery.judge_family(self.resident(), families)
+
+    def diagnose(self, context):
+        self.research.require_context(context)
+        return self.discovery.diagnose(self.resident())
 
     def portfolio(self, context):
         return self.research.portfolio_report(context)
@@ -321,6 +324,9 @@ class LocalBackend:
     def commit_weights(self, weights, context):
         return self.research.commit_weights(weights, context)
 
+    def reweight(self, context, iterations, count, seed):
+        return self.research.reweight(context, iterations=iterations, count=count, seed=seed)
+
     def resident(self):
         return ResidentPort(self.research)
 
@@ -329,6 +335,7 @@ class LocalBackend:
 
 
 FormulaInput = str | Sequence[str] | Mapping[str, str]
+CandidateInput = FormulaInput | Candidate | Sequence[Candidate] | RegisteredBatch
 
 
 def formula_candidates(values: FormulaInput) -> tuple[Candidate, ...]:
@@ -371,23 +378,38 @@ class Session:
         self.grid = self._backend.grid()
         return self._context
 
-    def _candidates(self, inputs):
+    def _candidates(self, inputs: CandidateInput) -> tuple[Candidate, ...]:
         if isinstance(inputs, RegisteredBatch):
             if inputs.context.snapshot.id != self._context.snapshot.id:
                 raise ContextConflict('registered inputs belong to a different data snapshot')
-            return inputs.candidates
-        return formula_candidates(inputs)
+            candidates = inputs.candidates
+        elif isinstance(inputs, Candidate):
+            candidates = (inputs,)
+        elif isinstance(inputs, (str, Mapping)):
+            candidates = formula_candidates(inputs)
+        else:
+            values = tuple(inputs)
+            candidates = values if values and isinstance(values[0], Candidate) else formula_candidates(values)
+        if not candidates or any(not isinstance(value, Candidate) for value in candidates):
+            raise TypeError('provide a nonempty batch of typed candidates or formulas')
+        if any(not isinstance(value.id, str) or not value.id for value in candidates) or len({value.id for value in candidates}) != len(candidates):
+            raise ValueError('candidate IDs must be nonempty and unique')
+        if any(not isinstance(value.source, (Formula, ArraySource, EqualWeight)) for value in candidates):
+            raise TypeError('candidate sources must use a published source type')
+        return tuple(candidates)
 
-    def evaluate(self, inputs: FormulaInput | RegisteredBatch) -> EvaluationReport:
+    def evaluate(self, inputs: CandidateInput) -> EvaluationReport:
         return self._backend.evaluate(self._candidates(inputs), self._context.id)
 
-    def evaluate_device(self, inputs: FormulaInput | RegisteredBatch):
+    def evaluate_device(self, inputs: CandidateInput):
         """Return resident arrays in an in-process session, without report serialization."""
         return self._backend.evaluate_device(self._candidates(inputs), self._context.id)
 
-    def commit(self, report: EvaluationReport):
+    def commit(self, report: EvaluationReport | DiscoveryReport):
         """Submit the reviewed candidates against exactly the reviewed portfolio."""
-        result = self._backend.commit(tuple(Candidate(row.id, row.source) for row in report.rows), report.context.id)
+        candidates = (tuple(row.candidate for row in report.rows) if isinstance(report, DiscoveryReport)
+                      else tuple(Candidate(row.id, row.source) for row in report.rows))
+        result = self._backend.commit(candidates, report.context.id)
         self._context = result.context
         return result
 
@@ -398,9 +420,24 @@ class Session:
                            observed_through, fit_through, None if complexity is None else tuple(complexity))
         return self._backend.register(batch, self._context.id)
 
-    def explore(self, formulas: FormulaInput, *, hypothesis: str):
-        seeds = tuple(FamilySeed(c.id, c.source.expression, hypothesis) for c in formula_candidates(formulas))
-        return self._backend.explore(seeds, self._context.id)
+    def diagnose(self) -> Diagnostics:
+        """Inspect portfolio gaps without changing its context or membership."""
+        return self._backend.diagnose(self._context.id)
+
+    def judge_family(self, inputs: FormulaInput | CandidateGrid | Sequence[CandidateGrid], *, hypothesis: str = '') -> FamilyResult:
+        if isinstance(inputs, CandidateGrid):
+            families = (inputs,)
+        elif not isinstance(inputs, (str, Mapping)):
+            values = tuple(inputs)
+            if values and isinstance(values[0], CandidateGrid):
+                if any(not isinstance(value, CandidateGrid) for value in values):
+                    raise TypeError('families must contain only CandidateGrid values')
+                families = values
+            else:
+                families = tuple(FamilySeed(c.id, c.source.expression, hypothesis) for c in formula_candidates(values))
+        else:
+            families = tuple(FamilySeed(c.id, c.source.expression, hypothesis) for c in formula_candidates(inputs))
+        return self._backend.judge_family(families, self._context.id)
 
     def portfolio(self):
         return self._backend.portfolio(self._context.id)
@@ -412,6 +449,14 @@ class Session:
     def commit_weights(self, report: WeightReport, index: int):
         """Submit one reviewed weight vector; admission remains authoritative."""
         result = self._backend.commit_weights(report.weights[index], report.context.id)
+        self._context = result.context
+        return result
+
+    def reweight(self, *, iterations: int = 3, count: int = 32, seed: int = 1) -> ReweightResult:
+        """Optimize and publish an admissible successor against the current context."""
+        if not 0 <= iterations <= 100 or not 2 <= count <= 8192 or seed < 0:
+            raise ValueError('reweight requires iterations in [0,100], count in [2,8192] and a nonnegative seed')
+        result = self._backend.reweight(self._context.id, iterations, count, seed)
         self._context = result.context
         return result
 
@@ -458,11 +503,11 @@ class ResidentPort:
         return self.__context
 
     @property
-    def xp(self):
+    def xp(self) -> ModuleType:
         return self.__ledger.pipeline.xp
 
     @property
-    def to_host(self):
+    def to_host(self) -> Callable[[Array], HostArray]:
         return self.__ledger.pipeline.to_host
 
     @property
@@ -484,13 +529,61 @@ class ResidentPort:
     @property
     def window_caps(self) -> tuple[int, int]:
         pipeline = self.__ledger.pipeline
-        return (min(len(pipeline.dates), pipeline.backend.max_window),
-                min(len(pipeline.dates), pipeline.backend.max_pair_window))
+        return (pipeline.backend.max_window, pipeline.backend.max_pair_window)
 
     @property
     def grid(self) -> DataGrid:
         pipeline = self.__ledger.pipeline
         return DataGrid(self.context.snapshot.id, tuple(str(day) for day in pipeline.dates), pipeline.panel.assets)
+
+    @property
+    def stat_dates(self) -> tuple[str, ...]:
+        pipeline = self.__ledger.pipeline
+        return tuple(str(day) for day in pipeline.dates[pipeline.start:])
+
+    @property
+    def recency_weights(self) -> FloatArray:
+        self.context
+        return self._readonly(self.__ledger.pipeline.recency_weights)
+
+    def resource_status(self) -> ResourceStatus:
+        self.context
+        return self.__ledger.pipeline.resources.status()
+
+    def scope(self) -> AbstractContextManager[None]:
+        self.context
+        return self.__ledger.pipeline.resources.scope()
+
+    def measure_returns(self, returns: FloatArray) -> ReturnMoments:
+        with self.scope():
+            pipeline = self.__ledger.pipeline
+            return pipeline.backend.measure(returns, pipeline.recency_weights, pipeline.ppy)
+
+    def yearly_sharpe(self, returns: FloatArray, *, last: int) -> FloatArray:
+        with self.scope():
+            pipeline = self.__ledger.pipeline
+            return pipeline.years.sharpe(returns, pipeline.ppy, last=last)
+
+    def normalized_complexity(self, source: Source) -> float:
+        if isinstance(source, Formula):
+            parsed = validate(source.expression, self.vocabulary, self.settings.expr.max_cost)
+            if not parsed['ok']:
+                raise ValueError(parsed['error'])
+            return source.normalized_complexity(parsed['tree'].cost(), self.settings.expr.max_cost)
+        return source.normalized_complexity(0, self.settings.expr.max_cost)
+
+    def formula_error(self, expression: str) -> str | None:
+        checked = validate(expression, self.vocabulary, self.settings.expr.max_cost)
+        return None if checked['ok'] else checked['error']
+
+    @property
+    def persistent(self) -> bool:
+        return self.__ledger.store.persistent
+
+    @property
+    def eligibility(self) -> BoolArray:
+        self.context
+        return self._readonly(self.__ledger.pipeline.universe)
 
     @property
     def features(self):
@@ -501,17 +594,18 @@ class ResidentPort:
     def categories(self):
         return MappingProxyType({key: tuple(names) for key, names in self.__ledger.pipeline.panel.categories().items()})
 
-    def _readonly(self, value: FloatArray) -> FloatArray:
+    def _readonly(self, value: Tensor) -> Tensor:
         view = value.view()
         if self.__ledger.pipeline.backend.name != 'cuda':
             view.flags.writeable = False
         return view
 
     @property
-    def reference(self) -> Reference:
+    def reference(self) -> PortfolioView:
         self.context
         ref = self.__ledger.portfolio.reference
-        return replace(ref, U=self._readonly(ref.U), W=self._readonly(ref.W), rr=self._readonly(ref.rr), p=self._readonly(ref.p))
+        return PortfolioView(self._readonly(ref.U), self._readonly(ref.W), self._readonly(ref.rr), self._readonly(ref.p),
+            ref.metrics, ref.sharpe, ref.cagr, ref.maxdd, ref.wsharpe, ref.recent_growth, ref.n, ref.seed, ref.keys, ref.version)
 
     def member_states(self):
         weights, books, returns = self.__ledger.member_states(self.context.id)
@@ -534,17 +628,25 @@ class ResidentPort:
             return self.__ledger.trial_weights(matrix, self.xp.stack(books), self.context.id)
 
 
-def open_session(settings: Settings, portfolio, describe: Callable[[Ledger], dict]) -> Session:
+def open_session(settings: Settings, portfolio, describe: Callable[[Ledger], dict], discovery: DiscoveryServices,
+                 *, initial: PortfolioReport | None = None, persist: bool = True) -> Session:
     study = configured_study(settings)
     with ExitStack() as cleanup:
         runtime = open_runtime(settings, study)
         cleanup.callback(runtime.close)
-        if portfolio is None:
-            store, arrays = MemoryLibraryStore(Library((), study)), MemoryArrayStore()
+        disk = FileLibraryStore(Path(portfolio)) if portfolio is not None else None
+        if initial is not None:
+            if initial.context.snapshot.id != runtime.pipeline.context.id:
+                raise ContextConflict('checkpoint belongs to a different computation snapshot')
+            members = () if initial.baseline else tuple(Member(source, weight) for source, weight in zip(initial.sources, initial.weights))
+            library = Library(members, study)
+            if disk is not None and persist and disk.read(study).version != library.version:
+                raise ContextConflict('persistent portfolio changed since the checkpoint')
         else:
-            store = FileLibraryStore(Path(portfolio))
-            arrays = FileArrayStore(path(settings.portfolio.artifact_dir))
+            library = disk.read(study) if disk is not None else Library((), study)
+        store = disk if disk is not None and persist else MemoryLibraryStore(library)
+        arrays = FileArrayStore(path(settings.portfolio.artifact_dir))
         with runtime.resources.scope():
-            session = Session(LocalBackend(runtime, Ledger(runtime.pipeline, store, arrays), describe))
+            session = Session(LocalBackend(runtime, Ledger(runtime.pipeline, store, arrays), describe, discovery))
         cleanup.pop_all()
         return session

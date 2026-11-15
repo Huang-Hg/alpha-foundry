@@ -1,6 +1,10 @@
 """JSON conversion at the application boundary; device buffers never cross it."""
 from dataclasses import MISSING, asdict, fields, is_dataclass
+from collections.abc import Mapping
 import math
+import base64
+import json
+from foundry.types import MiningCheckpoint, MiningEpoch, MiningStatus
 import types
 from typing import Literal, get_args, get_origin, get_type_hints, is_typeddict
 from foundry.types import Source
@@ -47,6 +51,8 @@ def json_value(value):
         return {key: json_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [json_value(item) for item in value]
+    if isinstance(value, bytes):
+        return base64.b64encode(value).decode('ascii')
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
@@ -79,6 +85,8 @@ def from_json(kind, value):
     if origin is tuple:
         return tuple(from_json(args[0], item) for item in value) if args[-1] is Ellipsis else tuple(
             from_json(annotation, item) for annotation, item in zip(args, value))
+    if kind is bytes:
+        return base64.b64decode(value, validate=True)
     if kind is float and value is None:
         return float('nan')
     return value
@@ -105,6 +113,10 @@ def schema_for(kind):
         return schema
     if origin is types.UnionType:
         return dict(anyOf=[schema_for(item) for item in args])
+    if origin is Mapping:
+        return dict(type='object', additionalProperties=schema_for(args[1]))
+    if kind is bytes:
+        return dict(type='string', contentEncoding='base64')
     if origin is Literal:
         return dict(enum=list(args))
     if origin is tuple:
@@ -155,3 +167,25 @@ def describe(research):
                 dtype='uint8', encoding='bitwise_or', stages=dict(open=1, funding=2, rebalance=4, intrabar=8),
                 coverage='Full input grid; this model uses hourly event bars. The scalar JSON risk report aggregates counts and omits the bitmap.'),
             cash='risk=null explicitly denotes cash execution without derivatives risk accounting.'))
+
+
+CHECKPOINT_FORMAT = 'candidate-discovery-v1'
+
+
+def checkpoint_bytes(checkpoint: MiningCheckpoint) -> bytes:
+    return json.dumps(dict(format=CHECKPOINT_FORMAT, checkpoint=json_value(asdict(checkpoint))),
+                      ensure_ascii=False, allow_nan=False).encode('utf-8')
+
+
+def checkpoint_from_bytes(payload: bytes) -> MiningCheckpoint:
+    record = json.loads(payload)
+    if not isinstance(record, dict) or record.get('format') != CHECKPOINT_FORMAT:
+        raise ValueError('checkpoint protocol differs; start a new discovery run')
+    from jsonschema import validate
+    validate(record, dict(type='object', properties=dict(format=dict(const=CHECKPOINT_FORMAT),
+        checkpoint=schema_for(MiningCheckpoint)), required=['format', 'checkpoint'], additionalProperties=False))
+    return from_json(MiningCheckpoint, record['checkpoint'])
+
+
+def telemetry_bytes(record: MiningStatus | MiningEpoch) -> bytes:
+    return json.dumps(json_value(asdict(record)), ensure_ascii=False, allow_nan=False).encode('utf-8')

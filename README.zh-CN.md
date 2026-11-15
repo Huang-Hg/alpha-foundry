@@ -102,7 +102,7 @@ with foundry.open("production/my_portfolio.json") as session:
 | --- | --- |
 | 评价一条或一批公式 | `session.evaluate(formulas)` |
 | 注册模型输出 | `session.register(values, ...)` |
-| 探索公式附近的参数与字段 | `session.explore(formulas, hypothesis="trend")` |
+| 探索公式附近的参数与字段 | `session.judge_family(formulas, hypothesis="trend")` |
 | 查看当前组合 | `session.portfolio()` |
 | 比较一批组合权重 | `session.trial_weights(weights)` |
 | 接纳候选或调整权重 | `session.commit(report)` / `session.commit_weights(trials, index)` |

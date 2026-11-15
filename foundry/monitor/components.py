@@ -6,20 +6,52 @@ layout's job (view.py). Three sections: blocks both screens use, the search bloc
 """
 from __future__ import annotations
 
+import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import groupby
 from os.path import commonprefix
 from pathlib import PurePosixPath, PureWindowsPath
-import re
-import time
-from typing import Callable, NamedTuple, Optional
+from typing import NamedTuple, Optional
 
 from rich.cells import set_cell_size
 
-from .cells import (ACCENT, AMBER, BASE, GREEN, INK, INK2, INK3, INK4, RAISED, RED, SPIN, SURFACE, TEAL, TRACK, VIOLET,
-                    Row, Seg, ago, badge, bar, beside, card, clock, first_fit, fit, mix, num, seconds, size, tone, wrap)
+from .cells import (
+    ACCENT,
+    AMBER,
+    BASE,
+    GREEN,
+    INK,
+    INK2,
+    INK3,
+    INK4,
+    RAISED,
+    RED,
+    SPIN,
+    SURFACE,
+    TEAL,
+    TRACK,
+    VIOLET,
+    Row,
+    Seg,
+    ago,
+    badge,
+    bar,
+    beside,
+    card,
+    clock,
+    first_fit,
+    fit,
+    mix,
+    num,
+    seconds,
+    size,
+    tone,
+    wrap,
+)
 from .objectives import Objective
-from .schema import ENDED, Status
+from .schema import ENDED, Status, candidate_name, market_name, reading
 
 WAITING = 'waiting'                          # the phase of a status that has reported none yet, or of no status
 FRESH_SECONDS = 5                            # a snapshot this recent counts as "now" in the footer
@@ -76,7 +108,8 @@ class Header(Component):
             right += [Seg(f'   {self.elapsed} ', INK3, RAISED), Seg(clock(st.get('elapsed_seconds')), INK2, RAISED)]
         right += [Seg('   '+time.strftime('%H:%M:%S')+' ', INK, RAISED, True)]
         title = [Seg(' ◆ ', ACCENT, RAISED, True), Seg(self.title, INK, RAISED, True)]
-        named = title + [Seg(' · ', INK3, RAISED), Seg(st['market'].upper(), INK2, RAISED, True)] if 'market' in st else title
+        market = market_name(st)
+        named = title + [Seg(' · ', INK3, RAISED), Seg(market.upper(), INK2, RAISED, True)] if market else title
         left = first_fit(cols-size(right)-1, *(named + [Seg('   '+' · '.join(filter(None, parts)), INK3, RAISED)]
                                                for parts in self.facts(ctx)), named, title)
         return [fit(left, cols-size(right), RAISED) + right]
@@ -88,8 +121,7 @@ class Footer(Component):
         live = age is not None and stale is None and st.get('phase', WAITING) not in ENDED
         right = [Seg(f'{interval:g}s 刷新 · ' if interval and cols >= 72 else '', INK3, RAISED), Seg('Ctrl+C 退出 ', INK3, RAISED)]
         dot = [Seg(' ● ', AMBER if stale is not None else GREEN if live else INK4, RAISED)]
-        # A search run is named by its directory (the live mirror adds it), anything else by its file.
-        name = dot + [Seg(PureWindowsPath(st['run']).name if st.get('run') else st.get('_source_name', '等待数据源'), INK2, RAISED)]
+        name = dot + [Seg(st.get('_source_name', '等待数据源'), INK2, RAISED)]
         options = [name]
         if live and age <= FRESH_SECONDS:
             # Snapshots land every couple of seconds: while they keep coming the stamp simply runs with
@@ -170,7 +202,7 @@ class Table(Card):
 
 # ------------------------------------------------------------------ search screen
 
-PHASES = {WAITING: ('等待任务', INK3, '○'), 'loading': ('加载数据', ACCENT, None),
+PHASES = {WAITING: ('等待任务', INK3, '○'), 'ready': ('任务就绪', ACCENT, None),
           'sampling': ('生成候选', ACCENT, None), 'evaluating': ('GPU 回测', ACCENT, None),
           'training': ('策略学习', ACCENT, None), 'reweighting': ('组合重配', ACCENT, None),
           'checkpoint': ('保存进度', ACCENT, None), 'complete': ('已完成', GREEN, '✓'),
@@ -189,9 +221,9 @@ class SearchHeader(Header):
 
     def facts(self, ctx):
         st = ctx.st
-        mode = st.get('mode', '').upper()
-        goal = ctx.objective.label + ' · 噪声对照'*bool(st.get('noise_control')) if mode else ''
-        return (mode, goal, gpu_name(st.get('device', ''))), (mode, goal), (mode,)
+        proposer = (st.get('proposer') or '').upper()
+        goal = ctx.objective.label + ' · 噪声对照'*bool(st.get('noise_control'))
+        return (proposer, goal, gpu_name(st.get('device', ''))), (proposer, goal), (proposer,)
 
 
 class Progress(Component):
@@ -224,30 +256,25 @@ class Progress(Component):
         return rows + [steps.cells(width)]
 
 
-def change(start, current, percent, bg):
-    """Movement since the run started, followed by the starting point when there is room."""
-    base = [Seg('起点 '+num(start, '.2%' if percent else '.3f'), INK3, bg)]
-    if start is None or current is None:
-        return [base]
-    value = current-start
-    moved = [Seg(('▲ ' if value > 0 else '▼ ' if value < 0 else '■ ')
-                 + (f'{value*100:+.2f} pp' if percent else f'{value:+.3f}'), tone(value), bg)]
-    return [moved + [Seg('  ', bg=bg)] + base, moved]
+def throughput(st):
+    """Cumulative evaluation rate uses the producer's complete elapsed interval."""
+    count, elapsed = reading(st, 'counters.unique_evaluations'), st.get('elapsed_seconds')
+    return count / elapsed if count is not None and elapsed else None
 
 
 class SearchKpis(Kpis):
     def tiles(self, ctx):
         st = ctx.st
-        requested, evaluated, accepted = st.get('requested'), st.get('unique_evaluations'), st.get('accepted')
-        eligible = f"可接纳 {num(st.get('low_corr'))}"
+        requested, evaluated, accepted = reading(st, 'counters.requested'), reading(st, 'counters.unique_evaluations'), st.get('accepted')
+        eligible = f"可接纳 {num(reading(st, 'counters.low_corr'))}"
         asked = f'请求 {num(requested)}'
         return [
-            ('组合 Sharpe', num(st.get('portfolio_sharpe'), '.3f'), INK,
-             change(st.get('initial_sharpe'), st.get('portfolio_sharpe'), False, SURFACE)),
-            ('组合 CAGR', num(st.get('portfolio_cagr'), '.2%'), INK,
-             change(st.get('initial_cagr'), st.get('portfolio_cagr'), True, SURFACE)),
+            ('组合 Sharpe', num(reading(st, 'portfolio.metrics.sharpe'), '.3f'), INK,
+             [[Seg('当前组合', INK3, SURFACE)]]),
+            ('组合 CAGR', num(reading(st, 'portfolio.metrics.cagr'), '.2%'), INK,
+             [[Seg('最大回撤 '+num(reading(st, 'portfolio.metrics.maxdd'), '.1%'), INK3, SURFACE)]]),
             ('新增构件', num(accepted), GREEN if accepted else INK,
-             [[Seg(f"{eligible} · {ctx.objective.passed_label} {num(st.get(ctx.objective.gate_key))}", INK3, SURFACE)],
+             [[Seg(f"{eligible} · {ctx.objective.passed_label} {num(reading(st, ctx.objective.gate_key))}", INK3, SURFACE)],
               [Seg(eligible, INK3, SURFACE)]]),
             ('已评价候选', num(evaluated), INK,
              [[Seg(f'{asked} · 缓存命中 {num(None if None in (requested, evaluated) else requested-evaluated)}', INK3, SURFACE)],
@@ -279,7 +306,7 @@ class Funnel(Component):
         st = ctx.st
         stages = ctx.objective.stages(st)
         hot = ctx.objective.diagnosis(st)[0]
-        top = max(st.get(stage.key) or 0 for stage in stages)
+        top = max(reading(st, stage.key) or 0 for stage in stages)
         tag = 6 if width >= 50 else 0
         rail = width-self.LABEL-self.COUNT-self.SHARE-tag
         rows = []
@@ -288,15 +315,15 @@ class Funnel(Component):
                                        + fit([Seg('通过率', INK4, bg)], self.SHARE, bg, True)))
         above = None
         for stage in stages:
-            reading = st.get(stage.key)
-            share = '' if reading is None or not above else f'{reading/above:.1%}'
+            count = reading(st, stage.key)
+            share = '' if count is None or not above else f'{count/above:.1%}'
             row = fit([Seg(stage.label, AMBER if stage.key == hot else INK2, bg, stage.key == hot)], self.LABEL, bg)
-            row += bar((reading or 0)/top if top else 0, rail, AMBER if stage.key == hot else stage.color, bg)
-            row += fit([Seg(num(reading), INK, bg, True)], self.COUNT, bg, True) + fit([Seg(share, INK3, bg)], self.SHARE, bg, True)
+            row += bar((count or 0)/top if top else 0, rail, AMBER if stage.key == hot else stage.color, bg)
+            row += fit([Seg(num(count), INK, bg, True)], self.COUNT, bg, True) + fit([Seg(share, INK3, bg)], self.SHARE, bg, True)
             if stage.key == hot and tag:
                 row += fit([badge('瓶颈', AMBER, bg)], tag, bg, True)
             rows.append(Row(bg).extend(row))
-            above = reading if reading is not None else above
+            above = count if count is not None else above
         return rows
 
     def height(self, ctx):
@@ -325,11 +352,11 @@ class FunnelCard(Card):
 
 def facts(st, width, bg, gap):
     """As many throughput / memory facts as fit on one line, most important first."""
-    memory = st.get('gpu_used_mib')
+    memory = st.get('used_mib')
     out = []
     for label, value in (('显存', num(None if memory is None else memory/1024, '.2f', ' GB')),
-                         ('批量', num(st.get('candidate_batch'))), ('权重试探', num(st.get('weight_trials'))),
-                         ('重配评价', num(st.get('reweight_evaluations')))):
+                         ('权重试探', num(reading(st, 'counters.weight_trials'))),
+                         ('重配评价', num(reading(st, 'counters.reweight_evaluations')))):
         item = [Seg(' '*gap*bool(out), bg=bg), Seg(label+' ', INK3, bg), Seg(value, INK2, bg)]
         if size(out)+size(item) > width:
             break
@@ -340,7 +367,8 @@ def facts(st, width, bg, gap):
 class PerformanceCard(Card):
     title = '运行性能'
     TIMING = (('采样', 'sampling_seconds', ACCENT), ('回测', 'evaluation_seconds', TEAL),
-              ('学习', 'training_seconds', VIOLET), ('重配', 'reweight_seconds', AMBER))
+              ('学习', 'training_seconds', VIOLET), ('提交', 'commit_seconds', GREEN),
+              ('重配', 'reweight_seconds', AMBER), ('保存', 'checkpoint_seconds', INK3))
 
     def note(self, ctx):
         return '最近一轮'
@@ -351,13 +379,14 @@ class PerformanceCard(Card):
     def body(self, ctx, inner):
         st = ctx.st
         rates = []
-        for label, key in (('GPU 评价', 'evaluation_candidates_per_second'), ('全程平均', 'candidates_per_second')):
-            rates += fit([Seg(label+'  ', INK3, SURFACE), Seg(num(st.get(key), '.1f'), INK, SURFACE, True),
-                          Seg(' 条/s', INK3, SURFACE)], inner//2, SURFACE)
+        for label, value, unit in (('全程平均', throughput(st), ' 条/s'),
+                                   ('本轮回测', reading(st, 'timings.evaluation_seconds'), ' s')):
+            rates += fit([Seg(label+'  ', INK3, SURFACE), Seg(num(value, '.1f'), INK, SURFACE, True),
+                          Seg(unit, INK3, SURFACE)], inner//2, SURFACE)
         rows = [Row(SURFACE), Row(SURFACE).extend(rates), Row(SURFACE).extend(facts(st, inner, SURFACE, 3)), Row(SURFACE)]
-        spent = [st.get(key) for _, key, _ in self.TIMING]
+        spent = [reading(st, 'timings.' + key) for _, key, _ in self.TIMING]
         total = None if None in spent else sum(spent)
-        rows.append(Row(SURFACE).add('阶段耗时', INK3).end(seconds(total)+' s', INK2))
+        rows.append(Row(SURFACE).add('阶段耗时 · 可重叠', INK3).end(seconds(total)+' s', INK2))
         if total:
             # Largest-remainder split keeps the stacked rail exactly `inner` cells wide.
             exact = [s/total*inner for s in spent]
@@ -372,13 +401,13 @@ class PerformanceCard(Card):
             legend += fit([Seg('● ', color, SURFACE), Seg(name+' ', INK3, SURFACE), Seg(seconds(value), INK2, SURFACE)],
                           inner//len(self.TIMING), SURFACE)
         rows += [Row(SURFACE).extend(legend), Row(SURFACE)]
-        before, after = st.get('loss_before'), st.get('loss_after')
+        before, after = reading(st, 'training.loss_before'), reading(st, 'training.loss_after')
         learning = Row(SURFACE).add('策略学习  ', INK3)
         if before is None or after is None:
             learning.add('—', INK3)
         else:
-            learning.add(f'loss {before:.1f} → {after:.1f}', INK2).add(f'  {after/before-1:+.1%}', GREEN if after < before else RED)
-            learning.end(f"logZ {st.get('logz', 0):+.3f}", INK3)
+            learning.add(f'loss {before:.1f} → {after:.1f}', INK2).add('  '+num(after/before-1 if before else None, '+.1%'), GREEN if after < before else RED)
+            learning.end('logZ '+num(reading(st, 'training.logz'), '+.3f'), INK3)
         return rows + [learning]
 
 
@@ -386,7 +415,7 @@ class PerformanceStrip(Component):
     """One line of the performance card, for windows too narrow to put it beside the funnel."""
     def rows(self, ctx, width):
         st = ctx.st
-        rate = [Seg('GPU 评价 ', INK3), Seg(num(st.get('evaluation_candidates_per_second'), '.1f', ' 条/s'), INK2), Seg('    ')]
+        rate = [Seg('全程平均 ', INK3), Seg(num(throughput(st), '.1f', ' 条/s'), INK2), Seg('    ')]
         return [fit(rate + facts(st, width-size(rate), BASE, 4), width, BASE)]
 
 
@@ -414,8 +443,8 @@ class CandidatesCard(Table):
 
     def columns(self, ctx):
         st, objective = ctx.st, ctx.objective
-        shared = len(commonprefix([report['expr'] for report in self.items]))
-        return (Column('候选表达式', 0, lambda report, width: expression(report['expr'], width, shared, SURFACE)),
+        shared = len(commonprefix([candidate_name(report) for report in self.items]))
+        return (Column('候选', 0, lambda report, width: expression(candidate_name(report), width, shared, SURFACE)),
                 Column('判定', self.VERDICT, lambda report, width: [badge(*objective.verdict(report), SURFACE)]),
                 *(Column(c.name, c.width, lambda report, width, c=c: c.cell(report, st, SURFACE), c.min_inner, True)
                   for c in objective.columns))
@@ -423,7 +452,10 @@ class CandidatesCard(Table):
 
 # ------------------------------------------------------------------ evaluation service screen
 
-OPS = {'family': '假设族', 'eval': '表达式'}
+OPS = {'research.family': '假设族', 'research.evaluate': '候选评价', 'research.describe': '接口说明',
+       'research.register_batch': '注册数组', 'research.commit': '提交候选',
+       'research.portfolio': '组合快照', 'research.trial_weights': '权重试探',
+       'research.commit_weights': '提交权重'}
 VERDICTS = (('成立', GREEN), ('稀疏', AMBER), ('尖峰', VIOLET), ('无效', INK3), ('通过', GREEN), ('未过', INK3))
 
 
@@ -453,6 +485,10 @@ class ServiceHeader(Header):
         st = ctx.st
         if st['phase'] == 'warm':
             return '预热中', ACCENT, None
+        if st['phase'] == 'stopping':
+            return '停止中', AMBER, None
+        if st['phase'] == 'stopped':
+            return '已停止', INK3, '■'
         if st.get('cur'):
             return '计算中', ACCENT, None
         return '空闲', GREEN, '○'
@@ -474,7 +510,7 @@ class Job(Component):
                 line.end(f'上一个作业 {ago(since(st, jobs[-1]["t"]))} 前', INK3)
             return [line.cells(width), bar(0, width, ACCENT, BASE)]
         owner, name = who(cur.get('source'))
-        unit = '条公式' if cur['op'] == 'family' else '条'
+        unit = '条候选' if cur['op'] == 'research.family' else '条'
         line = Row().add(OPS[cur['op']], ACCENT, True).add(f'  {owner}', INK, True).add(f' / {name}', INK3) \
             .add(f'  ·  {num(cur.get("n"))} {unit}', INK2)
         line.end(f'已用 {clock(since(st, cur["t0"]))}', INK3)

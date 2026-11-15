@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
+from collections.abc import Callable
+from foundry.types import MiningCheckpoint, MiningEpoch, MiningStatus
 import hashlib
 from io import BytesIO
 import json
@@ -169,6 +171,8 @@ def member_from_json(record):
 
 
 class FileLibraryStore:
+    persistent = True
+
     def __init__(self, path: Path):
         self.path = path
 
@@ -199,6 +203,8 @@ class FileLibraryStore:
 
 
 class MemoryLibraryStore:
+    persistent = False
+
     def __init__(self, library):
         self.library = library
 
@@ -243,3 +249,61 @@ def source_from_json(record):
     factory = {'formula': Formula, 'signals': ArraySource, 'target_weights': ArraySource,
                'target_exposure': ArraySource, 'equal_weight': EqualWeight}[record['kind']]
     return factory(**record)
+
+
+class FileCheckpointStore:
+    """One atomically published checkpoint with an injected wire codec."""
+
+    def __init__(self, path: Path, encode: Callable[[MiningCheckpoint], bytes],
+                 decode: Callable[[bytes], MiningCheckpoint]):
+        self.path, self.encode, self.decode = path, encode, decode
+
+    def read(self) -> MiningCheckpoint | None:
+        try:
+            payload = self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+        return self.decode(payload)
+
+    def publish(self, checkpoint: MiningCheckpoint) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        publish(self.path, self.encode(checkpoint))
+
+
+class FileTelemetrySink:
+    """Publish immutable status snapshots and append completed epoch evidence."""
+
+    def __init__(self, directory: Path, live: Path,
+                 encode: Callable[[MiningStatus | MiningEpoch], bytes]):
+        self.directory, self.live, self.encode = directory, live, encode
+        directory.mkdir(parents=True, exist_ok=True)
+        live.parent.mkdir(parents=True, exist_ok=True)
+
+    def stopping(self) -> bool:
+        return (self.directory / 'STOP').exists()
+
+    def publish(self, status: MiningStatus) -> None:
+        payload = self.encode(status)
+        publish(self.directory / 'status.json', payload)
+        publish(self.live, payload)
+
+    def record(self, epoch: MiningEpoch) -> None:
+        with (self.directory / 'epochs.jsonl').open('ab') as stream:
+            stream.write(self.encode(epoch) + b'\n')
+
+
+class RunLease:
+    """Exclusive local ownership of one discovery output directory."""
+
+    def __init__(self, directory: Path):
+        self.directory, self.lock = directory, directory / '.running'
+
+    def __enter__(self):
+        self.directory.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self.lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(descriptor, 'w') as stream:
+            stream.write(str(os.getpid()))
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.lock.unlink()

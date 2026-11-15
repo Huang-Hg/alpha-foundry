@@ -22,7 +22,7 @@ from foundry.market.data import load_data
 from foundry.market.perpetual import CryptoPerpetual
 from foundry.market.us_equity import UsEquity
 from foundry.ops.registry import MAX_WINDOW
-from foundry.study.pipeline import DeviceResources, Pipeline, ResourceStatus
+from foundry.study.pipeline import DeviceResources, Pipeline
 from foundry.study.store import study_snapshot
 from foundry.types import (
     Backend,
@@ -30,6 +30,7 @@ from foundry.types import (
     ParsedFormula,
     PerpetualSpec,
     PrecisionPlan,
+    ResourceStatus,
     Study,
     Window,
 )

@@ -14,9 +14,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
+import re
 from typing import Dict
 
 OPS_SEMANTIC_VERSION = 'operators-66-paired-two-point-v1'
+FORMULA_TOKEN = re.compile(r'\s*(?:(?P<num>-?\d+\.?\d*(?:[eE][-+]?\d+)?)|(?P<id>[A-Za-z_][A-Za-z_0-9]*)|(?P<p>[(),]))')
 
 # Written arguments of each kind (panels, windows and scalars alike).
 ARITY = {'unary': 1, 'binary': 2, 'binary_const': 2, 'ternary': 3, 'ts': 2, 'ts_param': 3, 'pair': 3, 'pair_param': 4}

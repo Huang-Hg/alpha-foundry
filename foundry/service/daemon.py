@@ -35,8 +35,9 @@ class Job:
 
 
 class Server:
-    def __init__(self, runtime, research, port=0):
+    def __init__(self, runtime, research, judge_family, port=0):
         self.runtime, self.research = runtime, research
+        self.judge_family = judge_family
         self.q = queue.Queue(maxsize=MAX_PENDING)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -197,7 +198,7 @@ class Server:
         if method == 'research.commit_weights':
             return json_value(asdict(self.research.commit_weights(params['weights'], params['context'])))
         if method == 'research.family':
-            result = self.research.family(tuple(FamilySeed(**row) for row in params['seeds']), params['context'])
+            result = self.judge_family(tuple(FamilySeed(**row) for row in params['seeds']), params['context'])
             self.n_expr += result.variants
             return json_value(asdict(result))
         candidates = tuple(candidate_from_json(row) for row in params['candidates'])

@@ -47,7 +47,7 @@ class RemoteBackend:
         payload = encode_bundle(batch)
         return self._call('research.register_batch', dict(context=context, bytes=len(payload)), RegisteredBatch, payload)
 
-    def explore(self, seeds, context):
+    def judge_family(self, seeds, context):
         return self._call('research.family', dict(context=context, seeds=[asdict(s) for s in seeds]), FamilyResult)
 
     def portfolio(self, context):

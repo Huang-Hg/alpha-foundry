@@ -112,7 +112,7 @@ Choose `signals`, `target_weights` or `target_exposure`; units and market constr
 
 ### Portfolio operations and lifecycle
 
-- `session.explore(formulas, hypothesis="trend")` explores parameter and field neighbourhoods.
+- `session.judge_family(formulas, hypothesis="trend")` explores parameter and field neighbourhoods.
 - `session.portfolio()` returns members, weights and metrics; `baseline` identifies a new study's equal-weight comparison baseline.
 - `session.trial_weights(matrix)` evaluates finite nonnegative `(trials, members)` component weights in `portfolio()` order. These are not per-asset target positions.
 - `session.commit_weights(trials, index)` submits a selected trial through the shared admission rules. All-zero weights mean cash, not a restored equal-weight position.

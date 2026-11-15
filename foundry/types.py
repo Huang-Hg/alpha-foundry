@@ -6,10 +6,10 @@ a device library. Field documentation defines dtype, units and ownership.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 import hashlib
 from types import ModuleType
-from typing import Callable, Generic, Literal, Mapping, Protocol, TypeAlias, TypeVar
+from typing import Callable, Generic, Literal, Mapping, Protocol, Sequence, TypeAlias, TypeVar
 
 import numpy as np
 from numpy.typing import NDArray
@@ -495,6 +495,7 @@ class WeightReport:
 
 
 class LibraryStore(Protocol[LibraryValue]):
+    persistent: bool
     def read(self, study: Study) -> LibraryValue: ...
     def commit(self, expected: LibraryValue, replacement: LibraryValue) -> None: ...
 
@@ -537,7 +538,7 @@ class WeightCommit:
 
 @dataclass(frozen=True)
 class FamilyPoint:
-    expr: str
+    candidate: Candidate
     passed: bool
     sharpe: float | None
     maxdd: float | None
@@ -576,7 +577,7 @@ class FieldSummary:
 @dataclass(frozen=True)
 class SkippedFamily:
     id: str
-    expression: str
+    candidate: Candidate
     hypothesis: str
     error: str
 
@@ -611,10 +612,12 @@ class SessionBackend(Protocol[ResidentValue]):
     def evaluate_device(self, candidates: tuple[Candidate, ...], context: str) -> DeviceBatch: ...
     def commit(self, candidates: tuple[Candidate, ...], context: str) -> CommitReport: ...
     def register(self, batch: ArrayBatch, context: str) -> RegisteredBatch: ...
-    def explore(self, seeds: tuple[FamilySeed, ...], context: str) -> FamilyResult: ...
+    def diagnose(self, context: str) -> Diagnostics: ...
+    def judge_family(self, families: Sequence[FamilySeed | CandidateGrid], context: str) -> FamilyResult: ...
     def portfolio(self, context: str) -> PortfolioReport: ...
     def trial_weights(self, weights: Array, context: str) -> WeightReport: ...
     def commit_weights(self, weights: tuple[float, ...], context: str) -> WeightCommit: ...
+    def reweight(self, context: str, iterations: int, count: int, seed: int) -> ReweightResult: ...
     def resident(self) -> ResidentValue: ...
     def close(self) -> None: ...
 
@@ -727,7 +730,280 @@ class PerpetualSpec:
 
 @dataclass(frozen=True)
 class ReweightResult:
+    before: ResearchContext
+    context: ResearchContext
     changed: bool
     evaluations: int
     utility: float | None = None
     weights: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class PortfolioView:
+    """Borrowed read-only books and return statistics for a fixed portfolio."""
+    U: FloatArray
+    W: FloatArray
+    rr: FloatArray
+    p: FloatArray
+    metrics: Metrics
+    sharpe: float
+    cagr: float
+    maxdd: float
+    wsharpe: float
+    recent_growth: float
+    n: int
+    seed: bool
+    keys: tuple[Source, ...]
+    version: str
+
+
+@dataclass(frozen=True)
+class ContextFeature:
+    name: str
+    value: float
+
+
+@dataclass(frozen=True)
+class DrawdownWindow:
+    peak: str | None
+    trough: str
+    recovery: str | None
+    drawdown: float
+
+
+@dataclass(frozen=True)
+class SingleGate:
+    prior_mean: float
+    shrinkage: float
+    reference_sharpe: float
+    required_appraisal: float
+    anchor_correlation: float
+    anchor_sharpe: float
+    pool_size: int
+    pool_target: float
+    recent_years: int
+    recent_year_sharpe: float
+
+
+@dataclass(frozen=True)
+class Diagnostics:
+    context: ResearchContext
+    features: tuple[ContextFeature, ...]
+    drawdown_window: DrawdownWindow
+    member_correlations: tuple[tuple[float, ...], ...]
+    capacity_remaining: int
+    gate: SingleGate | None = None
+
+
+@dataclass(frozen=True)
+class DiscoveryRow:
+    candidate: Candidate
+    log_reward: float
+    passed: bool
+    g1: bool
+    g2: bool
+    decision: Verdict
+    rho: float | None = None
+    utility: float | None = None
+    error: str | None = None
+    co_loss: float = 0.
+    novelty: float = 0.
+    duplicate: bool = False
+    weight: float = 0.
+    delta: tuple[ConstraintCheck, ...] = ()
+    backend: str = ''
+    g3: bool = False
+    sharpe: float | None = None
+    cagr: float | None = None
+    maxdd: float | None = None
+    rho_portfolio: float | None = None
+    rho_members: float | None = None
+    appraisal: float | None = None
+    required_sharpe: float | None = None
+    recent_years: tuple[float, ...] = ()
+
+
+@dataclass(frozen=True)
+class DiscoveryReport:
+    context: ResearchContext
+    objective: str
+    rows: tuple[DiscoveryRow, ...]
+
+
+@dataclass(frozen=True)
+class CandidateAcceptance:
+    candidate: Candidate
+    weight: float
+    utility: float
+
+
+
+@dataclass(frozen=True)
+class ProposalBatch:
+    epoch: int
+    ordinary: int
+    probe_count: int
+    candidates: tuple[Candidate, ...]
+
+
+@dataclass(frozen=True)
+class TrainingResult:
+    loss_before: float | None = None
+    loss_after: float | None = None
+    teachers: int = 0
+    logz: float | None = None
+
+
+class Proposer(Protocol):
+    name: str
+
+    def sample(self, count: int, probes: int, context: Sequence[float]) -> ProposalBatch | None: ...
+    def train(self, batch: ProposalBatch, rewards: Sequence[float], *, steps: int,
+              learning_rate: float, opd_strength: float) -> TrainingResult: ...
+    def dump(self) -> bytes: ...
+    def load(self, payload: bytes) -> None: ...
+
+
+@dataclass(frozen=True)
+class ProposerState:
+    name: str
+    payload: bytes
+
+
+@dataclass(frozen=True)
+class MiningTimings:
+    sampling_seconds: float = 0.
+    evaluation_seconds: float = 0.
+    training_seconds: float = 0.
+    commit_seconds: float = 0.
+    reweight_seconds: float = 0.
+    checkpoint_seconds: float = 0.
+
+
+@dataclass(frozen=True)
+class MiningCheckpoint:
+    signature: str
+    epoch: int
+    portfolio: PortfolioReport
+    archive: tuple[Candidate, ...]
+    counters: Mapping[str, int]
+    accepted: int
+    elapsed_seconds: float
+    proposers: tuple[ProposerState, ...]
+
+
+@dataclass(frozen=True)
+class MiningStatus:
+    phase: str
+    epoch: int
+    epochs: int
+    accepted: int
+    counters: Mapping[str, int]
+    elapsed_seconds: float
+    portfolio: PortfolioReport
+    timings: MiningTimings = field(default_factory=MiningTimings)
+    recent: tuple[DiscoveryRow, ...] = ()
+    objective: str = 'portfolio'
+    gate: SingleGate | None = None
+    proposer: str | None = None
+    noise_control: bool = False
+    training: TrainingResult | None = None
+    device: str = ''
+    used_mib: int = 0
+
+
+@dataclass(frozen=True)
+class MiningEpoch:
+    epoch: int
+    signature: str
+    proposer: str
+    archive_version: int
+    report: DiscoveryReport
+    accepted: Candidate | None
+    reweight: ReweightResult | None
+    training: TrainingResult
+    timings: MiningTimings
+    counters: Mapping[str, int]
+
+
+class CheckpointStore(Protocol):
+    def read(self) -> MiningCheckpoint | None: ...
+    def publish(self, checkpoint: MiningCheckpoint) -> None: ...
+
+
+class TelemetrySink(Protocol):
+    def stopping(self) -> bool: ...
+    def publish(self, status: MiningStatus) -> None: ...
+    def record(self, epoch: MiningEpoch) -> None: ...
+
+
+
+
+@dataclass(frozen=True)
+class CandidateGrid:
+    """Explicit candidate lattice; variants include seed exactly once.
+
+    Each coordinate has the same positive dimension and contains integer rung
+    indices. Adjacent points differ by one rung along one parameter axis.
+    """
+    seed: Candidate
+    variants: tuple[Candidate, ...]
+    parameter_coords: tuple[tuple[int, ...], ...]
+    hypothesis: str = ''
+
+
+@dataclass(frozen=True)
+class Fold:
+    """Fit on [fit_start, fit_through], predict on [predict_start, predict_stop)."""
+    fit_start: int
+    fit_through: int
+    predict_start: int
+    predict_stop: int
+
+
+@dataclass(frozen=True)
+class FoldView:
+    """Owned feature prefix (T,S); host arrays are read-only.
+
+    start/stop are absolute study row indices with an exclusive stop. Arrays
+    retain their host/device dtype and cannot expose later rows through a base.
+    """
+    start: int
+    stop: int
+    dates: tuple[str, ...]
+    assets: tuple[str, ...]
+    features: Mapping[str, FloatArray]
+    eligibility: BoolArray
+
+
+@dataclass(frozen=True)
+class FoldResult:
+    """Realized next-bar net-return signs in [execution_start, execution_stop).
+
+    Mean returns/signs follow registered candidate order. Invalid returns have
+    a missing mean and sign zero; valid zero means also have sign zero.
+    """
+    fold: Fold
+    execution_start: int
+    execution_stop: int
+    mean_returns: tuple[float | None, ...]
+    signs: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class WalkForwardResult:
+    """Registered outputs and realized cross-fold directional stability.
+
+    sign_consistency is the larger positive/negative fold count divided by all
+    folds for each candidate. Zero/invalid folds contribute to neither count.
+    A consistently negative candidate can score 1; inspect fold signs as well.
+    """
+    registered: RegisteredBatch
+    folds: tuple[FoldResult, ...]
+    sign_consistency: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class ResourceStatus:
+    device: str
+    used_mib: int
