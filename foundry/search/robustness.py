@@ -175,6 +175,10 @@ def _candidate_key(candidate: Candidate) -> tuple[str, str, str]:
 def _explicit_grid(grid: CandidateGrid) -> PlannedFamily:
     if not grid.variants or len(grid.variants) != len(grid.parameter_coords):
         raise ValueError('candidate grid requires one coordinate per variant')
+    if any(not isinstance(candidate, Candidate) for candidate in grid.variants):
+        raise TypeError('candidate grid variants must contain typed candidates')
+    if any(not isinstance(candidate.id, str) or not candidate.id for candidate in grid.variants):
+        raise ValueError('candidate grid IDs must be nonempty strings')
     if grid.variants.count(grid.seed) != 1 or len({c.id for c in grid.variants}) != len(grid.variants):
         raise ValueError('candidate grid must include its seed once and use unique candidate IDs')
     if not grid.parameter_coords[0] or len({len(point) for point in grid.parameter_coords}) != 1:
@@ -191,8 +195,8 @@ def plan(seeds: Sequence[FamilySeed | CandidateGrid], categories: Mapping[str, S
          formula_error: Callable[[str], str | None]) -> FamilyPlan:
     plans, skipped = [], []
     identities = [seed.id if isinstance(seed, FamilySeed) else seed.seed.id for seed in seeds]
-    if len(set(identities)) != len(identities):
-        raise ValueError('family IDs must be unique')
+    if any(not isinstance(identity, str) or not identity for identity in identities) or len(set(identities)) != len(identities):
+        raise ValueError('family IDs must be nonempty and unique')
     for seed in seeds:
         if isinstance(seed, CandidateGrid):
             plans.append(_explicit_grid(seed))

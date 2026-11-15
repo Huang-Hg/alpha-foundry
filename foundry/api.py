@@ -8,25 +8,31 @@ from foundry.config import Parameters, configure
 def open(portfolio: str | Path | None = None, **parameters: Unpack[Parameters]):
     """Open an explicitly parameterized session; an omitted portfolio stays in memory."""
     from foundry.study.session import open_session, DiscoveryServices
-    from foundry.search.diagnostics import diagnose
+    from foundry.search.diagnostics import diagnose_current
     from foundry.search.robustness import judge_family
-    from foundry.adapters.serialization import describe
-    return open_session(configure(**parameters), portfolio, describe, DiscoveryServices(diagnose, judge_family))
+    from foundry.rpc.codec import describe
+    return open_session(configure(**parameters), portfolio, describe, DiscoveryServices(diagnose_current, judge_family))
 
 
 def connect(address: tuple[str, int] | None = None):
     """Connect to an existing service address or the explicitly attached endpoint."""
-    from foundry.adapters.remote_session import RemoteBackend
+    from foundry.rpc.client import RemoteBackend
     from foundry.study.session import Session
-    return Session(RemoteBackend(address))
+    from contextlib import ExitStack
+    with ExitStack() as cleanup:
+        backend = RemoteBackend(address)
+        cleanup.callback(backend.close)
+        session = Session(backend)
+        cleanup.pop_all()
+        return session
 
 
 def serve(portfolio: str | Path = 'production/library.json', **parameters: Unpack[Parameters]):
     """Serve a parameterized research session until explicitly stopped."""
-    from foundry.service.daemon import Server
+    from foundry.rpc.server import Server
     with open(portfolio, **parameters) as session:
         backend = session._backend
-        return Server(backend.runtime, backend.research, backend.judge_family).run()
+        return Server(backend).run()
 
 
 def export(report, output: str | Path):
@@ -34,7 +40,7 @@ def export(report, output: str | Path):
     from dataclasses import asdict
     import json
     from foundry.study.store import publish
-    from foundry.adapters.serialization import json_value
+    from foundry.rpc.codec import json_value
     target = Path(output)
     target.parent.mkdir(parents=True, exist_ok=True)
     publish(target, json.dumps(json_value(asdict(report)), ensure_ascii=False, allow_nan=False,
@@ -43,7 +49,7 @@ def export(report, output: str | Path):
 
 def schema():
     """Discover the public machine protocol without loading data or a backend."""
-    from foundry.service.schema import describe
+    from foundry.rpc.schema import describe
     return describe()
 
 
@@ -56,12 +62,12 @@ def mine(output: str | Path, *, session=None, proposers=None, **parameters: Unpa
     from foundry.config import ROOT
     from foundry.study.session import open_session, DiscoveryServices
     from foundry.study.store import FileCheckpointStore, FileTelemetrySink, RunLease
-    from foundry.search.diagnostics import CONTEXT_NAMES, diagnose
+    from foundry.search.diagnostics import CONTEXT_NAMES, diagnose_current
     from foundry.search.robustness import judge_family
     from foundry.search.driver import MiningDriver
     from foundry.search.proposer.gfn import GfnProposer
     from foundry.search.proposer.random import RandomProposer
-    from foundry.adapters.serialization import describe, checkpoint_bytes, checkpoint_from_bytes, telemetry_bytes
+    from foundry.rpc.codec import describe, checkpoint_bytes, checkpoint_from_bytes, telemetry_bytes
     directory = Path(output)
     with RunLease(directory):
         checkpoints = FileCheckpointStore(directory / 'state.json', checkpoint_bytes, checkpoint_from_bytes)
@@ -74,7 +80,7 @@ def mine(output: str | Path, *, session=None, proposers=None, **parameters: Unpa
             settings = configure(**parameters)
             cfg = settings.search
             portfolio = None if cfg.seed_portfolio == 'equal' else ROOT / 'production' / 'library.json'
-            owner = open_session(settings, portfolio, describe, DiscoveryServices(diagnose, judge_family),
+            owner = open_session(settings, portfolio, describe, DiscoveryServices(diagnose_current, judge_family),
                 initial=None if checkpoint is None else checkpoint.portfolio, persist=cfg.accept)
         with owner as active:
             port = active.resident
@@ -100,9 +106,3 @@ def benchmark(output: str | Path, *, sizes=(1, 64, 4096), **parameters: Unpack[P
     """Run validation and CPU/CUDA benchmarks, then generate the report bundle."""
     from validation.benchmarks.run import run
     return run(output, sizes=sizes, **parameters)
-
-
-def walk_forward(session, fit, predict, **parameters):
-    """Fit causal folds, register predictions and report their realized sign stability."""
-    from foundry.study.walk_forward import walk_forward as execute
-    return execute(session, fit, predict, **parameters)

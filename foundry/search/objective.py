@@ -225,7 +225,8 @@ class Discovery:
                         valid.append((candidate, row, verdict))
                 if valid:
                     self._score(tuple(valid))
-        return DiscoveryReport(self.port.context, self.objective.name, tuple(self.cache[candidate] for candidate in candidates))
+        return DiscoveryReport(self.port.context, self.objective.name, tuple(self.cache[candidate] for candidate in candidates),
+                               self.port.settings.search.noise_control)
 
     def _behavior(self, returns: FloatArray) -> Behavior:
         xp = self.port.xp

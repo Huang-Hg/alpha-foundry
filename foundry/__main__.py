@@ -23,7 +23,7 @@ from pathlib import Path
 
 
 def cmd_request(a):
-    from foundry.service.client import invoke
+    from foundry.rpc.client import invoke
     with open(a.output,'w',encoding='utf-8') as out:
         for line in Path(a.input).read_text(encoding='utf-8').splitlines():
             response=invoke(json.loads(line))
@@ -32,7 +32,7 @@ def cmd_request(a):
 
 
 def cmd_schema(a):
-    from foundry.service.schema import describe
+    from foundry.rpc.schema import describe
     Path(a.output).write_text(json.dumps(describe(),ensure_ascii=False,indent=2),encoding='utf-8')
 
 
@@ -50,42 +50,42 @@ def cmd_ops(a):
 
 
 def cmd_serve(a):
-    from foundry.service import client
+    from foundry.rpc import client, schema
     from foundry import serve
-    if client.PORTFILE.exists():
+    if schema.PORTFILE.exists():
         client.stop()
     serve(ROOT / 'production' / 'library.json', **a.parameters)
 
 
 def cmd_status(a):
-    from foundry.service import client
+    from foundry.rpc import client, schema
     p = client.call('system.status',{},timeout=10.)
     print(json.dumps(p, ensure_ascii=False, indent=2) if p else '未运行')
 
 
 def cmd_stop(a):
-    from foundry.service import client
+    from foundry.rpc import client, schema
     print(client.stop() or '未运行')
-    client.PORTFILE.unlink(missing_ok=True)
+    schema.PORTFILE.unlink(missing_ok=True)
 
 
 def cmd_attach(a):
-    from foundry.service import client, remote
-    d = client.info() if client.PORTFILE.exists() else {}
+    from foundry.rpc import client, schema
+    d = client.info() if schema.PORTFILE.exists() else {}
     if d and 'host' not in d:            # free the local card before attaching to the cloud
         print(client.stop() or '(无本地服务)')
-    remote.attach(a.host or remote.DEFAULT_HOST)
+    client.attach(a.host or client.DEFAULT_HOST)
 
 
 def cmd_detach(a):
-    from foundry.service import client
-    client.PORTFILE.unlink(missing_ok=True)
+    from foundry.rpc import client, schema
+    schema.PORTFILE.unlink(missing_ok=True)
     print('已断开;云端服务未动(要停用先 attach 再 stop)')
 
 
 def cmd_mirror(a):
-    from foundry.service import remote
-    remote.mirror(a.host, a.remote, Path(a.local), configure(**a.parameters).monitor.push_seconds)
+    from foundry.rpc import client, schema
+    client.mirror(a.host, a.remote, Path(a.local), configure(**a.parameters).monitor.push_seconds)
 
 
 def cmd_mine(a):
@@ -101,7 +101,8 @@ def cmd_calibrate(a):
 
 def cmd_monitor(a):
     from foundry.monitor import launcher
-    launcher.main(a.source, a.attach, a.once, configure(**a.parameters).monitor)
+    from foundry.study.store import publish
+    launcher.main(a.source, a.attach, a.once, configure(**a.parameters).monitor, publish=publish)
 
 
 def cmd_preview(a):
@@ -158,7 +159,7 @@ def main():
     s.add_argument('statuses', nargs='*', type=Path)
     a = p.parse_args()
     from jsonschema import validate
-    from foundry.service.schema import describe
+    from foundry.rpc.schema import describe
     parameters = json.loads(a.parameters)
     validate(parameters, describe()['parameters'])
     if parameters and a.command not in {'fields', 'ops', 'serve', 'mine', 'import-perpetual', 'benchmark', 'calibrate', 'monitor', 'mirror'}:

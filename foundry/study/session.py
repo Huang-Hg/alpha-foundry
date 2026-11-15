@@ -6,7 +6,6 @@ from dataclasses import dataclass, replace
 from foundry.types import ArraySource
 from foundry.portfolio import admission
 from foundry.portfolio.reweight import optimize
-from foundry.backtest.weights import prepare as prepare_weights
 from foundry.types import ReweightResult
 from foundry.portfolio.library import Library, Member, SEED
 from foundry.portfolio.portfolio import Portfolio
@@ -16,16 +15,14 @@ from foundry.types import (Candidate, CandidateResult, CommitResult, ContextConf
                                     WeightReport, WeightTrials)
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Callable, TypeVar, TYPE_CHECKING, Literal
 from contextlib import AbstractContextManager
 from types import ModuleType
 from foundry.ops.parse import validate
-from foundry.types import ReturnMoments, Array, HostArray, PortfolioView, ResourceStatus, BoolArray, EqualWeight
+from foundry.types import ReturnMoments, Array, HostArray, PortfolioView, ResourceStatus, BoolArray, IntArray, EqualWeight
 from types import MappingProxyType
 from foundry.config import Settings, path
 from foundry.portfolio.reference import Reference
-from foundry.study.pipeline import Pipeline
-from foundry.study.resources import Runtime, configured_study, open_runtime
 from foundry.study.store import FileArrayStore, FileLibraryStore, MemoryLibraryStore
 from foundry.types import CandidateReport, CommitReport, Source, FloatArray, LibraryStore, ArrayStore
 from foundry.types import DataGrid, RegisteredBatch
@@ -35,6 +32,10 @@ from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationRepor
                                    FamilySeed, RegisteredBatch, WeightReport)
 from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport
 
+
+if TYPE_CHECKING:
+    from foundry.study.pipeline import Pipeline
+    from foundry.study.resources import Runtime
 
 Tensor = TypeVar('Tensor', bound=Array)
 
@@ -222,6 +223,7 @@ class Ledger:
         return WeightTrials(measured.feasible, measured.utility, measured.delta)
 
     def reweight(self, context_id: str, *, iterations: int = 3, count: int = 32, seed: int = 1) -> ReweightResult:
+        from foundry.backtest.weights import prepare as prepare_weights
         self.require_context(context_id)
         if len(self.portfolio.library.members) < 2:
             return ReweightResult(self.context, self.context, False, 0)
@@ -401,20 +403,23 @@ class Session:
     def evaluate(self, inputs: CandidateInput) -> EvaluationReport:
         return self._backend.evaluate(self._candidates(inputs), self._context.id)
 
-    def evaluate_device(self, inputs: CandidateInput):
+    def evaluate_device(self, inputs: CandidateInput) -> DeviceBatch:
         """Return resident arrays in an in-process session, without report serialization."""
         return self._backend.evaluate_device(self._candidates(inputs), self._context.id)
 
-    def commit(self, report: EvaluationReport | DiscoveryReport):
+    def commit(self, report: EvaluationReport | DiscoveryReport) -> CommitReport:
         """Submit the reviewed candidates against exactly the reviewed portfolio."""
+        if isinstance(report, DiscoveryReport) and report.delayed:
+            raise ValueError('delayed noise-control reports cannot be submitted; evaluate the actual candidates first')
         candidates = (tuple(row.candidate for row in report.rows) if isinstance(report, DiscoveryReport)
                       else tuple(Candidate(row.id, row.source) for row in report.rows))
         result = self._backend.commit(candidates, report.context.id)
         self._context = result.context
         return result
 
-    def register(self, values, *, kind, ids, grid: DataGrid, producer,
-                 observed_through, fit_through, complexity=None) -> RegisteredBatch:
+    def register(self, values: FloatArray, *, kind: Literal['signals', 'target_weights', 'target_exposure'],
+                 ids: Sequence[str], grid: DataGrid, producer: str, observed_through: IntArray,
+                 fit_through: IntArray, complexity: Sequence[float] | None = None) -> RegisteredBatch:
         """Register model outputs; coordinates and information cutoffs remain explicit."""
         batch = ArrayBatch(kind, tuple(ids), values, grid.snapshot, producer, grid.dates, grid.assets,
                            observed_through, fit_through, None if complexity is None else tuple(complexity))
@@ -442,11 +447,11 @@ class Session:
     def portfolio(self):
         return self._backend.portfolio(self._context.id)
 
-    def trial_weights(self, weights) -> WeightReport:
+    def trial_weights(self, weights: FloatArray | Sequence[Sequence[float]]) -> WeightReport:
         """Evaluate a (trials, members) matrix in portfolio() member order."""
         return self._backend.trial_weights(weights, self._context.id)
 
-    def commit_weights(self, report: WeightReport, index: int):
+    def commit_weights(self, report: WeightReport, index: int) -> WeightCommit:
         """Submit one reviewed weight vector; admission remains authoritative."""
         result = self._backend.commit_weights(report.weights[index], report.context.id)
         self._context = result.context
@@ -630,6 +635,7 @@ class ResidentPort:
 
 def open_session(settings: Settings, portfolio, describe: Callable[[Ledger], dict], discovery: DiscoveryServices,
                  *, initial: PortfolioReport | None = None, persist: bool = True) -> Session:
+    from foundry.study.resources import configured_study, open_runtime
     study = configured_study(settings)
     with ExitStack() as cleanup:
         runtime = open_runtime(settings, study)

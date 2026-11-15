@@ -1,7 +1,8 @@
 """CUDA-accelerated research with one public entry point for people and programs."""
-from foundry.api import benchmark, connect, export, import_perpetual, mine, open, schema, serve, walk_forward
+from foundry.api import benchmark, connect, export, import_perpetual, mine, open, schema, serve
 from foundry.config import (CudaConfig as CUDA, ExprConfig as Operators, MonitorConfig as Monitor,
                             PortfolioConfig as Admission, SearchConfig as Search, SingleConfig as Single)
+from foundry.study.walk_forward import walk_forward
 from foundry.search.objective import Discovery
 from foundry.search.proposer.external import ExternalProposer
 from foundry.search.proposer.gfn import GfnProposer

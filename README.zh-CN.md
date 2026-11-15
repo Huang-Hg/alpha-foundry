@@ -1,129 +1,117 @@
 # Foundry
 
-**CUDA 加速的量化研究与回测框架。**
+**面向研究者、AI Agent 和挖掘程序的 CUDA 加速策略发现与回测基础设施。**
 
-**简体中文** · [English](README.md) · [研究与接口指南](guides/research.zh-CN.md)
+[English](README.md) · [使用指南](guides/research.zh-CN.md) · [数据](data/README.md)
 
-用 GPU 批量计算公式、回测策略并筛选组合，让研究者、AI agent 和挖掘程序更快地探索大量候选。支持自己的行情数据、ML 信号和目标持仓，也提供 CPU 后端。可在 Linux、Windows 的 WSL2 环境运行计算，或从 Windows 原生 Python 连接远端计算服务。
+输入一个公式、一批模型信号或目标持仓，获得可比较的回测结果和明确的组合准入结论。数据上下文、市场规则、批量计算与组合状态都由同一个 Python 接口管理。
 
 ```python
 import foundry
 
-with foundry.open() as session:
-    report = session.evaluate("gt(ma_dist_20,0)")
-    print(report.rows[0].metrics)
+with foundry.open(backend="cuda") as session:
+    report = session.evaluate({
+        "trend": "gt(ma_dist_20,0)",
+        "momentum": "cs_rank(ret_20)",
+    })
+    for row in report.rows:
+        print(row.id, row.metrics, row.decision)
 ```
 
-默认使用附带美股数据和 CUDA。数据、日期与计算参数都可以在调用时调整，会话负责加载数据、准备计算和释放资源。
+示例使用随仓库提供的美股快照。换成自己的数据后，调用方式保持一致。
 
-## 为什么用 Foundry？
+## Foundry 的优势
 
-- **CUDA 加速完整研究流程。** 从公式算子、账户回测到指标和组合权重试探，批量利用 GPU，并复用数据与显存中的计算结果。大量候选可以一起评价，减少逐条回测的等待。
-- **公式、模型、自定义程序都能接入。** 66 个算子覆盖算术、滚动统计、排序和回归；已有 ML 模型或挖掘程序可直接提交信号、目标权重或永续敞口。
-- **自己的数据，自己的研究范围。** 将日线行情整理为约定格式即可接入，自选资产和研究区间。附带数据方便上手，更换供应商无需重写回测数值核。
-- **从单条策略走到组合选择。** 比较候选加入组合后的净收益、风险与权重，明确返回接纳或拒绝的原因，减少另写组合筛选流程的工作。
-- **人和 agent 都能快速调用。** 一个会话提供评价、邻域探索、模型注册、权重试探和提交；本机与远程使用相同操作，并提供机器可读的接口说明和结果。
+- **贯穿研究流程的 CUDA 批处理。** 候选批量评价、账户模拟和组合权重比较可以复用设备驻留数组。批量大小和精度均可调整，也支持 CPU 后端。
+- **在需要的计算中保留 FP32 残差精度。** 双 FP32 算术用于账户和统计计算；数值方案在会话启动时确定，不根据结果触发精度复算。
+- **不限于公式挖掘。** 可以使用 66 个算子的公式词汇，注册 Python/CUDA 或 ML 模型输出，也可以把外部候选生成器接入发现流程。Agent 闭环和人工想法使用同样的候选与报告。
+- **面向时点可得信息的研究。** 历史资格、观测和拟合截止点声明、次根行情执行与因果 walk-forward 折叠共同约束未来数据泄露；数据来源记录明确披露缺失的公告历史。
+- **从想法验证到组合接纳。** 诊断组合缺口、检验候选家族、比较权重方案，再通过统一准入规则提交改进。查询与组合变更是明确分开的操作。
 
-### 完整研究流程的实测速度
+## 四类市场，同一套接口
 
-**500 只美股 × 269 天、4096 条公式：同一 Colab PRO 6000 上，CPU 完整调用用时 97.69 秒，CUDA 用时 2.95 秒，约快 33.1 倍。** 包含会话打开、公式评价、回测指标、组合接纳和资源释放；两端均接纳相同的 28 条候选。
+| 市场 | 执行模型 |
+| --- | --- |
+| 美股 | 历史成分资格、复权价格、下一交易时段执行及成本 |
+| 中国 A 股 | 历史资格、停牌、涨跌停、卖出税费，以及分离的信号与执行价格 |
+| 加密货币现货 | UTC 日线、365 日年化、交易资格与手续费 |
+| USDT 线性永续 | 多空敞口、逐仓保证金、小时资金费事件与强平 |
 
-单条公式两端都约 0.09 秒；64 条公式时 CUDA 约快 6.8 倍。加速收益取决于批量，不把大批量数字套用到每次调用。这是一次预热后测量，使用内存组合；不含安装、原生构建、RPC 和磁盘保存。CPU 使用 2 个 OpenMP 线程，详见[性能、误差与决策一致性报告](guides/benchmarks/current/report.zh-CN.md)。
+永续采用日线决策、小时账户事件递推。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
 
-## 接入自己的行情数据
+## 接入自己的数据
 
-**可以使用自己的数据，不绑定仓库样本或特定供应商。** 对日线股票和加密货币现货，将 CSV、数据库或 API 数据转换为支持的 Parquet 表结构，打开会话时指定数据和研究区间：
+CSV、数据库或数据供应商导出都可以成为行情来源。仓库快照用于示例和验证，并不绑定特定供应商。
 
 ```python
-import foundry
-
 with foundry.open(
     market="us_equity",
-    data_dir="./data/my_us_equity",
-    start="2025-01-01",
+    data_dir="/datasets/my_us_equity",
+    start="2025-07-01",
     end="2025-12-31",
     backend="cuda",
 ) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-美股目录提供日线价格、成交量与复权因子的 `panel.parquet`，以及历史资格区间 `membership.parquet`。A 股另外区分信号价格与执行价格；加密货币现货记录每日资格。数据中应保留研究起点之前的历史，供滚动特征预热。
+美股需要包含 OHLCV 和复权因子的 `panel.parquet`，以及记录历史资格区间的 `membership.parquet`。保留研究起点之前的历史，以便计算滚动特征。其他市场同样有明确的数据契约；永续还需要小时成交价、标记价和资金费记录。详见[文件格式与转换示例](guides/research.zh-CN.md#接入自己的数据)。
 
-**[自有数据接入指南：文件、字段、CSV 转换与来源记录](guides/research.zh-CN.md#接入自己的数据)**
+如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明日期、资产坐标与信息截止点。
 
-仓库同时提供[四类市场的测试快照](data/README.md)，方便初次体验。接入自己的快照后，可以在数据覆盖范围内选择资产与研究区间。
+## 在 Linux 或 Windows 上使用
 
-永续还需要小时成交价、标记价、已结算资金费，以及适配器要求的 manifest 和事件证据；内置 Binance 导入器可以生成这套格式，详见[永续数据接入](guides/research.zh-CN.md#永续数据)。
+本地计算支持 Linux，以及 Windows 下的 WSL2。Windows 原生 Python 可以直接作为远程客户端，无需编译数值扩展。
 
-## 支持哪些市场？
-
-| 市场 | 引擎处理的规则 |
-| --- | --- |
-| 美股 | 日线信号、历史资格、复权价格与交易费用 |
-| A 股 | 历史资格、停牌、涨跌停、次日执行与卖出税费 |
-| 加密货币现货 | UTC 日线、连续交易日历、365 日年化与交易费用 |
-| USDT 线性永续 | 多空敞口、逐仓抵押、已结算资金费、杠杆与小时标记价强平 |
-
-日线收盘决策最早在次日开盘执行。永续采用固定费用/维持保证金参数和小时不利价格触达模型，当前不重建历史风险档位及交易所逐笔执行。详细规则与数据限制见[研究指南](guides/research.zh-CN.md)。
-
-## 快速开始
-
-Linux、Colab 和 Windows 的 WSL2 环境可运行计算。准备 Python 3.12/3.13、Python 开发头文件，以及支持 C++17/OpenMP 的 GCC，在该环境内安装：
+在 Linux/WSL2 中，准备 Python 3.12 或 3.13、对应开发头文件，以及支持 C++17/OpenMP 的 GCC，然后执行：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 bash build.sh
 python -m foundry --help
 ```
 
-调用 `foundry.open(backend="cuda")` 使用 GPU，`backend="cpu"` 使用 CPU；CUDA 还需安装与环境匹配的 CuPy。通过 `session.describe()` 查看当前字段、算子和实际参数。
+CUDA 还需要 NVIDIA 驱动及匹配 CUDA 主版本的 CuPy。使用 `backend="cpu"` 可选择 CPU 计算。
 
-Windows 原生 Python 也可以作为客户端连接已有服务，无需在客户端编译数值核或安装 CUDA。安装 Python 依赖后，用 `foundry.connect(("127.0.0.1", port))` 连接本机或隧道转发的服务端口；端口可通过服务端的 `python -m foundry status` 查询。
-
-## 从评价到组合，用同一个接口
-
-批量评价后，显式提交结果进行组合准入。传入组合文件路径即可保存并在下次打开时恢复；不传路径则在内存中研究：
+连接已经运行的计算服务时，Windows 和 Linux 客户端使用同样的调用：
 
 ```python
-import foundry
+with foundry.connect(("127.0.0.1", port)) as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+```
 
-with foundry.open("production/my_portfolio.json") as session:
-    report = session.evaluate({
-        "trend": "gt(ma_dist_20,0)",
-        "longer_trend": "gt(ma_dist_60,0.05)",
-    })
+`port` 是服务端口，或隧道的本地转发端口。详见[远程会话](guides/research.zh-CN.md#远程会话)。
+
+## 少量接口，覆盖完整流程
+
+| 任务 | 调用 |
+| --- | --- |
+| 评价公式或已注册模型输出 | `session.evaluate(inputs)` |
+| 注册信号或持仓批次 | `session.register(values, ...)` |
+| 诊断当前组合的不足 | `session.diagnose()` |
+| 检验公式邻域或模型参数网格 | `session.judge_family(inputs)` |
+| 查看组合或比较成员权重 | `session.portfolio()` / `session.trial_weights(matrix)` |
+| 提交候选或已审阅的权重方案 | `session.commit(report)` / `session.commit_weights(trials, index)` |
+| 优化并提交满足准入规则的组合权重 | `session.reweight(...)` |
+| 为发现流程评价候选提案 | `foundry.Discovery(session).evaluate(candidates)` |
+| 运行内置或外部提案器 | `foundry.mine(output, ...)` |
+| 因果分折拟合并注册预测 | `foundry.walk_forward(session, fit, predict, ...)` |
+
+`foundry.Candidate`、`ExternalProposer` 和 `CandidateGrid` 让自己的程序直接参与策略发现，无需先转换成公式。完整接入示例见[发现流程指南](guides/research.zh-CN.md#策略发现)。
+
+评价不会修改组合。审阅结果后，可以单独提交：
+
+```python
+with foundry.open("var/runs/my_portfolio.json") as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
     decision = session.commit(report)
     foundry.export(decision, "var/runs/decision.json")
 ```
 
-| 你要做什么 | 调用方式 |
-| --- | --- |
-| 评价一条或一批公式 | `session.evaluate(formulas)` |
-| 注册模型输出 | `session.register(values, ...)` |
-| 探索公式附近的参数与字段 | `session.judge_family(formulas, hypothesis="trend")` |
-| 查看当前组合 | `session.portfolio()` |
-| 比较一批组合权重 | `session.trial_weights(weights)` |
-| 接纳候选或调整权重 | `session.commit(report)` / `session.commit_weights(trials, index)` |
-| 导出结果 | `foundry.export(report, path)` |
-| 启动挖掘任务 | `foundry.mine(output, ...)` |
+## 调用简单，参数仍可微调
 
-接入 ML 模型或外部挖掘器时，用 `session.register` 注册批量输出，然后交给相同的 `evaluate` 与 `commit`：
-
-| 输入 | 用途 |
-| --- | --- |
-| `signals` | 提交模型分数，由 Foundry 转换为持仓 |
-| `target_weights` | 提交自己计算的股票或现货多头权重 |
-| `target_exposure` | 提交永续的有符号名义本金/净值目标敞口 |
-
-`session.grid` 提供日期和资产坐标；你声明模型使用数据和拟合的截止点，会话管理其余研究上下文。远程调用会自动传输数组，不需要安排服务器文件路径。完整示例见[公开 Python 接口](guides/research.zh-CN.md#公开-python-接口)。
-
-AI agent 可调用 `foundry.schema()` 发现机器协议、`session.describe()` 查看当前可用字段和算子。将 `foundry.open()` 换成 `foundry.connect(...)`，即可使用远端服务完成同样的研究操作。
-
-## 简单调用，也能细调
-
-常用参数直接传入，批量、精度、准入和挖掘设置使用参数组；无需配置文件，也不必修改源码：
+市场成本、杠杆、CUDA 批量、准入和挖掘参数都通过调用参数传入，无需维护配置文件。
 
 ```python
 with foundry.open(
@@ -136,6 +124,10 @@ with foundry.open(
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-参数在会话创建时固定，比较不同设置时打开新的会话。全部参数及默认值可以通过 `foundry.schema()` 查询，[使用指南](guides/research.zh-CN.md#公开-python-接口)提供模型接入、权重调整和远程调用示例。
+`foundry.schema()` 为 Agent 提供参数和 RPC schema；`session.describe()` 返回当前研究的字段、算子与实际参数。比较其他设置时，打开新的会话即可。
 
-[测试数据](data/README.md) · [研究与接入指南](guides/research.zh-CN.md) · [性能与精度](guides/benchmarks/README.zh-CN.md)
+## 性能依据
+
+[基准指南](guides/benchmarks/README.md) 收录了性能、数值误差与决策一致性报告。这些报告来自本次架构重构之前，重构后的云端回归尚待执行；历史测量不代表当前版本已经验证的速度。
+
+[研究与程序接入](guides/research.zh-CN.md) · [可用数据](data/README.md) · [基准报告](guides/benchmarks/README.md)

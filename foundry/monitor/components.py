@@ -452,10 +452,11 @@ class CandidatesCard(Table):
 
 # ------------------------------------------------------------------ evaluation service screen
 
-OPS = {'research.family': '假设族', 'research.evaluate': '候选评价', 'research.describe': '接口说明',
+OPS = {'research.judge_family': '假设族', 'research.evaluate': '候选评价', 'research.describe': '接口说明',
        'research.register_batch': '注册数组', 'research.commit': '提交候选',
        'research.portfolio': '组合快照', 'research.trial_weights': '权重试探',
-       'research.commit_weights': '提交权重'}
+       'research.commit_weights': '提交权重', 'research.diagnose': '组合诊断',
+       'research.reweight': '组合重配', 'research.refresh': '刷新快照'}
 VERDICTS = (('成立', GREEN), ('稀疏', AMBER), ('尖峰', VIOLET), ('无效', INK3), ('通过', GREEN), ('未过', INK3))
 
 
@@ -510,7 +511,7 @@ class Job(Component):
                 line.end(f'上一个作业 {ago(since(st, jobs[-1]["t"]))} 前', INK3)
             return [line.cells(width), bar(0, width, ACCENT, BASE)]
         owner, name = who(cur.get('source'))
-        unit = '条候选' if cur['op'] == 'research.family' else '条'
+        unit = '条候选' if cur['op'] == 'research.judge_family' else '条'
         line = Row().add(OPS[cur['op']], ACCENT, True).add(f'  {owner}', INK, True).add(f' / {name}', INK3) \
             .add(f'  ·  {num(cur.get("n"))} {unit}', INK2)
         line.end(f'已用 {clock(since(st, cur["t0"]))}', INK3)

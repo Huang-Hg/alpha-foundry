@@ -7,9 +7,8 @@ import time
 
 from foundry.config import SearchConfig
 from foundry.search.archive import Archive
-from foundry.search.diagnostics import CONTEXT_NAMES, CalibrationPopulation, prepare_calibration
+from foundry.search.diagnostics import CalibrationPopulation, sample_calibration
 from foundry.search.objective import Discovery
-from foundry.search.proposer.random import RandomProposer
 from foundry.study.session import Session
 from foundry.types import (
     CheckpointStore, DiscoveryReport, MiningCheckpoint, MiningEpoch, MiningStatus,
@@ -49,12 +48,7 @@ class MiningDriver:
     def _calibration(self) -> CalibrationPopulation | None:
         if self.cfg.objective != 'single':
             return None
-        port = self.session.resident
-        settings = port.settings
-        proposer = RandomProposer(port.vocabulary, self.cfg.seed, self.cfg.max_tokens,
-            settings.expr.max_cost, self.cfg.max_ts_depth, port.window_caps, len(CONTEXT_NAMES))
-        batch = proposer.sample(settings.single.calibration_sample, 0, [0.] * len(CONTEXT_NAMES))
-        return prepare_calibration(port, tuple(dict.fromkeys(batch.candidates)))
+        return sample_calibration(self.session.resident)
 
     def _discovery(self, calibration: CalibrationPopulation | None) -> Discovery:
         return Discovery(self.session, self.archive, objective=self.cfg.objective,
@@ -147,7 +141,7 @@ class MiningDriver:
                                      elapsed_seconds=time.perf_counter() - started,
                                      device=resources.device, used_mib=resources.used_mib)
                     self._publish(status)
-                report = DiscoveryReport(report.context, report.objective, tuple(rows))
+                report = DiscoveryReport(report.context, report.objective, tuple(rows), report.delayed)
                 timings = replace(timings, evaluation_seconds=time.perf_counter() - eval_start)
                 status = replace(status, phase='training', timings=timings)
                 self._publish(status)

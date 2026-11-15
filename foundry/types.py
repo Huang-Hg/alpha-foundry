@@ -828,6 +828,7 @@ class DiscoveryReport:
     context: ResearchContext
     objective: str
     rows: tuple[DiscoveryRow, ...]
+    delayed: bool = False
 
 
 @dataclass(frozen=True)

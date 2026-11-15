@@ -1,95 +1,133 @@
-# Foundry 研究与接口指南
+# 研究与程序接入
 
 [项目介绍](../README.zh-CN.md) · [English](research.md)
 
-面向时点一致数据的公式、模型信号与目标敞口研究和回测。支持美股、A 股、加密货币日线现货与 USDT 线性逐仓永续。A 股保留涨跌停、停牌、卖出税费和次日执行回归。Linux CPU/CUDA 执行明确的市场规格；股票、现货账户及 CUDA 统计使用双 FP32；数值策略在评价前固定，不再按结果触发精度复算。
-
-## 接入自己的数据
-
-仓库附带的是可替换的研究样本。向 foundry.open() 传入 market、data_dir、start 和 end 即可选择自己的日线数据。将 CSV、数据库或 API 导出数据转换为下列格式，不要求供应商账号或配置文件。
-
-### 日线文件与字段
-
-各市场的 `panel.parquet` 都采用长表，每行包含 `date`、`symbol`、`open`、`high`、`low`、`close`、`volume`。`date` 存为无时区、午夜的 datetime，表示交易所交易日，现货使用 UTC 日期；`symbol` 存为字符串，数值列使用数值类型。A 股代码保留前导零。
-
-| 市场 | 额外行情字段 | 其他必需文件 |
-| --- | --- | --- |
-| `us_equity` | `adj_factor` | `membership.parquet` |
-| `a_share` | `published`、`exec_open`、`exec_close` | `membership.parquet`、`manifest.json` |
-| `crypto_spot` | 布尔类型 `eligible` | `manifest.json` |
-
-- **美股：** 引擎将 OHLC 乘以 `adj_factor`。提供原始 OHLC 与对应因子，或已复权 OHLC 与恒为 1 的因子，避免重复复权；记录复权方法及历史版本缺口。
-- **A 股：** OHLCV 为生成信号的原始价格，`exec_open`、`exec_close` 为累计历史复权执行价。`published` 是交易日日期，读取器仅使用该行情日收盘前已发布的最新版本，迟到修订不会替换旧决策的行情；它表达日线可用时间，不是盘中发布时钟。
-- **资格：** 股票的 `membership.parquet` 包含 `symbol`、`start`、`end`，区间左闭右开，空 `end` 表示尚未退出。读取器假定这些区间在相应收盘时已知，不会自动重建缺失公告历史。保留资格区间外的报价，以便已有持仓继续估值。现货在每日行情行记录 `eligible`，缺失资格视为不合格。
-- **历史与缺口：** 保留研究起点前的历史供滚动窗口使用；除 A 股明确的发布版本外，每个日期/资产只存一条观测。缺失报价保留缺失，不用未来报价填补过去，也不用今天的成分名单反推历史。
-
-### 示例：转换自己的美股 CSV
-
-准备包含上述美股字段的 `ohlcv.csv` 和包含资格字段的 `membership.csv`，下面创建一个新的数据目录：
-
-```python
-from pathlib import Path
-import pandas as pd
-
-directory = Path("data/my_us_equity")
-directory.mkdir(parents=True)
-panel = pd.read_csv("ohlcv.csv", parse_dates=["date"], dtype={"symbol": str})
-members = pd.read_csv("membership.csv", parse_dates=["start", "end"],
-                      dtype={"symbol": str})
-panel.to_parquet(directory / "panel.parquet", index=False)
-members.to_parquet(directory / "membership.parquet", index=False)
-```
-
-使用 foundry.open(market="us_equity", data_dir="./data/my_us_equity", start=..., end=...)，日期设在数据覆盖区间内。session.describe() 列出当前公式字段；自己的数据与附带快照使用相同公开接口。
-
-### 来源记录与自定义特征
-
-A 股和现货的 manifest 必须包含 `DataContract` 的七个字段：`schema`、`source`、`retrieved_at`、`features`、`execution_prices`、`publication`、`membership`。可参考附带清单的格式，但应填写自己的来源、价格口径和真实可用时间限制，不复制 PIT 声明或虚构发布时间。
-
-当前美股文件读取器报告的是固定的遗留数据契约，仅增加自定义 `manifest.json` 不会改变报告中的来源说明。应随数据保留真实来源记录；要将自定义美股来源暴露到研究契约，需要修改数据适配器。数值快照身份仍由已加载面板与执行规格生成。
-
-额外的 Parquet 列不会自动成为公式字段。自己计算的模型输出通过 `ArrayBatch` 接入；需要新增公式字段时，明确扩展数据适配器与市场字段定义。相关边界是 [`foundry/market/data.py`](../foundry/market/data.py)、[`MarketData`](../foundry/types.py) 和市场的 `compile` 方法，更换数据来源无需重写回测数值核。
-
-### 永续数据
-
-当前读取器使用 Binance 风格的小时数据契约：`trade.parquet`、`mark.parquet`、`funding.parquet` 和 `manifest.json`，包含文件摘要、有序合约列表，以及需要时的资金费周期变更证据。附带的三合约和 64 合约快照可作为格式参考；仅有日线 OHLC 不足以模拟资金费与强平。
-
-调用 foundry.import_perpetual(output, symbols="BTCUSDT ETHUSDT SOLUSDT", history_start="2025-01-01", start="2025-07-01", end="2025-12-31") 可明确指定采集参数。下面的 CLI 使用默认合约和日期：
-
-```bash
-python -m foundry import-perpetual data/crypto_perpetual_new
-```
-
-导入器保留来源记录并核验归档校验和。随后用 foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_new", start=..., end=...) 研究。已有快照的合约顺序由 manifest 决定，symbols 控制新导入。自有来源须满足经过验证的事件契约，或明确实现适配器和执行规格。详见 [market/perpetual.py](../foundry/market/perpetual.py) 和[加密货币执行](#加密货币执行)。
+Foundry 用同一个会话评价公式、模型信号和目标持仓。人工研究、AI Agent、公式挖掘器与外部模型搜索共用市场规则和组合准入结论。
 
 ## 公开 Python 接口
-
-常用操作只需 `import foundry`。`foundry.open(...)` 创建本机计算会话，`foundry.connect((host, port))` 连接已有服务；两者提供相同的报告、模型注册、邻域探索和组合操作。Windows 原生 Python 可作为远程客户端，本机数值计算使用 WSL2；Linux/Colab 可直接运行。导入包不加载行情或初始化 GPU。
 
 ```python
 import foundry
 
 with foundry.open(
-    "production/my_portfolio.json",
+    "var/runs/my_portfolio.json",
     market="us_equity", backend="cuda",
     start="2025-07-01", end="2026-06-30",
     cuda=foundry.CUDA(candidate_batch=64),
     admission=foundry.Admission(min_sharpe_gain=0.02),
 ) as session:
     report = session.evaluate({"trend": "gt(ma_dist_20,0)"})
+    for row in report.rows:
+        print(row.id, row.metrics, row.decision)
     decision = session.commit(report)
     foundry.export(decision, "var/runs/decision.json")
 ```
 
-`evaluate` 接收公式字符串、公式序列或 `{候选 ID: 公式}`。`report.rows` 的每行含 `metrics`、`risk`、`decision` 和 ID。`commit(report)` 按报告对应的组合版本重新判断准入；评价本身不修改组合。调用者不必构造存储器、快照或版本令牌。
+`evaluate` 接受公式字符串、公式序列、ID 到公式的映射、`Candidate`、候选序列或已注册批次。报告包含指标、账户风险和结构化准入结论；某个候选被拒绝不会中断整个批次。
 
-参数直接传入，没有 INI 或隐式配置文件。常用项为 `market`、`backend`、`data_dir`、`start`、`end`；费用与杠杆使用 `cost_rate`、`commission`、`stamp_tax_sell`、`leverage`、`maintenance_rate` 等对应市场参数。高级参数组为 `foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single`、`Monitor`，默认值只在 `foundry/config.py` 维护。`foundry.schema()` 返回参数 schema 与各市场默认值，`session.describe()["parameters"]` 返回实际参数。
+| 操作 | 用途 | 对组合的影响 |
+| --- | --- | --- |
+| `evaluate(inputs)` | 评价候选与准入方案 | 只读 |
+| `diagnose()` | 描述组合缺口与发现上下文 | 只读 |
+| `judge_family(inputs, hypothesis="")` | 检验邻域或显式参数网格 | 只读 |
+| `portfolio()` | 获取成员来源、权重、指标与基线状态 | 只读 |
+| `trial_weights(matrix)` | 比较组合成员权重方案 | 只读 |
+| `commit(report)` | 按报告顺序提交候选 | 通过准入后原子发布 |
+| `commit_weights(trials, index)` | 提交已审阅的权重方案 | 通过准入后原子发布 |
+| `reweight(iterations=3, count=32, seed=1)` | 搜索并提交满足准入规则的权重改进 | 可能发布新组合 |
 
-参数对象不可变，改变设置需打开新会话。`foundry.mine(output, **parameters)`、`foundry.serve(portfolio, **parameters)` 使用同一套参数。CLI 接受相同 schema 的 JSON，例如 `python -m foundry --parameters '{"market":"a_share","backend":"cuda"}' fields`，无需创建配置文件。
+权重试验的形状为 `(试验数, 成员数)`，成员顺序与 `portfolio()` 一致。权重必须有限且非负，全零表示现金。这些是组合成员权重，不是逐资产目标持仓。
 
-### 外部模型与目标持仓
+省略组合路径时，组合库保存在内存中。注册数组仍写入 `Admission.artifact_dir`，默认是 `var/candidates`。传入组合路径后启用持久化和原子发布。退出 `with` 释放本地计算资源；关闭远程客户端不会停止共享服务。
 
-`session.grid` 给出有序日期、资产及对应数据身份。下面用无拟合程序的零信号演示形状；实际接入时替换为自己的输出和真实信息截止点：
+报告绑定研究快照和组合版本。其他写入者改变上下文后，旧报告会触发 `ContextConflict`；显式调用 `session.refresh()` 后重新评价，不会自动重试旧决策。
+
+四个 `Search.violation_scale_*` 参数会影响被拒绝权重试验的数值报告，因此参与快照身份；搜索轮数和监控设置不改变该因果身份。
+
+### 参数与自描述
+
+`market`、`backend`、`data_dir`、`start`、`end` 和市场费用直接传入。高级参数组包括 `foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single` 与 `Monitor`。参数在会话打开时固定；比较其他设置时另开会话。
+
+`foundry.schema()` 无需打开研究即可返回参数 schema、市场默认值与 RPC 契约。`session.describe()` 返回当前字段、66 个算子和实际参数。`foundry.mine(...)` 与 `foundry.serve(...)` 使用相同参数组；向挖掘器传入已有会话时，不再重复传参数。
+
+唯一 CLI 是 `python -m foundry`，例如：
+
+```bash
+python -m foundry --parameters '{"market":"a_share","backend":"cuda"}' fields
+python -m foundry schema var/runs/schema.json
+```
+
+不需要 INI 文件或环境变量覆盖。参数中的相对路径基于仓库根目录解析，也可以传绝对路径。
+
+## 接入自己的数据
+
+仓库快照可以替换。把 CSV、数据库或 API 导出转换为以下文件，再通过 `foundry.open(data_dir=..., market=..., start=..., end=...)` 选择数据。
+
+### 日线文件
+
+`panel.parquet` 采用长表，每行包含 `date`、`symbol`、`open`、`high`、`low`、`close` 和 `volume`。日期使用不带时区的午夜时间表示交易所交易日；现货使用 UTC 日历日。证券代码保存为字符串，保留 A 股代码的前导零。
+
+| 市场 | 额外行情列 | 其他必需文件 |
+| --- | --- | --- |
+| `us_equity` | `adj_factor` | `membership.parquet` |
+| `a_share` | `published`、`exec_open`、`exec_close` | `membership.parquet`、`manifest.json` |
+| `crypto_spot` | 布尔值 `eligible` | `manifest.json` |
+
+- **美股：** OHLC 乘以 `adj_factor`，成交量不调整。可提供原始价格与因子，或已复权价格与全 1 因子，避免重复复权。记录复权方法及缺失的历史版本。
+- **A 股：** 原始 OHLCV 产生信号，`exec_open` 和 `exec_close` 提供历史复权执行价格。读取器按每根行情收盘时已发布的最新版本冻结该根行情；后续修订不替换早期决策使用的记录。`published` 是交易日口径，不是日内公告时钟。
+- **股票资格：** `membership.parquet` 包含 `symbol`、`start`、`end`；起点包含、终点不包含，空终点表示仍有效。假定这些区间在相应收盘时已知。资格区间外也应保留报价，以便已有持仓继续估值。
+- **现货资格：** 每个日线行声明，缺失资格视为 false。
+- **历史长度：** 保留研究起点之前的数据以计算滚动特征。除 A 股显式发布版本外，每个日期/资产只有一行。缺失报价保持缺失，不使用当前成分倒推历史资格。
+
+CSV 转换示例：
+
+```python
+from pathlib import Path
+import pandas as pd
+
+folder = Path("/datasets/my_us_equity")
+folder.mkdir(parents=True)
+panel = pd.read_csv("ohlcv.csv", parse_dates=["date"], dtype={"symbol": str})
+members = pd.read_csv("membership.csv", parse_dates=["start", "end"],
+                      dtype={"symbol": str})
+panel.to_parquet(folder / "panel.parquet", index=False)
+members.to_parquet(folder / "membership.parquet", index=False)
+```
+
+随后在数据覆盖范围内选择研究日期：
+
+```python
+with foundry.open(market="us_equity", data_dir="/datasets/my_us_equity",
+                  start="2025-07-01", end="2025-12-31") as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+```
+
+### 来源记录与额外特征
+
+A 股和现货 manifest 包含 `DataContract` 的七个字段：`schema`、`source`、`retrieved_at`、`features`、`execution_prices`、`publication`、`membership`。仓库 manifest 可作为格式参考，但应填写自己的实际来源与可得性限制；缺少公告时间或修订版本必须如实披露。
+
+当前美股读取器使用固定的历史来源契约，仅新增 manifest 不会替换报告中的来源说明。请在数据目录旁保留实际来源记录；接入自定义美股来源契约需要扩展读取器。数值快照仍绑定实际加载的数据和执行规格。
+
+新增 Parquet 列不会自动成为公式字段。模型输出可直接注册；若要扩展行情字段，在 [`market/data.py`](../foundry/market/data.py) 及对应市场编译器中接入，无需改写回测内核。历史 Quantiacs 数据仍可使用，不依赖已经退役的平台集成。
+
+### 永续数据
+
+小时数据契约由 `trade.parquet`、`mark.parquet`、`funding.parquet` 和 `manifest.json` 组成。manifest 记录资产顺序、工件哈希，以及需要时的资金费间隔变更证据。仅有日线 OHLC 无法还原资金费和强平。
+
+```python
+foundry.import_perpetual(
+    "/datasets/my_perpetual",
+    symbols="BTCUSDT ETHUSDT SOLUSDT",
+    history_start="2025-01-01",
+    start="2025-07-01", end="2025-12-31",
+)
+```
+
+导入器获取公开 USD-M 归档、验证校验和并保存来源记录。读取时使用 `market="crypto_perpetual"`、对应目录与日期。已有数据的资产顺序由 manifest 决定；`symbols` 用于新数据采集。其他供应商需满足 [`market/perpetual.py`](../foundry/market/perpetual.py) 的显式事件契约。
+
+## 外部模型与目标持仓
+
+`session.grid` 提供日期、资产顺序和快照身份。数组形状为 `(B,T,S)`，分别表示候选、日期、资产。下面注册三个零信号候选以演示接口；实际接入时替换为模型输出和真实信息截止点。
 
 ```python
 import numpy as np
@@ -98,123 +136,151 @@ import foundry
 with foundry.open() as session:
     grid = session.grid
     days, assets = len(grid.dates), len(grid.assets)
-    values = np.zeros((1, days, assets), dtype=np.float32)
-    unused = np.full((1, days), -1, dtype=np.int64)
-    candidates = session.register(
-        values, kind="signals", ids=("model-v1",), grid=grid,
-        producer="external-program-v1",
+    values = np.zeros((3, days, assets), dtype=np.float32)
+    unused = np.full((3, days), -1, dtype=np.int64)
+    registered = session.register(
+        values, kind="signals", ids=("model-small", "model-base", "model-large"),
+        grid=grid, producer="external-program-v1",
         observed_through=unused, fit_through=unused,
+        complexity=(0.2, 0.5, 0.8),
     )
-    report = session.evaluate(candidates)
+    report = session.evaluate(registered)
 ```
 
-`kind` 可选 `signals`、`target_weights` 或 `target_exposure`，单位与市场约束见[候选接口](#候选接口)。两个截止点是 `(候选数, 日期数)` 的整数行号，必须如实声明使用的信息且不超过决策行；`-1` 表示未使用观测或拟合。远程会话自动上传 NumPy 数组，无需服务器路径；进程内会话还可接收 CuPy 数组。
+| 类型 | 含义 | 约束 |
+| --- | --- | --- |
+| `signals` | 由 Foundry 转换为持仓的评分 | 浮点值；允许 NaN 表示缺失信号 |
+| `target_weights` | 股票或现货的多头资产权重 | 有限、非负、总敞口不超过 1，不具资格资产为零 |
+| `target_exposure` | 永续有符号名义金额/权益比例 | 有限、总绝对敞口不超过配置杠杆，不具资格资产为零 |
 
-### 组合操作与生命周期
+数值必须是浮点数组。观测和拟合截止点为 `(B,T)` 整数数组，使用研究网格行号且不晚于决策行 `t`；`-1` 表示未使用观测或拟合。已训练模型不能为了通过检查而伪报 `-1`。日线收盘决策最早在下一开盘执行。
 
-- `session.judge_family(formulas, hypothesis="trend")` 探索公式的参数和字段邻域。
-- `session.portfolio()` 返回成员、权重与指标，`baseline` 标识新研究使用的等权比较基准。
-- `session.trial_weights(matrix)` 评价 `(试探数, 成员数)` 的非负有限构件权重，列顺序与 `portfolio()` 一致。它们不是逐资产目标持仓。
-- `session.commit_weights(trials, index)` 提交选定试探，仍执行统一准入。全零权重表示现金，不恢复为等权仓位。
-- `foundry.export(report, path)` 导出 JSON 并创建父目录。
+`producer` 标识生成程序。可选的逐候选 `complexity` 范围为 `[0,1]`，仅影响发现流程的软评分，不改变硬准入。注册后返回绑定内容身份的候选并保存工件。远程注册自动传输 NumPy 数组，无需服务器路径；本地也支持 CuPy。
 
-省略组合路径时只在内存中研究；提供路径后原子保存组合，外部数组存于 `Admission.artifact_dir`。过时报告明确拒绝，不自动重试；其他会话更新组合后，调用 `session.refresh()` 读取新状态并重新评价。退出 `with` 释放本机资源；关闭远程客户端不停止共享服务。进程内挖掘器可调用 `session.evaluate_device(inputs)` 保留设备数组，远程使用结构化报告。
+## 策略发现
 
-## 模块边界
+### 为 Agent 或自定义循环评分
 
-采用模块化单体与端口适配器，按下表划分职责。[架构检查](../validation/test_architecture.py) 检查依赖无环、禁止依赖及 import 副作用。
+```python
+with foundry.open() as session:
+    candidates = (
+        foundry.Candidate("trend", foundry.Formula("gt(ma_dist_20,0)")),
+        foundry.Candidate("momentum", foundry.Formula("cs_rank(ret_20)")),
+    )
+    print(session.diagnose())
+    discovery = foundry.Discovery(session)
+    report = discovery.evaluate(candidates)
+    for row in report.rows:
+        print(row.candidate.id, row.log_reward, row.decision)
+    decision = session.commit(report)
+```
 
-| 所有者 | 职责 |
-| --- | --- |
-| types、config | 研究区间、快照、后端能力、类型化来源/结果与存储端口 |
-| numeric、ops | 共用统计口径、算子契约、公式解析与 CPU/CUDA 实现 |
-| market | 数据读取、PIT 面板与不可变交易规则编译 |
-| backtest | 基于明确执行数组的现金账户与逐仓永续小时事件账户 |
-| portfolio | 纯张量输入的持仓转换、硬准入与组合配权求解器 |
-| study | 资源生命周期、有界缓存、原子存储与会话评价/提交用例 |
-| search、CLI/RPC | 提案或传输，共用研究决策 |
-| monitor | 只读取发布状态，不持有行情、引擎或 GPU |
+已注册批次的 `.candidates` 可放在同一位置。Discovery 将组合缺口、行为指纹、相关性和新颖度用于目标评分。奖励指导下一步生成什么候选，组合硬准入仍是最终依据。组合变化后重新创建 `Discovery`，使其参照上下文保持一致。
 
-公开入口将显式参数一次解析为不可变设置。导入不读取行情、探测 GPU 或分配资源；会话拥有并释放计算资源，领域依赖由参数传入。
+`diagnose()` 只读，但计算量取决于目标。使用 `Search(objective="single")` 时，它会评价共用的确定性校准候选群，并返回校准门槛；`Single.calibration_sample` 默认是 8192。组合目标不执行这项校准。
 
-Study 固定研究区间；快照进一步绑定数据、执行规格、数值参数与显式计算语义版本。查询结果携带组合版本。评价不写组合，commit 是独立的 compare-and-swap 命令，一次原子发布替换结果。设备驻留接口与 CLI/RPC 序列化共用类型化用例。可导出 JSON Schema 是机器契约，`python -m foundry --help` 是命令清单。
+噪声控制报告带有 `delayed=True`，描述的是延迟候选行为，不能直接传给 `session.commit`。请先通过 `session.evaluate(...)` 无延迟评价实际候选，再审阅并提交新报告。
 
-旧请求、组合和 checkpoint 协议明确拒绝，不保留兼容层，不自动重录基线。Quantiacs 专属源码、提交 notebook、配置与测试已从当前工程移除；历史数据（包括 data/qnt_crypto）、来源 manifest 和私有生产工件继续保留。保留数据不代表其具备完整 PIT 来源证明。
+### 接入外部提案器
 
-## 候选接口
+```python
+with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
+    batch = (
+        foundry.Candidate("trend", foundry.Formula("gt(ma_dist_20,0)")),
+        foundry.Candidate("momentum", foundry.Formula("cs_rank(ret_20)")),
+    )
+    proposer = foundry.ExternalProposer([batch])
+    status = foundry.mine("var/runs/external-search", session=session,
+                          proposers=(proposer,))
+```
 
-`research-v13` 使用 `Candidate(id, source)`。来源明确区分 `Formula(expression)`、`ArraySource(kind, digest, snapshot, producer, complexity)` 和组合基准 `EqualWeight()`。公式挖掘器与邻域探索构造 `Formula`；模型输出通过 `session.register(batch)` 注册，然后共用评价、权重试探、准入和提交规则。
+`ExternalProposer` 接受有限的候选批次序列或已注册批次序列。可选反馈回调接收提案和评分，用于更新外部模型。回调在提案工作线程运行，不得使用会话持有的 GPU 资源；评价完成后，CPU 策略训练可与 GPU 提交和重配重叠，候选采样本身仍串行执行。驱动器保存候选身份、提案器和档案状态，支持显式续跑。
 
-公开会话自动装配运行环境与存储。`evaluate` 返回结构化报告，进程内 `evaluate_device` 保留设备持仓和收益。查询不修改组合，`commit` 原子发布完整后继组合。注册复制输入，返回后生产者可复用缓冲区；重新打开组合时验证数组工件和截止点。
+不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
 
-`foundry.types.ArrayBatch` 包含 `kind`、`ids`、`values`、`snapshot`、`producer`、`dates`、`assets`、`observed_through`、`fit_through`。`values` 是 NumPy/CuPy 的 `float32` 或 `float64 (B,T,S)`，必须覆盖研究快照完整且有序的日期/资产网格。股票与现货的 `signals` 与公式一样经过 `clip(0,1)/当日可持有资产数`，NaN 表示缺失。`target_weights` 是有限、非负的组合比例；无资格资产权重必须为零，单日总敞口不得超过 1。仅对 `Admission.weight_sum_atol` 内的微小超额归一化到 1，更大超额明确拒绝。目标权重继续服从市场执行规则和次日开盘时序。
+### 不限于公式的稳健性检验
 
-两个截止点数组均为 `int64 (B,T)`，使用包含端点的面板行号，范围为 `-1` 到对应决策行；`-1` 表示未使用观测或拟合模型。引擎拒绝未来截止点、错误坐标和旧快照。时间信息来自生产者声明，不能证明外部训练或特征计算没有泄露未来；`producer` 应标识模型/程序版本。`session.describe()` 发布完整坐标、快照及这些限制：batch 的 `snapshot` 使用 `context.snapshot.id`，查询/命令的版本令牌使用 `context.id`。
+公式可调用 `session.judge_family({"trend": "gt(ma_dist_20,0)"}, hypothesis="trend")`，由算子注册表派生参数与字段邻域。
 
-注册时向宿主传输一次数据，用于内容摘要和保存；最近输入的设备缓存最多保留 `candidate_batch` 个候选。缓存命中后评价继续使用设备数组，逐出的输入从已验证工件重载。CUDA 生产者须在提交前让输入就绪于 runtime 当前 stream；注册会等自有复制完成再返回。外部数组的噪声对照延迟只依赖生产者身份与输入类型，不依赖包含未来数值的全序列摘要。
+外部模型参数扫描使用显式候选网格。假设同一打开的会话内已注册三个模型变体：
 
-远程会话自动上传 NumPy bundle。`research.register_batch` 请求携带 `{context, bytes}`，JSON 换行后紧跟指定长度的二进制载荷，单次上限 1 GiB；加载使用 `allow_pickle=False`，不接受服务器路径。返回类型与进程内一致。`python -m foundry schema OUTPUT` 导出请求、结果和参数 schema。
+```python
+variants = registered.candidates
+family = foundry.CandidateGrid(
+    seed=variants[1], variants=variants,
+    parameter_coords=((0,), (1,), (2,)),
+    hypothesis="Performance persists across adjacent model sizes",
+)
+result = session.judge_family(family)
+```
+
+种子必须在变体中恰好出现一次。坐标是维度一致、互不重复的整数阶梯位置；完整邻域才能使高原和双生子诊断有意义。家族结果用于研究，不发布组合，也不保证样本外收益。
+
+## 因果 walk-forward 模型
+
+`foundry.walk_forward` 为拟合和预测回调提供独立持有的特征前缀。拟合看不到该折截止点之后的行；预测只收到截至当前决策行的前缀，以及对应资格掩码。下面使用仓库美股研究区间，拟合每个资产的参考水平：
+
+```python
+with foundry.open(start="2025-07-01", end="2026-06-30") as session:
+    xp = session.resident.xp
+    dates = session.grid.dates
+    first = next(i for i, date in enumerate(dates) if date >= "2025-07-01")
+    middle = (first + len(dates)) // 2
+    folds = (
+        foundry.Fold(0, first - 1, first, middle),
+        foundry.Fold(0, middle - 1, middle, len(dates)),
+    )
+
+    def fit(view):
+        return xp.nanmean(view.features["ma_dist_20"], axis=0)
+
+    def predict(model, view):
+        score = view.features["ma_dist_20"][-1] - model
+        return xp.where(view.eligibility[-1], score, xp.nan)[None, :]
+
+    result = foundry.walk_forward(
+        session, fit, predict, folds=folds, ids=("fold-model",),
+        kind="signals", producer="prefix-model-v1", features=("ma_dist_20",),
+    )
+    report = session.evaluate(result.registered)
+    print(result.sign_consistency)
+```
+
+`Fold(fit_start, fit_through, predict_start, predict_stop)` 使用研究网格绝对行号；训练包含 `fit_through`，预测不包含 `predict_stop`。拟合必须早于预测，预测折按顺序排列且不得重叠，每折至少包含一次可执行决策。扩展窗口保持 `fit_start` 不变，滚动窗口则显式推进起点；研究起点前需有足够训练历史。
+
+每次预测用当前后端的数组库返回 `(B,S)`，资产顺序与研究一致。`FoldView` 提供 `start`、不包含的 `stop`、`dates`、`assets`、`features` 和 `eligibility`。输出执行与外部数组相同的注册检查，非法敞口直接拒绝，不自动遮盖。执行器记录观测行 `t` 和该折拟合截止点；无法约束回调私自读取未来数据，或使用已在未来数据上训练的模型。
+
+每折净收益从首个可执行决策归属到下一模型开始执行；最后一折归属到研究结束。空档期的退出成本、资金费和无法退出的持仓延续计入前一模型。`sign_consistency` 是正收益折数与负收益折数中较大者除以总折数；零收益或无效折不计入分子。持续亏损模型也可能得到 1，因此要同时看各折符号和收益。该操作注册并评价预测，不提交候选。
+
+## 远程会话
+
+在 Linux/WSL2 计算主机运行 `python -m foundry serve`，用 `python -m foundry status` 查看地址。Windows 原生 Python 或 Linux 客户端连接服务地址，或隧道转发到本地的端口：
+
+```python
+with foundry.connect(("127.0.0.1", port)) as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+    diagnostics = session.diagnose()
+    family = session.judge_family("gt(ma_dist_20,0)")
+```
+
+公式评价、数组注册、家族检验、诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
+
+[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v13`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
+
+输入契约错误抛出 `ValueError` 或 `TypeError`，旧上下文抛出 `ContextConflict`，资源或实现失败直接传播；候选业务拒绝保留为结构化结果。机器调用请读取 `foundry.schema()`，不要拼接未公开的协议字段。
 
 ## 加密货币执行
 
-`crypto_spot` 使用 UTC 日线、7×24 连续日历与 365 日年化。保留 Quantiacs 历史报价及资格，缺失的发布时间/修订版本通过数据契约公开。缺失报价时冻结已有持仓，不从未来末值填补过去。
+现货使用 UTC 日线和 365 日年化。资格与报价分离；交易价格缺失可能阻止成交，使已有持仓继续保留。配置费用作用于实际执行的变化。
 
-`crypto_perpetual` 使用 USDT 线性合约和逐仓保证金。日线收盘信号在下一 UTC 日开盘调仓；每小时依次处理标记价跳空、旧仓资金费、计划调仓、标记价高低点触发强平、收盘估值。仅在每日调仓时重新分配逐仓抵押，空闲现金不自动补仓。`target_exposure` 接收有符号的名义本金/净值比，总绝对敞口上限为配置杠杆；公式与 `signals` 截到 [-1,1] 后除以合资格资产数，不隐式放大到最大杠杆。
+永续模拟 USDT 线性合约和逐仓抵押。日线目标是有符号名义金额/账户权益，总绝对敞口受配置杠杆限制；信号不会自动使用最大杠杆。小时事件依次处理标记价跳空、已有持仓资金费、日线再平衡、不利高低价强平检查和收盘标记。资金费按实际事件时间映射到小时网格；公开归档缺少结算标记价时，导入器会明确记录标记开盘价代理。
 
-`market="crypto_perpetual"` 通过公开参数选择数据和执行规则；唯一 CLI 的导入命令下载并核验 Binance 成交 K 线、标记价 K 线和已结算资金费归档 SHA256。初始固定 BTC/ETH/SOL 集合使用 2025 数据。这是固定维持保证金/费用、小时不利价格触达的研究模型，未重建历史风险档位、VIP 费用、订单簿、ADL 或 tick 路径。保留真实资金费时间戳；执行映射到所属小时，归档缺少结算标记价时明确使用该小时开盘标记价。发现接口公开上述限制，不声称交易所精确仿真或完整供应商 PIT。
+当前使用固定维持保证金和费率，不还原历史档位、VIP 费用、ADL、订单簿或逐 tick 日内成交路径。`risk` 报告资金费、交易费用、强平费用、强平次数、破产状态和账户权益，单位以 schema 描述为准。
 
-类型化模拟结果包含每日资金费、交易/强平费用、逐仓损失封顶调整、强平阶段位图、破产与终值。报告的现金流和次数按研究窗口汇总。损失封顶调整仅为本模型会计量，不冒充交易所保险赔付；行情不利变化后的实际最大杠杆可能高于入场上限。永续账户在执行前明确规划为原生精度，CUDA 统计与准入矩计算使用双 FP32。
+## 数值与性能
 
-永续 CUDA 采用每个 warp 一个账户、lane 分担资产的实现；小时资金费、强平阶段和每日抵押分配保持时间顺序。调仓归约按资产并行。双 FP32 账户在强平阈值相邻浮点数上出现决策变化，因此账户保留原生算术，但生产保留条件必须满足下述查询＋提交的实测开销预算。
+CUDA 批量和精度显式配置。双 FP32 用两个分量在支持的账户与统计路径保留残差精度。数值计划在会话启动时固定，不根据评价结果提高精度复算。小规模永续批次可通过 `CUDA.perpetual_host_cells` 在执行前规划为 CPU，不会因运行错误静默降级。
 
-小规模永续账户在启动前按 `CUDA.perpetual_host_cells` 与完整 `B*T*S` 规模明确调度到 CPU，再返回 runtime 的设备数组。发现接口公开阈值。这不是运行错误回退，也不会根据结果重新执行另一种精度。提交按输入顺序处理；能装入一个设备批次的请求保持完整并行，多批次请求在连续拒绝时扩大预计算范围，出现接纳时按本次接纳距离缩小范围，避免对旧组合版本多算大段后续候选，最终仍一次原子发布。
+通过 `session.describe()` 及报告的精度/后端字段查看实际计划。[基准指南](benchmarks/README.md) 中的保存报告早于本次架构重构，当前版本的云端数值和速度验证尚待执行；不能据此推断当前代码已经通过加速或决策一致性验收。
 
-64 合约实验中的 BF16 Tensor Core 资金费前缀未带来端到端收益，因此不进入生产。旧前缀内核和标量精度复算分支已删除。资金费结算间隔变化须有日程证据，缺失事件继续明确报错。公式保留滚动标准差、斜率、相关性和总体标准化的统一语义；病态组合仍可能放大微小后端数学差异，样本准入一致不等于任意公式一致性证明。
-
-## PIT 与精度
-
-共享指标中的 `turnover`、`exposure`、`max_single_weight` 和 `margin_bps` 分母描述每日目标持仓，不等同于永续实际成交本金。实际费用和账户杠杆见独立风险报告；日内强平时间标识所在小时，不能当作精确触碰时刻。
-
-先截断源数据，再派生特征。收盘决策最早在次日开盘生效。横截面只包含当时可见且有资格的资产。报价历史与成分区间分离；迟到发布与修订不能覆盖旧决策行；forward 标签不进入特征面板。
-
-A 股数据保留 365 只历史成分的完整报价，资格另按区间应用。信号使用原始 OHLCV，执行使用复权价格。manifest 明示缺少历史修订版本和原始成分公告时间戳。美股数据限制同样通过发现接口暴露。前缀与未来污染测试证明计算因果性，不代表完整供应商 PIT 认证，也不是样本外收益证据。
-
-执行规格包含开盘可交易资格、成本、方向冻结与持仓费用，内核不凭股票代码猜交易规则。CPU/CUDA 保留相同完整资产范围与指标语义。
-
-精度开销按**完整查询＋有序提交 ≤ 单 FP32 对照的 1.5 倍**验收：同一设备、候选、顺序和市场规则。加载、注册、传输/JIT 单独报告，不用它们稀释比例；内核局部加速不能代替完整用例验收。原生算术只能作为经实测的固定策略保留，不再作为低精度结果的第二次复算。资格只覆盖实测条件；下方旧的 2 倍预算结果不能证明满足新预算。
-
-查询、权重试探与提交共用研究的固定数值策略。`mixed` / `paired` 选择股票和现货账户算术；永续账户及 CPU 显式采用 `native`，API 公布有效策略，不再支持逐次查询覆盖精度，也不再报告精度复算计数。数组交换边界仍可使用宽类型，这既不表示全链宽精度，也不能宣称全链 FP32。
-
-CUDA 归约、加权矩和对数增长用两个 FP32 分量计算，以整数指数保存财富范围。高位与残差的归一化使用 Quick-Two-Sum，任意高位相加仍用 Two-Sum，乘积残差继续由 FMA 保留；误差变换依据见 [Hida、Li、Bailey](https://www.davidhbailey.com/dhbpapers/arith15.pdf)。加权方差先中心化，避免常量收益产生伪方差；两端均定义零方差 Sharpe 为零。可行权重效用并列使用统一指标容差，再比较 CAGR，最后选择最小权重。验收同时比较收益、现金流、强平事件、权重与阈值两侧的准入结论；协议或数值语义改变时，不悄悄重录旧逐位基线。
-
-算子契约同时明确：有限常量窗口的协方差严格为零，相关性未定义；微量 tanh 在 CPU、CUDA、portable 三端使用正确舍入的恒等区间。依赖常量协方差抵消噪声的旧候选将不再产生有效信号，这是明确的错误修正，不是放宽准入容差。
-
-## 开发与验证
-
-Python 负责研究、接口与编排，现有 C++/CUDA 内核负责数值计算，一个 Bash 脚本构建三个 Python 扩展。正式部署与回测环境为 Linux，包括 WSL2 和 Colab。WSL2 使用 Linux Python 生成原生 `.so`，已删除 Windows Python/MSYS2 交叉构建分支。
-
-构建需要 Python 3.12 或 3.13、对应开发头文件，以及支持 C++17/OpenMP 的 GCC。在仓库根目录激活实际运行 Foundry 的 Linux 虚拟环境，安装依赖并构建：
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-bash build.sh
-```
-
-`bash build.sh backtest` 只重建回测扩展；不指定目标时构建 `ops`、`backtest`、`search`。脚本从当前 `python3` 获取 Python/NumPy 头文件与 ABI 后缀，支持含空格的路径，不绑定旧机器的解释器或编译器路径。算子、回测和策略各自的数值编译选项保持不变。原生构建使用 Linux Python，包括 WSL2；Windows 远程客户端无需构建这些扩展。
-
-GPU 后端安装匹配运行环境 CUDA 主版本的 CuPy；CPU 无需 CuPy 或 GPU。参数直接传给公开 API，通过 foundry.schema() 查询默认值。架构与纯规则检查不依赖私有行情、组合或凭据。
-
-pytest 验证套件覆盖架构、表达式、原生 ABI、搜索策略、发布时点和请求/存储协议。云端测试显式选择美股/A 股/加密现货/逐仓永续，使用隔离的临时组合库，不从私有生产库获取隐藏种子。test_production 单独校验明确提供的生产基线，不悄悄重录。
-
-在授权云端使用统一入口。GitHub Actions 展示和归档已保存报告，不执行数值套件：
-
-```bash
-python -m pip install -r requirements-benchmark.txt
-python -m foundry benchmark var/runs/benchmark-new
-```
-
-性能报告分别记录加载、传输/JIT、驻留批量与完整用例，注明设备、完整规模、精度和误差。
-
-历史精度实验已[单独归档](benchmarks/archive/precision-history.zh-CN.md)。公开接口耗时和正确性请看[当前基准套件](benchmarks/README.zh-CN.md)。
+在获得授权的计算环境中，`python -m foundry benchmark OUTPUT` 是统一验证和基准入口，分别记录准备、驻留评价与完整查询/有序提交耗时，并报告数值误差和决策一致性。实现位于 [`validation/benchmarks`](../validation/benchmarks)，架构检查位于 [`validation/test_architecture.py`](../validation/test_architecture.py)。

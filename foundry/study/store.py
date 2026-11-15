@@ -38,9 +38,6 @@ def publish(path: Path, content: bytes) -> None:
 FORMAT = 'candidate-array-v2'
 
 
-BUNDLE = 'candidate-batch-v2'
-
-
 ARRAY_KEYS = {'metadata', 'values', 'observed_through', 'fit_through'}
 
 
@@ -48,14 +45,14 @@ def _json(record):
     return json.dumps(record, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
 
 
-def _encode(metadata, values, observed, fitted):
+def encode_archive(metadata, values, observed, fitted):
     output = BytesIO()
     np.savez(output, metadata=np.asarray(_json(metadata)), values=values,
              observed_through=observed, fit_through=fitted)
     return output.getvalue()
 
 
-def _decode(payload):
+def decode_archive(payload):
     with np.load(BytesIO(payload), allow_pickle=False) as archive:
         if set(archive.files) != ARRAY_KEYS:
             raise ValueError('array artifact fields differ from the declared format')
@@ -80,11 +77,11 @@ def _records(batch):
         arrays = (np.ascontiguousarray(values), np.ascontiguousarray(observed, dtype=np.int64),
                   np.ascontiguousarray(fitted, dtype=np.int64))
         source = ArraySource(batch.kind, _digest(metadata, arrays), batch.snapshot, batch.producer, complexity)
-        yield source, _encode(metadata, *arrays)
+        yield source, encode_archive(metadata, *arrays)
 
 
 def _read(payload, source):
-    metadata, values, observed, fitted = _decode(payload)
+    metadata, values, observed, fitted = decode_archive(payload)
     if metadata['format'] != FORMAT:
         raise ValueError('array artifact protocol differs; register a current bundle')
     actual = ArraySource(metadata['kind'], _digest(metadata, (values, observed, fitted)),
@@ -136,34 +133,6 @@ class MemoryArrayStore:
 
     def read(self, source: ArraySource):
         return _read(self.artifacts[source.digest], source)
-
-
-def write_bundle(path: Path, batch: ArrayBatch):
-    """Export a host batch for RPC registration; device callers copy at this IO boundary."""
-    publish(path, encode_bundle(batch))
-
-
-def encode_bundle(batch: ArrayBatch) -> bytes:
-    metadata = dict(format=BUNDLE, kind=batch.kind, ids=batch.ids, snapshot=batch.snapshot,
-                    producer=batch.producer, dates=batch.dates, assets=batch.assets, complexity=batch.complexity)
-    return _encode(metadata, batch.values, batch.observed_through, batch.fit_through)
-
-
-def load_bundle(path: Path) -> ArrayBatch:
-    """Read an external bundle without pickle or code deserialization."""
-    return decode_bundle(path.read_bytes())
-
-
-def decode_bundle(payload: bytes) -> ArrayBatch:
-    metadata, values, observed, fitted = _decode(payload)
-    if metadata['format'] != BUNDLE:
-        raise ValueError('batch protocol differs; export a current bundle')
-    expected = {'format', 'kind', 'ids', 'snapshot', 'producer', 'dates', 'assets', 'complexity'}
-    if set(metadata) != expected:
-        raise ValueError('batch metadata fields differ from the declared format')
-    return ArrayBatch(metadata['kind'], tuple(metadata['ids']), values, metadata['snapshot'],
-                      metadata['producer'], tuple(metadata['dates']), tuple(metadata['assets']),
-                      observed, fitted, None if metadata['complexity'] is None else tuple(metadata['complexity']))
 
 
 def member_from_json(record):
@@ -231,7 +200,9 @@ def implementation_digest() -> str:
 def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: PrecisionPlan) -> StudySnapshot:
     admission = asdict(settings.portfolio)
     admission.pop('artifact_dir')
-    configuration = digest(dict(operators=asdict(settings.expr), admission=admission,
+    proposal_scales = {name: getattr(settings.search, name) for name in (
+        'violation_scale_wsharpe', 'violation_scale_sharpe', 'violation_scale_cagr', 'violation_scale_growth')}
+    configuration = digest(dict(operators=asdict(settings.expr), admission=admission, proposal_scales=proposal_scales,
         precision=precision.effective, return_atol=settings.cuda.return_atol,
         perpetual_host_cells=settings.cuda.perpetual_host_cells))
     values = dict(study=loaded.study, data_snapshot=loaded.panel.snapshot,

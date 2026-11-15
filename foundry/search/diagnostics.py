@@ -7,6 +7,7 @@ from types import ModuleType
 
 from foundry.config import PortfolioConfig, SingleConfig
 from foundry.search.archive import Archive, standardized
+from foundry.search.proposer.random import RandomProposer
 from foundry.study.session import ResidentPort
 from foundry.types import (
     Candidate,
@@ -159,3 +160,18 @@ def diagnose(port: ResidentPort, archive: Archive | None = None, *, gate: Single
         return Diagnostics(port.context, tuple(ContextFeature(name, value) for name, value in zip(CONTEXT_NAMES, encoded)),
                            drawdown_window(port, ref.rr), tuple(tuple(row) for row in correlations),
                            max(0, port.settings.portfolio.max_members - ref.n), gate)
+
+
+def sample_calibration(port: ResidentPort) -> CalibrationPopulation:
+    """Sample the configured deterministic grammar population for single-alpha diagnostics."""
+    settings, cfg = port.settings, port.settings.search
+    proposer = RandomProposer(port.vocabulary, cfg.seed, cfg.max_tokens, settings.expr.max_cost,
+                              cfg.max_ts_depth, port.window_caps, len(CONTEXT_NAMES))
+    batch = proposer.sample(settings.single.calibration_sample, 0, [0.] * len(CONTEXT_NAMES))
+    return prepare_calibration(port, tuple(dict.fromkeys(batch.candidates)))
+
+
+def diagnose_current(port: ResidentPort) -> Diagnostics:
+    """Resolve the selected objective's diagnostics using the same calibration math as mining."""
+    gate = calibrate(port, sample_calibration(port)) if port.settings.search.objective == 'single' else None
+    return diagnose(port, gate=gate)

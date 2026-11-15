@@ -1,11 +1,16 @@
 """Pure CEM and leave-one-out proposals driven by externally evaluated scores."""
+from __future__ import annotations
+
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
 from types import ModuleType
 
 import numpy as np
 
-from foundry.backtest.weights import WeightKernel
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from foundry.backtest.weights import WeightKernel
 from foundry.types import Array, FloatArray, HostArray, WeightTrials
 
 
