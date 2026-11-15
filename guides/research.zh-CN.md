@@ -281,6 +281,8 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 CUDA 批量和精度显式配置。双 FP32 用两个分量在支持的账户与统计路径保留残差精度。数值计划在会话启动时固定，不根据评价结果提高精度复算。小规模永续批次可通过 `CUDA.perpetual_host_cells` 在执行前规划为 CPU，不会因运行错误静默降级。
 
-通过 `session.describe()` 及报告的精度/后端字段查看实际计划。[基准指南](benchmarks/README.md) 中的保存报告早于本次架构重构，当前版本的云端数值和速度验证尚待执行；不能据此推断当前代码已经通过加速或决策一致性验收。
+通过 `session.describe()` 及报告的精度/后端字段查看实际计划。[2026-11-15 PRO 6000 报告](benchmarks/arch-v2-pro6000-20261115/report.zh-CN.md) 对应源码 `fa2acfd`：512 项公开测试通过、1 项私有基线测试跳过，覆盖 66 个算子的 124 个用例全部通过。4096 条公式流程两端均接纳 28 个候选，没有决策不一致或数值误差超限；完整用例 CPU/CUDA 墙钟耗时为 93.724/2.879 秒。以上均为单次测量，此前 `current/` 报告保留为历史记录。
+
+独立私有生产审计未通过：保留基线缺少 protocol/study 元数据，保存的组合仍含旧 BTC 特征公式。原文件没有改写或重录，不能宣称私有基线完全通过。CUDA 账户使用双 FP32，但未执行同卡单 FP32 对照，因此没有重新验收独立的 1.5 倍精度开销预算。详见[验收范围](benchmarks/arch-v2-pro6000-20261115/README.zh-CN.md)。
 
 在获得授权的计算环境中，`python -m foundry benchmark OUTPUT` 是统一验证和基准入口，分别记录准备、驻留评价与完整查询/有序提交耗时，并报告数值误差和决策一致性。实现位于 [`validation/benchmarks`](../validation/benchmarks)，架构检查位于 [`validation/test_architecture.py`](../validation/test_architecture.py)。

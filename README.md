@@ -128,6 +128,14 @@ with foundry.open(
 
 ## Performance evidence
 
-The [benchmark guide](guides/benchmarks/README.md) links saved performance, numerical-error and decision-consistency reports. Those reports describe runs before this architecture refactor; fresh cloud validation is pending. They are historical measurements, not verified speed claims for the current revision.
+On an RTX PRO 6000 Blackwell Server, the 4096-formula public API case took **2.879 s on CUDA versus 93.724 s on CPU — 32.55× faster**. The panel contained 500 US equities and 269 daily rows; CPU used two OpenMP threads. Both admitted 28 candidates, with no decision mismatches or numerical tolerance exceedances in the measured workflow.
+
+| Formula count | CPU | CUDA | Speedup |
+| --- | --- | --- | --- |
+| 1 | 0.0874 s | 0.0868 s | 1.01× |
+| 64 | 1.443 s | 0.231 s | 6.25× |
+| 4096 | 93.724 s | 2.879 s | 32.55× |
+
+Complete cases include open, evaluate, ordered commit, portfolio inspection and close. These are wall times from one measured round after warm-up on source `fa2acfd`, not repeated statistical estimates. See the [2026-11-15 report](guides/benchmarks/arch-v2-pro6000-20261115/report.md) for all 66 operators and errors. Public regression checks passed; the separate private production baseline audit failed on its unchanged legacy artifact, as detailed in the [validation scope](guides/benchmarks/arch-v2-pro6000-20261115/README.md). Earlier `current/` reports remain historical.
 
 [Research and integration](guides/research.md) · [Available data](data/README.md) · [Benchmark reports](guides/benchmarks/README.md)

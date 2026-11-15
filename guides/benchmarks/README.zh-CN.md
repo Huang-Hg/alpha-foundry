@@ -1,8 +1,10 @@
 # Foundry 性能基准
 
-[English](README.md) · [最新 CPU/CUDA 报告](current/report.zh-CN.md) · [旧 PRO 6000 记录](archive/pro6000-operator66/operator66.md)
+[English](README.md) · [2026-11-15 PRO 6000 报告](arch-v2-pro6000-20261115/report.zh-CN.md) · [重构前公开接口报告](current/report.zh-CN.md) · [更早的算子实验](archive/pro6000-operator66/operator66.md)
 
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
+
+[架构重构验收](arch-v2-pro6000-20261115/README.zh-CN.md) 在 RTX PRO 6000 Blackwell Server（97887 MiB）上测量源码 `fa2acfd`。公开回归为 512 项通过、1 项跳过、7061 个子用例通过，耗时 247.05 秒；JUnit 的 7574 个条目包含子用例。66 个算子的 124 个窗口用例全部通过。4096 条公式完整用例 CUDA 耗时 2.879063 秒、CPU 耗时 93.723696 秒，加速 32.55 倍；两端均接纳 28 个候选，无决策不一致或数值误差超限。独立私有生产审计在未改动的旧工件上失败，没有通过重录基线掩盖。
 
 在授权 GPU 环境中只需一个入口：
 
@@ -27,10 +29,10 @@ OMP_NUM_THREADS=2 python -m foundry benchmark var/runs/benchmark-new
 
 输出目录包含双语摘要、逐项 CSV、标准 pytest-benchmark JSON、JUnit XML、独立 HTML 验证报告、公式原始报告、源码/数据/语料身份和日志。正确性失败或基准覆盖不完整，命令会失败并保留报告。
 
-自有数据、费用等继续使用 `foundry.open` 的公开参数，两端共享同一组参数；固定公式语料必须符合所选数据的字段词表。可用 `foundry.benchmark(output, sizes=(1, 64), market="us_equity", data_dir="...")` 限定候选数量。不同 GPU、数据和实现之间不继承速度门槛。
+自有数据、费用等继续使用 `foundry.open` 的公开参数，两端共享同一组参数。不要传 `backend`，基准自行选择两端并拒绝该参数。固定公式语料必须符合所选数据的字段词表。可用 `foundry.benchmark(output, sizes=(1, 64), market="us_equity", data_dir="...")` 限定候选数量。不同 GPU、数据和实现之间不继承速度门槛。
 
-旧 PRO 6000 数字来自内部接口和精度实验，保留为历史记录，不混入本轮公开接口结果。本套基准不重新认证独立的 1.5× 精度开销预算。
+新公开结果包包含报告、逐项 CSV、pytest 证据、运行元数据与实测源码包；完整逐公式原始证据保留在本地。CUDA 账户使用双 FP32，未测同卡单 FP32 对照，因此本次不重新验收独立的 1.5 倍精度开销预算。
 
-[完整证据包](current/evidence.tar.gz)包含逐公式原始报告与准备日志，解压可恢复原始结果目录。实际执行的工作区由源码文件摘要标识，pytest 提交元数据记录其基础 checkout；JUnit 用例数包含 unittest 子用例。
+`current/` 名称沿用历史，但目录内容是未改动的重构前归档。其中的[完整证据包](current/evidence.tar.gz)包含那次测量的逐公式原始报告与准备日志；源码摘要标识其实际工作区，pytest 提交元数据记录基础 checkout。更早的算子实验使用内部接口和实验精度路径；两类旧记录都不混入本次架构重构结果。
 
-[实测源码包](current/source.tar.gz)保留执行时的完整源码字节及公式语料，包括原始换行。发布的文本报告统一为 LF，保证 GitHub 校验和可复现。报告生成器另记摘要：计时结束后只改进了报告文字，没有重跑计时。
+历史[实测源码包](current/source.tar.gz)保留此前执行的完整源码字节及公式语料，包括原始换行。其发布文本统一为 LF，保证 GitHub 校验和可复现；报告生成器另记摘要，因为此前只在计时后改进文字，没有重跑计时。

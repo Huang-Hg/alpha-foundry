@@ -1,8 +1,10 @@
 # Foundry benchmarks
 
-[简体中文](README.zh-CN.md) · [Current CPU/CUDA report](current/report.md) · [Historical PRO 6000 result](archive/pro6000-operator66/operator66.md)
+[简体中文](README.zh-CN.md) · [2026-11-15 PRO 6000 report](arch-v2-pro6000-20261115/report.md) · [Pre-refactor public API report](current/report.md) · [Earlier operator experiments](archive/pro6000-operator66/operator66.md)
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
+
+The [architecture-refactor run](arch-v2-pro6000-20261115/README.md) measured source `fa2acfd` on RTX PRO 6000 Blackwell Server (97887 MiB). Public regression results were 512 passed, 1 skipped and 7061 passed subtests in 247.05 s; the 7574 JUnit entries include subtests. All 124 window cases across 66 operators passed. The 4096-formula complete case took 2.879063 s on CUDA versus 93.723696 s on CPU (32.55×); 28 candidates were admitted on both, with zero decision mismatches or numerical tolerance exceedances. The private production audit failed separately on an unchanged legacy artifact, not on a newly recorded baseline.
 
 Run one command on the authorized GPU:
 
@@ -27,10 +29,10 @@ Each performance condition has one warm-up and one measured round. Warm-up uses 
 
 The output directory contains bilingual Markdown summaries, detailed CSVs, the standard pytest-benchmark JSON, JUnit XML, a standalone HTML check report, raw formula reports, source/data/corpus identities and the run log. A failing correctness check or incomplete benchmark fails the command while preserving its report.
 
-For custom data or fees, pass the same public parameters as `foundry.open`; the CPU and CUDA runs share them. The fixed corpus must be valid for that dataset's vocabulary. `foundry.benchmark(output, sizes=(1, 64), market="us_equity", data_dir="...")` can limit candidate counts. Timing thresholds from another GPU, dataset or implementation are not inherited.
+For custom data or fees, pass the same public parameters as `foundry.open`; the CPU and CUDA runs share them. Omit `backend`: the benchmark selects both backends itself and rejects that parameter. The fixed corpus must be valid for that dataset's vocabulary. `foundry.benchmark(output, sizes=(1, 64), market="us_equity", data_dir="...")` can limit candidate counts. Timing thresholds from another GPU, dataset or implementation are not inherited.
 
-The old PRO 6000 measurements used an internal API and experimental precision paths. They remain a historical record and are not blended with the current public-API measurements. This suite does not requalify the separate 1.5× precision budget.
+The new public bundle contains reports, detailed CSVs, pytest evidence, run metadata and the measured source archive; full raw per-formula evidence is retained locally. CUDA account arithmetic used paired FP32. No same-device single-FP32 control was measured, so this run does not requalify the separate 1.5× precision budget.
 
-The [complete evidence archive](current/evidence.tar.gz) contains the raw per-formula reports and setup logs. Extract it to recover the original result directory. Source-file hashes identify the measured working tree; pytest commit metadata names its base checkout. JUnit case counts include unittest subtests.
+The `current/` directory is an unchanged pre-refactor archive, despite its historical name. Its [complete evidence archive](current/evidence.tar.gz) contains that earlier run's raw per-formula reports and setup logs. Source-file hashes identify its measured working tree; pytest commit metadata names its base checkout. The still older operator experiments used an internal API and experimental precision paths. Neither archive is blended into the architecture-refactor results.
 
-The [measured source archive](current/source.tar.gz) preserves the exact source bytes and corpus, including original line endings. Published text reports use LF for reproducible GitHub checksum verification. The report renderer has its own hash because its final wording was improved after measurement without rerunning timings.
+The historical [measured source archive](current/source.tar.gz) preserves that earlier source and corpus, including original line endings. Its published text reports use LF for reproducible GitHub checksum verification. Its renderer has a separate hash because wording was improved after measurement without rerunning timings.
