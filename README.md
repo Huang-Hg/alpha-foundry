@@ -95,7 +95,7 @@ with foundry.open("production/my_portfolio.json") as session:
         "longer_trend": "gt(ma_dist_60,0.05)",
     })
     decision = session.commit(report)
-    foundry.export(decision, "output/decision.json")
+    foundry.export(decision, "var/runs/decision.json")
 ```
 
 | Task | Call |

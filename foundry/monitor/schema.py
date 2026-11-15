@@ -1,7 +1,7 @@
 """The dashboard's input contract: every field its producers write, declared as typed dictionaries.
 
-  SearchStatus   foundry/search/run.py writes <run>/status.json and mirrors it to tmp/monitor/live.json (+ `run`).
-  ServiceStatus  foundry/service/daemon.py Server._status() writes tmp/service/status.json (kind='service').
+  SearchStatus   foundry/search/run.py writes <run>/status.json and mirrors it to var/monitor/live.json (+ `run`).
+  ServiceStatus  foundry/service/daemon.py Server._status() writes var/service/status.json (kind='service').
 
 Field names are the producers'; components read a status only through these declarations. A search status grows
 over the run (a loading run has written a handful of fields), so every key is optional and an absent one means

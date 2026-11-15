@@ -124,11 +124,11 @@ def attach(name: str = DEFAULT_HOST, quiet: bool = False) -> Dict:
             say(f'[remote] {name} 上服务未运行,正在拉起(装载面板 + CUDA context,约 20-60s)…')
             # `cd X && cmd &` keeps a subshell holding this channel's stdout, so read() never sees EOF: with `;`
             # only the last simple command is backgrounded and its redirections apply to it.
-            sh(ssh, f'rm -f {PORTFILE.relative_to(ROOT).as_posix()}; cd {REMOTE_ROOT}; mkdir -p tmp/service; '
-                    f'setsid nohup {PY} -X utf8 -m foundry serve > tmp/service/out.log 2>&1 < /dev/null &')
+            sh(ssh, f'rm -f {PORTFILE.relative_to(ROOT).as_posix()}; cd {REMOTE_ROOT}; mkdir -p var/service; '
+                    f'setsid nohup {PY} -X utf8 -m foundry serve > var/service/out.log 2>&1 < /dev/null &')
         t0 = time.time()
         while d is None:
-            assert time.time() - t0 < BOOT_BUDGET, f'cloud service not ready within {BOOT_BUDGET:.0f}s; see {name}:{REMOTE_ROOT}/tmp/service/'
+            assert time.time() - t0 < BOOT_BUDGET, f'cloud service not ready within {BOOT_BUDGET:.0f}s; see {name}:{REMOTE_ROOT}/var/service/'
             time.sleep(1.0)
             d = _alive(name, ssh)
         say(f'[remote] 就绪({time.time() - t0:.1f}s)')

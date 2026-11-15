@@ -98,7 +98,7 @@ class CudaConfig:
 
 @dataclass(frozen=True)
 class PortfolioConfig:
-    artifact_dir: str = './data/candidates'
+    artifact_dir: str = './var/candidates'
     weight_sum_atol: float = 1e-07
     metric_atol: float = 1e-10
     min_sharpe_gain: float = 0.01

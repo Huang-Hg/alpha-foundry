@@ -68,9 +68,9 @@ jobs:
                   measured = archive.extractfile(name).read()
                   if hashlib.sha256(measured).hexdigest() != digest:
                       raise SystemExit(f'Measured source checksum failed: {name}')
-                  if name != 'foundry/benchmark_report.py' and canonical(Path(name).read_bytes()) != canonical(measured):
+                  if name != 'validation/benchmarks/report.py' and canonical(Path(name).read_bytes()) != canonical(measured):
                       changed.append(name)
-          renderer = Path('foundry/benchmark_report.py').read_bytes()
+          renderer = Path('validation/benchmarks/report.py').read_bytes()
           if hashlib.sha256(renderer).hexdigest() != summary['report_renderer_sha256']:
               raise SystemExit('Regenerate the saved reports with the current renderer')
           corpus = Path('guides/benchmarks/fixtures/us-formulas.json').read_bytes()

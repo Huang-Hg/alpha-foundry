@@ -9,7 +9,7 @@
 ```bash
 python -m pip install -r requirements-benchmark.txt
 bash build.sh
-OMP_NUM_THREADS=2 python -m foundry benchmark output/benchmark-new
+OMP_NUM_THREADS=2 python -m foundry benchmark var/runs/benchmark-new
 ```
 
 先安装与 CUDA 运行时匹配的 CuPy。计算在选定的云端实例执行；GitHub Actions 只展示和归档已测结果。

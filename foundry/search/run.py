@@ -18,7 +18,7 @@ from foundry.search.evaluator import Archive, Evaluator
 from foundry.search.policy import Policy
 from foundry.search.single import SingleEvaluator
 
-LIVE = ROOT / 'tmp' / 'monitor' / 'live.json'
+LIVE = ROOT / 'var' / 'monitor' / 'live.json'
 
 
 def write_json(path, value):

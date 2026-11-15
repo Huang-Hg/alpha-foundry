@@ -56,5 +56,5 @@ def import_perpetual(output: str | Path, **parameters: Unpack[Parameters]):
 
 def benchmark(output: str | Path, *, sizes=(1, 64, 4096), **parameters: Unpack[Parameters]):
     """Run validation and CPU/CUDA benchmarks, then generate the report bundle."""
-    from foundry.benchmark_run import run
+    from validation.benchmarks.run import run
     return run(output, sizes=sizes, **parameters)

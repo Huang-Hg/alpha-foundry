@@ -1,6 +1,6 @@
 """HTML design preview, exported from the very frames the shell panel draws.
 
-python -m foundry preview [STATUS ...]  ->  tmp/monitor/preview.html   (no STATUS: the one the dashboard shows)
+python -m foundry preview [STATUS ...]  ->  var/monitor/preview.html   (no STATUS: the one the dashboard shows)
 
 The first snapshot is shown in every terminal size in a running state; the other snapshots
 are shown as recorded. Every cell is laid out on an explicit character grid, so CJK text and

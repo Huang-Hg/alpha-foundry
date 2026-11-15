@@ -9,7 +9,7 @@ Run one command on the authorized GPU:
 ```bash
 python -m pip install -r requirements-benchmark.txt
 bash build.sh
-OMP_NUM_THREADS=2 python -m foundry benchmark output/benchmark-new
+OMP_NUM_THREADS=2 python -m foundry benchmark var/runs/benchmark-new
 ```
 
 Install CuPy for the runtime's CUDA version first. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.

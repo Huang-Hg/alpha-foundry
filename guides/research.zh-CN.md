@@ -78,7 +78,7 @@ with foundry.open(
 ) as session:
     report = session.evaluate({"trend": "gt(ma_dist_20,0)"})
     decision = session.commit(report)
-    foundry.export(decision, "output/decision.json")
+    foundry.export(decision, "var/runs/decision.json")
 ```
 
 `evaluate` 接收公式字符串、公式序列或 `{候选 ID: 公式}`。`report.rows` 的每行含 `metrics`、`risk`、`decision` 和 ID。`commit(report)` 按报告对应的组合版本重新判断准入；评价本身不修改组合。调用者不必构造存储器、快照或版本令牌。
@@ -212,7 +212,7 @@ pytest 验证套件覆盖架构、表达式、原生 ABI、搜索策略、发布
 
 ```bash
 python -m pip install -r requirements-benchmark.txt
-python -m foundry benchmark output/benchmark-new
+python -m foundry benchmark var/runs/benchmark-new
 ```
 
 性能报告分别记录加载、传输/JIT、驻留批量与完整用例，注明设备、完整规模、精度和误差。

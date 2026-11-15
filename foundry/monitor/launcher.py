@@ -1,6 +1,6 @@
 """python -m foundry monitor [--source STATUS] [--attach] [--once]: the dashboard in its own named terminal window.
 
-The renderer (watch.py) reads tmp/monitor/source.json, which names the status file to show, so a second call only
+The renderer (watch.py) reads var/monitor/source.json, which names the status file to show, so a second call only
 retargets the running window; owner.json is the renderer's heartbeat. `python -m foundry preview` exports the
 same frames to HTML.
 """
@@ -16,7 +16,7 @@ from foundry.adapters.files import publish
 from .cells import BASE
 from .watch import watch
 
-STATE = ROOT/'tmp'/'monitor'
+STATE = ROOT/'var'/'monitor'
 SOURCE = STATE/'source.json'
 OWNER = STATE/'owner.json'
 LIVE = STATE/'live.json'                     # the search run mirrors its status here

@@ -78,7 +78,7 @@ with foundry.open(
 ) as session:
     report = session.evaluate({"trend": "gt(ma_dist_20,0)"})
     decision = session.commit(report)
-    foundry.export(decision, "output/decision.json")
+    foundry.export(decision, "var/runs/decision.json")
 ```
 
 `evaluate` accepts a formula string, sequence of formulas or `{candidate_id: formula}` mapping. Each `report.rows` entry contains `metrics`, `risk`, `decision` and an ID. `commit(report)` rechecks admission against the reviewed portfolio version; evaluation does not change the portfolio. Callers do not construct stores, snapshots or version tokens.
@@ -220,7 +220,7 @@ Use the unified entry point in the authorized cloud environment. GitHub Actions 
 
 ```bash
 python -m pip install -r requirements-benchmark.txt
-python -m foundry benchmark output/benchmark-new
+python -m foundry benchmark var/runs/benchmark-new
 ```
 
 Performance reports distinguish loading, transfer/JIT, resident batches and complete use cases, and state GPU, full universe, precision and observed error.
