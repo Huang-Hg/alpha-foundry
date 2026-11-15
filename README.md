@@ -1,33 +1,74 @@
 # Foundry
 
-**From an idea or a model output to a reproducible portfolio decision.**
+**CUDA-accelerated quantitative research and backtesting.**
 
 [简体中文](README.zh-CN.md) · **English** · [Research guide](guides/research.md)
 
-Foundry is a Linux research and backtesting engine for people, AI agents and automated miners. Bring a formula, an ML signal or a batch of target positions; evaluate them under explicit market rules, compare portfolio improvements and submit through the same admission process.
+Use the GPU to evaluate formulas, backtest strategies and select portfolios in batches. Foundry helps researchers, AI agents and miners explore many candidates using their own market data, ML signals or target positions. A CPU backend is also available. Run computation on Linux or Windows through WSL2, or connect from native Windows Python to a remote compute service.
+
+```python
+import foundry
+
+with foundry.open() as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+    print(report.rows[0].metrics)
+```
+
+The defaults use bundled US equity data and CUDA. Set data, dates and computation parameters in the call; the session loads data, prepares computation and releases resources.
 
 ## Why Foundry?
 
-- **Your strategy does not have to be a formula.** Python/CUDA programs, ML models and external miners can supply batches of signals or target positions. Formula search is one producer among several.
-- **One decision path for every caller.** Python and discoverable JSON-RPC interfaces share evaluation, weight search and portfolio admission. Agents receive structured metrics and reason codes.
-- **Batch research on CPU or CUDA.** Keep arrays on the GPU across numerical work, reuse immutable study data and evaluate candidates in batches. Reduced precision is an explicit execution policy, checked against the CPU reference.
-- **Time and market rules are part of the model.** Snapshots bind data, execution rules and numerical policy. Features use information available at the decision time; a daily close signal executes no earlier than the next open.
-- **Queries and portfolio changes are separate.** Evaluation leaves the portfolio unchanged. A commit checks the expected version and publishes one complete replacement.
+- **CUDA acceleration across the research workflow.** Batch formula operators, account simulation, metrics and portfolio weight trials on the GPU, reusing data and resident results. Evaluate many candidates together instead of waiting for separate backtests.
+- **Formulas, models and custom programs.** Use 66 operators for arithmetic, rolling statistics, ranking and regression, or submit signals, target weights and perpetual exposures from an existing model or miner.
+- **Your data and research universe.** Convert daily market data to the documented format and choose your assets and period. Bundled data makes it easy to start; changing providers does not require rewriting numerical kernels.
+- **From individual strategies to portfolio selection.** Compare net returns, risk and weights after adding a candidate to the portfolio. Explicit admission reasons reduce the work of building a separate selection pipeline.
+- **Quick access for people and agents.** One session handles evaluation, neighbourhood exploration, model registration, weight trials and submission. Local and remote sessions share these operations and expose machine-readable capabilities and results.
+
+### Measured on a complete research workflow
+
+**500 US equities × 269 days, 4096 formulas: a complete call takes 97.69 seconds on CPU and 2.95 seconds on CUDA on the same Colab PRO 6000, about 33.1× faster.** This includes session startup, formula evaluation, backtest metrics, portfolio admission and resource release. Both admit the same 28 candidates.
+
+A single formula takes about 0.09 seconds on either backend; at 64 formulas CUDA is about 6.8× faster. Benefits depend on batch size. These are single warmed measurements with an in-memory portfolio, excluding installation, native builds, RPC and disk persistence. CPU uses 2 OpenMP threads. See the [performance, error and decision report](guides/benchmarks/current/report.md).
+
+## Bring your own market data
+
+**Foundry is not tied to the bundled data or a particular vendor.** For daily equities and crypto spot, convert data from your CSV files, database or API into the supported Parquet tables. Supply the data directory and study period when opening a session:
+
+```python
+import foundry
+
+with foundry.open(
+    market="us_equity",
+    data_dir="./data/my_us_equity",
+    start="2025-01-01",
+    end="2025-12-31",
+    backend="cuda",
+) as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+```
+
+Your US equity directory supplies `panel.parquet` with daily prices/volume and adjustment factors, plus `membership.parquet` with historical eligibility intervals. A-shares additionally separate signal and execution prices; crypto spot records daily eligibility. Preserve history before the research start for rolling features.
+
+**[Custom data guide: files, columns, CSV conversion and provenance](guides/research.md#bring-your-own-data)**
+
+The repository also includes [ready-to-use test snapshots](data/README.md) for all four markets. They provide a starting point for exploring the engine; you can choose your own assets and research period within your dataset's coverage.
+
+For perpetuals, the dataset must also provide hourly trade/mark prices, settled funding and the manifest/evidence required by the adapter. The built-in Binance importer creates this format; see the [perpetual data instructions](guides/research.md#perpetual-data).
 
 ## Markets
 
-| Market | Modeled behavior |
+| Market | What the engine models |
 | --- | --- |
-| US equities | Daily signals, eligibility, transaction and holding costs |
-| A shares | Historical eligibility, suspensions, price limits, next-day execution and sell-side tax |
+| US equities | Daily signals, historical eligibility, adjusted prices and trading costs |
+| A-shares | Historical eligibility, suspensions, price limits, next-day execution and sell-side tax |
 | Crypto spot | UTC daily bars, continuous calendar, 365-day annualization and trading costs |
-| USDT linear perpetuals | Signed exposure, isolated collateral, realized funding, leverage and hourly mark-price liquidation |
+| USDT linear perpetuals | Long/short exposure, isolated collateral, settled funding, leverage and hourly mark-price liquidation |
 
-Perpetuals currently use a research model with fixed fee/maintenance parameters and hourly adverse-price touches. It does not reconstruct historical risk tiers or the exchange's intrabar execution. Data contracts disclose missing publication vintages and other source limits. See the [model and interface guide](guides/research.md).
+Daily close decisions execute no earlier than the next open. Perpetuals use fixed fee/maintenance parameters and hourly adverse-price touches; historical risk tiers and intrabar exchange execution are outside the current model. Detailed rules and data limits are in the [research guide](guides/research.md).
 
 ## Get started
 
-Use Linux, WSL2 or Colab with Python 3.12/3.13, Python development headers and GCC with C++17/OpenMP:
+Run computation on Linux, Colab or Windows through WSL2. Inside that environment, use Python 3.12/3.13, Python development headers and GCC with C++17/OpenMP:
 
 ```bash
 python3 -m venv .venv
@@ -37,45 +78,64 @@ bash build.sh
 python -m foundry --help
 ```
 
-Choose the market, data directory, dates and backend in [config/config.ini](config/config.ini). The repository includes [test snapshots for all four markets](data/README.md), including 64-contract perpetual data; cloning brings the files required by the integration fixtures. CPU execution needs no GPU; CUDA additionally needs CuPy matching the installed CUDA major.
+Use `foundry.open(backend="cuda")` for GPU execution or `backend="cpu"` for CPU execution. CUDA also requires CuPy matching the installed CUDA major. Inspect the active fields, operators and resolved parameters with `session.describe()`.
 
-To build a new perpetual snapshot, configure `[crypto_perpetual]` and import into a new directory:
+Native Windows Python can also connect to an existing service without compiling numerical kernels or installing CUDA on the client. Install the Python dependencies and use `foundry.connect(("127.0.0.1", port))` for a local or tunnel-forwarded service. Obtain its port with `python -m foundry status` on the server.
 
-```bash
-python -m foundry import-perpetual data/crypto_perpetual_new
-```
+## One interface, from evaluation to a portfolio
 
-The importer preserves Binance source archives, verifies official checksums and publishes an immutable dataset manifest. Set `[market] name = crypto_perpetual` and `[crypto_perpetual] data_dir` to the new directory to research that snapshot.
-
-## Connect your program or agent
+Evaluate a batch, then explicitly submit the report for portfolio admission. Supply a portfolio path to save and reopen it; omit the path for an in-memory study:
 
 ```python
-from foundry.config import load_config
-from foundry.runtime import configured_study, open_runtime
-from foundry.research import Research
-from foundry.research_types import Candidate
-from foundry.candidates import Formula
-from foundry.adapters.arrays import MemoryArrayStore
-from foundry.adapters.library import MemoryLibraryStore
-from foundry.portfolio.library import Library
+import foundry
 
-settings = load_config()
-study = configured_study(settings)
-with open_runtime(settings, study) as runtime:
-    research = Research(runtime.engine, MemoryLibraryStore(Library((), study)),
-                        MemoryArrayStore())
-    candidates = (Candidate("trend", Formula("gt(ma_dist_20,0)")),)
-    result = research.evaluate(candidates, research.context.id)
+with foundry.open("production/my_portfolio.json") as session:
+    report = session.evaluate({
+        "trend": "gt(ma_dist_20,0)",
+        "longer_trend": "gt(ma_dist_60,0.05)",
+    })
+    decision = session.commit(report)
+    foundry.export(decision, "output/decision.json")
 ```
 
-For model outputs, register an `ArrayBatch` with `Research.register_batch`, then use the same `evaluate` and `commit` calls. Batches carry ordered dates/assets, a snapshot identity and observation/fitting cutoffs. See [batch input and RPC details](guides/research.md#candidate-interface).
+| Task | Call |
+| --- | --- |
+| Evaluate one or many formulas | `session.evaluate(formulas)` |
+| Register model outputs | `session.register(values, ...)` |
+| Explore neighbouring parameters and fields | `session.explore(formulas, hypothesis="trend")` |
+| Inspect the current portfolio | `session.portfolio()` |
+| Compare batches of portfolio weights | `session.trial_weights(weights)` |
+| Admit candidates or change weights | `session.commit(report)` / `session.commit_weights(trials, index)` |
+| Export a report | `foundry.export(report, path)` |
+| Run a mining job | `foundry.mine(output, ...)` |
 
-Agents can export the machine contract with `python -m foundry schema schema.json`; CLI help is the authoritative command list.
+For an ML model or external miner, register a batch through `session.register` and pass the returned batch to the same `evaluate` and `commit` methods:
 
-## Engineering approach
+| Input | Use it for |
+| --- | --- |
+| `signals` | Model scores that use Foundry's signal-to-position conversion |
+| `target_weights` | Your own long-only equity or spot allocation |
+| `target_exposure` | Signed notional/equity targets for perpetuals |
 
-Python owns research and integration; C++ and CUDA own the numerical kernels. A modular monolith keeps market semantics independent of transport, storage and device choice. Tests cover PIT behavior, market rules, numerical/decision agreement and atomic state changes. Performance claims distinguish setup, resident computation and complete use cases.
+`session.grid` supplies date and asset coordinates. You declare observation/fitting cutoffs; the session manages the remaining research context. Remote registration transfers arrays automatically without exposing server filesystem paths. See the [public Python API](guides/research.md#public-python-api) for complete examples.
 
-See the [66-operator and 4,096-formula benchmark](guides/benchmarks/operator66.md) for measured throughput and accuracy on Colab PRO 6000.
+Agents can discover the machine protocol through `foundry.schema()` and available fields/operators through `session.describe()`. Replace `foundry.open()` with `foundry.connect(...)` to use the same research operations on a remote service.
 
-Foundry supplies research infrastructure. A passing backtest or admission decision is not evidence of out-of-sample profitability.
+## Simple calls, adjustable parameters
+
+Pass common parameters directly and use parameter groups for batching, precision, admission and mining. No configuration file or source edit is needed:
+
+```python
+with foundry.open(
+    market="crypto_perpetual",
+    leverage=3.0,
+    cost_rate=0.0004,
+    cuda=foundry.CUDA(candidate_batch=64, precision="paired"),
+    admission=foundry.Admission(min_sharpe_gain=0.02),
+) as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+```
+
+Parameters are fixed when a session opens; open another session to compare settings. Discover every parameter and its defaults through `foundry.schema()`. The [usage guide](guides/research.md#public-python-api) covers model inputs, weight adjustment and remote calls.
+
+[Data snapshots](data/README.md) · [Research and integration](guides/research.md) · [Performance and accuracy](guides/benchmarks/README.md)

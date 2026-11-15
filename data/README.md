@@ -20,13 +20,13 @@ From the repository root on Linux, verify the exact snapshot bytes:
 sha256sum --check data/SHA256SUMS
 ```
 
-The four market sections in `config/config.ini` already point to the bundled integration datasets. Follow the [build and cloud test instructions](../guides/research.md#development-and-validation); for this work, builds and tests run only on the authorized Colab PRO 6000. This publication changes no numerical code or test configuration. The same 18 data files were checked against the cloud-tested input archive; no new backtest is implied by this upload.
+The public API's market presets point to these bundled datasets. Select one with `foundry.open(market="us_equity")`, or provide your own `data_dir`, `start` and `end`. See the [integration guide](../guides/research.md#bring-your-own-data) for formats and source metadata.
 
-`config/config.ini` 的四个市场 section 已指向附带的集成测试数据。构建和测试入口见[研究指南](../guides/research.zh-CN.md#开发与验证)；当前任务的构建及测试仍只在获授权的 Colab PRO 6000 执行。本次上传不修改数值代码或测试配置，18 个文件已与云端验证所用输入包逐字节核对，不代表重新跑过一轮回测。
+公开 API 的市场默认值指向这些数据。用 `foundry.open(market="us_equity")` 选择市场，或传入自己的 `data_dir`、`start`、`end`。格式与来源记录见[接入指南](../guides/research.zh-CN.md#接入自己的数据)。
 
-For the 64-contract study, set `[crypto_perpetual] data_dir = ./data/crypto_perpetual_scale` and set `symbols` to the complete ordered list in that directory's `manifest.json`. The supplied study dates remain 2025-07-01 through 2025-12-31, with history from 2025-01-01. The 64-contract data is additional benchmark input; the default integration fixture remains the three-contract dataset.
+For 64 contracts, use `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_scale")`. The manifest supplies the ordered contracts. Default study dates are 2025-07-01 through 2025-12-31, with history from 2025-01-01. The default perpetual dataset still contains three contracts; `symbols` selects contracts when importing a new dataset.
 
-使用 64 合约时，将 `[crypto_perpetual] data_dir` 改为 `./data/crypto_perpetual_scale`，并将 `symbols` 设置为该目录 `manifest.json` 中完整的有序列表。研究日期仍为 2025-07-01 至 2025-12-31，历史起点为 2025-01-01。64 合约快照供规模测试使用，默认集成测试仍使用三合约快照。
+使用 64 合约时调用 `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_scale")`，合约顺序由 manifest 给出。默认研究日期为 2025-07-01 至 2025-12-31，历史起点为 2025-01-01。默认永续数据仍为三合约；`symbols` 在导入新数据时选择合约。
 
 ## Provenance and scope / 来源与范围
 

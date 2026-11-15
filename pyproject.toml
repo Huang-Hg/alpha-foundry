@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+testpaths = ["validation"]
+python_files = ["test_*.py", "bench_*.py"]
+python_functions = ["test_*", "bench_*"]
+pythonpath = ["."]
+addopts = "--import-mode=importlib"
+cache_dir = "tmp/pytest-cache"
+junit_family = "xunit2"
+markers = ["performance: measured CPU/CUDA workloads"]

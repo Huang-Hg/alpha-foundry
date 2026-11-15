@@ -1,0 +1,32 @@
+name: Benchmark evidence
+
+on:
+  pull_request:
+    paths:
+      - 'guides/benchmarks/**'
+      - '.github/workflows/benchmark-report.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify saved evidence
+        working-directory: guides/benchmarks/current
+        run: sha256sum -c SHA256SUMS
+      - name: Publish the cloud measurement summary
+        shell: bash
+        run: |
+          echo 'Download benchmark-evidence for linked HTML, CSV and raw measurements.' >> "$GITHUB_STEP_SUMMARY"
+          cat guides/benchmarks/current/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-evidence-${{ github.sha }}
+          path: guides/benchmarks/current/
+          if-no-files-found: error
+          retention-days: 30

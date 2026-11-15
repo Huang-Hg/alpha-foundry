@@ -24,5 +24,5 @@ def ops(expr_config):
     for n in sorted(set(ARITY.values())):
         print(f'{n} 参数: ' + ' '.join(sorted(k for k, op in OPS.items() if ARITY[op.kind] == n)))
     print(f'整数窗口 {MIN_WINDOW}..{MAX_WINDOW}; 所有算子使用当前及历史数据; 标量参数连续取值')
-    print(f'cost 上限 {expr_config.max_cost} ([expr] max_cost)')
+    print(f'cost 上限 {expr_config.max_cost} (operators.max_cost)')
     print('表达式输出 clip[0,1] 后除以当日可持有资产数; NaN 或不符合资格的资产权重为零。')

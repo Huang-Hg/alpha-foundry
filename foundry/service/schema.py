@@ -1,9 +1,13 @@
 """JSON-RPC contract. Validation occurs only at the external request boundary."""
 from jsonschema import validate
+from foundry.parameters import Parameters, configure
 from foundry.portfolio.library import PROTOCOL
 from foundry.portfolio.family import FamilyResult
-from foundry.research_types import Candidate, FamilySeed
-from foundry.adapters.serialization import CommitReport, EvaluationReport, RegisteredBatch, schema_for
+from foundry.research_types import (Candidate, CommitReport, EvaluationReport, FamilySeed, PortfolioReport,
+                                   RegisteredBatch, WeightCommit, WeightReport)
+from foundry.adapters.serialization import parameter_values, schema_for
+
+MAX_ARRAY_BYTES = 1 << 30
 
 
 def object_schema(properties):
@@ -21,10 +25,15 @@ METHODS={
     'system.status':object_schema({}),
     'system.stop':object_schema({}),
     'research.describe':object_schema({}),
-    'research.register_batch':object_schema(dict(context=TEXT,path=TEXT)),
+    'research.register_batch':object_schema(dict(context=TEXT, bytes=dict(type='integer', minimum=1, maximum=MAX_ARRAY_BYTES))),
     'research.evaluate':object_schema(dict(context=TEXT,candidates=dict(type='array',minItems=1,items=CANDIDATE))),
     'research.commit':object_schema(dict(context=TEXT,candidates=dict(type='array',minItems=1,items=CANDIDATE))),
     'research.family':object_schema(dict(context=TEXT,seeds=dict(type='array',minItems=1,items=SEED))),
+    'research.portfolio':object_schema(dict(context=TEXT)),
+    'research.trial_weights':object_schema(dict(context=TEXT, weights=dict(type='array', minItems=1,
+        items=dict(type='array', minItems=1, items=dict(type='number', minimum=0))))),
+    'research.commit_weights':object_schema(dict(context=TEXT, weights=dict(type='array', minItems=1,
+        items=dict(type='number', minimum=0)))),
 }
 REQUEST=object_schema(dict(jsonrpc=dict(const='2.0'),id=TEXT,method=dict(enum=list(METHODS)),params=dict(type='object')))
 REQUEST.update({'$schema':'https://json-schema.org/draft/2020-12/schema',
@@ -47,13 +56,22 @@ def result(request,value):
 
 
 def describe():
+    defaults = {}
+    for market in ('us_equity', 'a_share', 'crypto_spot', 'crypto_perpetual'):
+        settings = configure(market=market)
+        defaults[market] = parameter_values(settings)
     return dict(protocol=PROTOCOL,request=REQUEST,methods=METHODS,
+                parameters=schema_for(Parameters), defaults=defaults,
                 responses={'research.evaluate':schema_for(EvaluationReport),
                            'research.commit':schema_for(CommitReport),
                            'research.register_batch':schema_for(RegisteredBatch),
-                           'research.family':schema_for(FamilyResult)},
+                           'research.family':schema_for(FamilyResult),
+                           'research.portfolio':schema_for(PortfolioReport),
+                           'research.trial_weights':schema_for(WeightReport),
+                           'research.commit_weights':schema_for(WeightCommit)},
                 workflow=['research.describe -> context.id',
-                          'research.register_batch(context, path) -> typed candidates for external arrays',
+                          'research.register_batch(context, bytes) + binary bundle -> typed candidates',
                           'research.evaluate(context, candidates)',
                           'research.commit(context, candidates) -> new context.id'],
-                python='Research(engine, store, arrays).evaluate_device(sources, context_id, report=False) -> DeviceBatch')
+                binary='register_batch carries exactly params.bytes bytes after the JSON request newline; no server filesystem path is exposed',
+                python='with foundry.open() as session: report = session.evaluate(formulas); session.commit(report)')

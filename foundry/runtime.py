@@ -6,7 +6,7 @@ import numpy as np
 
 from foundry.adapters.data import load_data
 from foundry.adapters.provenance import study_snapshot
-from foundry.config import Settings
+from foundry.parameters import Settings, path
 from foundry.contracts import Backend, LoadedStudy, PrecisionPlan, Study
 from foundry.engine import Engine
 from foundry.market.a_share import AShare
@@ -230,3 +230,36 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
         runtime = Runtime(settings, loaded, backend, executor, resources, engine)
         cleanup.pop_all()  # Ownership now belongs to Runtime.close.
         return runtime
+
+
+def open_session(settings: Settings, portfolio=None):
+    """Assemble all owned resources behind the public research session."""
+    from pathlib import Path
+    from foundry.adapters.arrays import FileArrayStore, MemoryArrayStore
+    from foundry.adapters.library import FileLibraryStore, MemoryLibraryStore
+    from foundry.adapters.session import LocalBackend
+    from foundry.portfolio.library import Library
+    from foundry.research import Research
+    from foundry.session import Session
+
+    study = configured_study(settings)
+    with ExitStack() as cleanup:
+        runtime = open_runtime(settings, study)
+        cleanup.callback(runtime.close)
+        if portfolio is None:
+            store, arrays = MemoryLibraryStore(Library((), study)), MemoryArrayStore()
+        else:
+            store = FileLibraryStore(Path(portfolio))
+            arrays = FileArrayStore(path(settings.portfolio.artifact_dir))
+        with runtime.resources.scope():
+            session = Session(LocalBackend(runtime, Research(runtime.engine, store, arrays)))
+        cleanup.pop_all()
+        return session
+
+
+def serve_session(settings: Settings, portfolio):
+    """Own the local runtime for the complete server lifecycle."""
+    from foundry.service.daemon import Server
+    with open_session(settings, portfolio) as session:
+        backend = session._backend
+        Server(backend.runtime, backend.research).run()

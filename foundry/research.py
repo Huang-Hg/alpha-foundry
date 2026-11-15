@@ -8,7 +8,8 @@ from foundry.portfolio.library import Library, Member, SEED
 from foundry.portfolio.portfolio import Portfolio
 from foundry.portfolio.allocation import cap_book
 from foundry.research_types import (Candidate, CandidateResult, CommitResult, ContextConflict, DeviceBatch,
-                                    EvaluationResult, ResearchContext, WeightCommit, WeightTrials)
+                                    EvaluationResult, PortfolioReport, ResearchContext, WeightCommit,
+                                    WeightReport, WeightTrials)
 
 
 class Research:
@@ -127,6 +128,29 @@ class Research:
         self.require_context(context_id)
         return family.expand(self, seeds, context_id)
 
+    def portfolio_report(self, context_id):
+        self.require_context(context_id)
+        members = self.portfolio.library.members or (SEED,)
+        return PortfolioReport(self.context, tuple(m.source for m in members), tuple(m.weight for m in members),
+                               self.portfolio.reference.metrics, not self.portfolio.library.members)
+
+    def evaluate_weights(self, weights, context_id):
+        with self.engine.resources.scope():
+            self.require_context(context_id)
+            xp = self.engine.xp
+            matrix = xp.asarray(weights, dtype=xp.float64)
+            members = self.portfolio.library.members or (SEED,)
+            if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] != len(members):
+                raise ValueError('weights must be a nonempty (trials, portfolio members) matrix')
+            if not bool(xp.isfinite(matrix).all()) or bool((matrix < 0).any()):
+                raise ValueError('portfolio component weights must be finite and nonnegative')
+            _, books, _ = self.member_states(context_id)
+            result = self.trial_weights(matrix, xp.stack(books), context_id)
+            host = self.engine.to_host
+            return WeightReport(self.context, tuple(tuple(row) for row in host(matrix).tolist()),
+                                tuple(host(result.feasible).tolist()), tuple(host(result.utility).tolist()),
+                                tuple(tuple(row) for row in host(result.delta).tolist()))
+
     def member_states(self, context_id):
         with self.engine.resources.scope():
             self.require_context(context_id)
@@ -152,7 +176,14 @@ class Research:
         with self.engine.resources.scope():
             self.require_context(context_id)
             before, original = self.context, self.portfolio
-            members = tuple(Member(m.source, w) for m, w in zip(original.library.members, weights) if w > 0)
+            xp = self.engine.xp
+            values = xp.asarray(weights, dtype=xp.float64)
+            current = original.library.members or (SEED,)
+            if values.shape != (len(current),) or not bool(xp.isfinite(values).all()) or bool((values < 0).any()):
+                raise ValueError('weights must be one finite nonnegative value per portfolio member')
+            members = tuple(Member(m.source, float(w)) for m, w in zip(current, values) if w > 0)
+            if not members:
+                members = (Member(SEED.source, 0.),)
             working = Portfolio(self.engine, Library(members, original.library.study), original.null_shift)
             ref = working.reference
             trial = self._weight_metrics(ref.rr[None], self.engine.xp.asarray([ref.maxdd]), original.reference)

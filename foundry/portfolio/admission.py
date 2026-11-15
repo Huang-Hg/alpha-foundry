@@ -3,7 +3,7 @@
 Each candidate book is tried on a grid of weights 1/N..1 plus the analytic suggestion (tangency of P + aA);
 every trial is the real blended book U + a*A capped to the market's gross exposure budget, backtested with costs
 (trades inside the portfolio net out). A trial is feasible when
-  - the recency-weighted Sharpe rises by at least [portfolio] min_sharpe_gain and the full-period Sharpe does not fall
+  - the recency-weighted Sharpe rises by at least Admission.min_sharpe_gain and the full-period Sharpe does not fall
     (Sharpe is the primary dimension and is never traded), and
   - full-period CAGR and recency-weighted log growth each change relatively at least as much as the max drawdown
     depth: dx >= |x_ref| * (|DD| / |DD_ref| - 1) (same drawdown: return must not fall; 10% deeper: 10% more return;

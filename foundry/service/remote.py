@@ -9,9 +9,9 @@ service still listens on 127.0.0.1 only (the host exposes only ssh, and the JSON
 login details come from mcp-ssh/hosts.json. Where to talk is state, not configuration: attach writes {host, port}
 into the service port file, and every client of this workspace follows it.
 
-attach first checks code parity (md5 of every source file and the config, local vs cloud): a cloud running other
-code gives silently different readings, which is worse than no connection. Deployment itself (tar + upload, rebuild
-of changed native sources on the server) is not done here.
+attach first checks source parity. Explicit server parameters are exposed by research.describe and bound to
+its context; there is no local configuration file to compare. Deployment itself (tar + upload, rebuild of
+changed native sources on the server) is not done here.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from typing import Dict, List
 
 import paramiko
 
-from foundry.config import ROOT
+from foundry.parameters import ROOT
 from foundry.adapters.files import publish
 from foundry.service.protocol import PORTFILE
 
@@ -42,9 +42,9 @@ _LOCK = threading.Lock()
 
 
 def parity_files() -> List[str]:
-    """Everything that decides a reading: the package sources and the configuration."""
+    """The package sources, including the public parameter defaults."""
     files = sorted({p for pattern in SOURCES for p in (ROOT / 'foundry').rglob(pattern)})
-    return [p.relative_to(ROOT).as_posix() for p in files] + ['config/config.ini']
+    return [p.relative_to(ROOT).as_posix() for p in files]
 
 
 def connect(name: str) -> paramiko.SSHClient:
@@ -64,12 +64,13 @@ def connect(name: str) -> paramiko.SSHClient:
         return c
 
 
-def request(d: Dict, req: Dict, timeout: float) -> Dict:
+def request(d: Dict, req: Dict, timeout: float, payload: bytes = b'') -> Dict:
     """Same shape as the local TCP request: one JSON line out, one back."""
     ch = connect(d['host']).get_transport().open_channel('direct-tcpip', ('127.0.0.1', d['port']), ('127.0.0.1', 0), timeout=15.0)
     try:
         ch.settimeout(timeout)
         ch.sendall(json.dumps(req, ensure_ascii=False).encode('utf-8') + b'\n')
+        ch.sendall(payload)
         buf = b''
         while not buf.endswith(b'\n'):
             b = ch.recv(1 << 20)

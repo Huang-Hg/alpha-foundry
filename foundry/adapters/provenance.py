@@ -3,7 +3,7 @@ from dataclasses import asdict
 import hashlib
 import json
 
-from foundry.config import ROOT
+from foundry.parameters import ROOT
 from foundry.contracts import StudySnapshot
 
 

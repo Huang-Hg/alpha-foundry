@@ -109,14 +109,22 @@ class MemoryArrayStore:
 
 def write_bundle(path: Path, batch: ArrayBatch):
     """Export a host batch for RPC registration; device callers copy at this IO boundary."""
+    publish(path, encode_bundle(batch))
+
+
+def encode_bundle(batch: ArrayBatch) -> bytes:
     metadata = dict(format=BUNDLE, kind=batch.kind, ids=batch.ids, snapshot=batch.snapshot,
                     producer=batch.producer, dates=batch.dates, assets=batch.assets)
-    publish(path, _encode(metadata, batch.values, batch.observed_through, batch.fit_through))
+    return _encode(metadata, batch.values, batch.observed_through, batch.fit_through)
 
 
 def load_bundle(path: Path) -> ArrayBatch:
     """Read an external bundle without pickle or code deserialization."""
-    metadata, values, observed, fitted = _decode(path.read_bytes())
+    return decode_bundle(path.read_bytes())
+
+
+def decode_bundle(payload: bytes) -> ArrayBatch:
+    metadata, values, observed, fitted = _decode(payload)
     if metadata['format'] != BUNDLE:
         raise ValueError('batch protocol differs; export a current bundle')
     expected = {'format', 'kind', 'ids', 'snapshot', 'producer', 'dates', 'assets'}

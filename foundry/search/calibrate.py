@@ -62,10 +62,11 @@ def report(run_dir: Path, cfg):
             spread[q] = quantile(totals, .9) - quantile(totals, .01)
     chosen = max(spread, key=spread.get)
     print(f'\n{"scales":16s} {"wsharpe":>8s} {"sharpe":>8s} {"cagr":>8s} {"growth":>8s} {"on cap":>8s}   V at p1 / p10 / p50 / p90 of candidates')
-    for label, scales in [('config.ini now', old)] + [(f'p{q * 100:.0f} rule' + ' <-' * (q == chosen), v) for q, v in rules.items()]:
+    for label, scales in [('current parameters', old)] + [(f'p{q * 100:.0f} rule' + ' <-' * (q == chosen), v) for q, v in rules.items()]:
         totals, capped = saturation(rows, scales)
         print(f'{label:16s} ' + ' '.join(f'{s:8.4f}' for s in scales) + f' {capped:8.1%}   '
               + ' / '.join(f'{quantile(totals, q):.2f}' for q in (.01, .1, .5, .9)))
-    print('\n[portfolio]')
+    print('\nfoundry.Admission(')
     for name, value in zip(NAMES, rules[chosen]):
-        print(f'{name} = {value:.2g}')
+        print(f'    {name}={value:.2g},')
+    print(')')

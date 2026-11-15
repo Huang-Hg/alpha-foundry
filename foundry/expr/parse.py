@@ -165,7 +165,7 @@ def validate(s: str, fields: Iterable[str], max_cost: int) -> Dict:
     nodes = list(t.root.walk())
     cost = t.cost()
     if cost > max_cost:
-        return dict(ok=False, error=f'cost {cost} > 上限 {max_cost}([expr] max_cost)。简化表达式或减少嵌套层数', cost=cost)
+        return dict(ok=False, error=f'cost {cost} > 上限 {max_cost}(Operators.max_cost)。简化表达式或减少嵌套层数', cost=cost)
     if not any(n.kind == 'operand' for n in nodes):
         return dict(ok=False, error='表达式不含任何字段(纯常数树)')
     return dict(ok=True, error=None, cost=cost, n_ops=sum(not n.leaf for n in nodes), fields=t.fields(),

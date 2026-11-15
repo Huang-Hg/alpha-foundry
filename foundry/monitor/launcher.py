@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from foundry.config import ROOT
+from foundry.parameters import ROOT
 from foundry.adapters.files import publish
 from .cells import BASE
 from .watch import watch

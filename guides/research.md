@@ -4,9 +4,125 @@
 
 Point-in-time research for formulas, model signals and target exposures. Markets include US equities, A-shares, daily crypto spot and USDT linear isolated perpetuals. A-shares retain price-limit, suspension, sell-tax and next-session execution coverage. Linux CPU and CUDA execute explicit market specifications; cash accounts and CUDA statistics use paired FP32. Numerical policies are fixed before evaluation; no automatic precision replay is performed.
 
+## Bring your own data
+
+The bundled datasets are replaceable research fixtures. Pass `market`, `data_dir`, `start` and `end` to `foundry.open()` to use your own daily tables. CSV, database and API exports can be converted to the formats below without a vendor account or configuration file.
+
+### Daily files and columns
+
+All `panel.parquet` tables use long-form rows with `date`, `symbol`, `open`, `high`, `low`, `close` and `volume`. Store `date` as a timezone-naive, midnight datetime representing the exchange session (UTC calendar date for spot), `symbol` as a string and numerical columns as numbers. Preserve leading zeros in A-share identifiers.
+
+| Market | Additional panel columns | Other required files |
+| --- | --- | --- |
+| `us_equity` | `adj_factor` | `membership.parquet` |
+| `a_share` | `published`, `exec_open`, `exec_close` | `membership.parquet`, `manifest.json` |
+| `crypto_spot` | Boolean `eligible` | `manifest.json` |
+
+- **US equities:** the engine multiplies OHLC by `adj_factor`. Supply raw OHLC with the corresponding factors, or already-adjusted OHLC with factors of 1; do not adjust twice. Record the adjustment method and any missing historical vintages.
+- **A-shares:** OHLCV supplies raw signal prices; `exec_open` and `exec_close` supply cumulative historically adjusted execution prices. `published` is a session date: the reader freezes each bar using the latest version published by that bar's close. A later revision does not replace the old decision's bar. This is a daily availability convention, not an intraday publication clock.
+- **Eligibility:** equity `membership.parquet` has `symbol`, `start`, `end`, with inclusive start, exclusive end and null end for an open interval. The reader assumes these intervals were known at the relevant closes; it does not reconstruct missing announcement history. Keep quotes outside membership intervals so existing positions can still be valued. Spot eligibility is stored per daily row; missing eligibility becomes false.
+- **History and gaps:** retain history before the configured research start for rolling windows. Use one observation per date/symbol, apart from the explicit A-share publication versions. Leave missing quotes missing; never fill earlier rows from a future quote or infer historical constituents from today's list.
+
+### Example: your US equity CSV files
+
+Prepare `ohlcv.csv` with the US columns above and `membership.csv` with the eligibility columns. This conversion creates a new dataset directory:
+
+```python
+from pathlib import Path
+import pandas as pd
+
+directory = Path("data/my_us_equity")
+directory.mkdir(parents=True)
+panel = pd.read_csv("ohlcv.csv", parse_dates=["date"], dtype={"symbol": str})
+members = pd.read_csv("membership.csv", parse_dates=["start", "end"],
+                      dtype={"symbol": str})
+panel.to_parquet(directory / "panel.parquet", index=False)
+members.to_parquet(directory / "membership.parquet", index=False)
+```
+
+Open foundry.open(market="us_equity", data_dir="./data/my_us_equity", start=..., end=...) within your data coverage. session.describe() lists the available formula fields. Your dataset uses the same public API as the bundled snapshots.
+
+### Source metadata and custom features
+
+A-share and spot manifests must contain the seven `DataContract` fields: `schema`, `source`, `retrieved_at`, `features`, `execution_prices`, `publication`, `membership`. Use the bundled manifests as format examples, but record your own source, price conventions and actual availability limits. Do not copy a PIT claim or fabricate a publication timestamp.
+
+The current US file reader reports a fixed legacy data contract; adding a custom `manifest.json` alone does not change that reported provenance. Keep your source record with the data. Exposing a custom US provenance contract requires updating the data adapter; numeric snapshot identity still derives from the loaded panel and execution specification.
+
+Additional Parquet columns are not automatically exposed as formula fields. Feed externally computed model outputs through `ArrayBatch`, or explicitly extend the data adapter and market field definitions. The integration boundaries are [`foundry/adapters/data.py`](../foundry/adapters/data.py), [`MarketData`](../foundry/contracts.py) and the market's `compile` method; changing a data source does not require rewriting the backtest kernels.
+
+### Perpetual data
+
+The current reader uses a Binance-style hourly dataset contract: `trade.parquet`, `mark.parquet`, `funding.parquet` and `manifest.json`, with artifact hashes, ordered symbols and funding-interval transition evidence where required. The bundled three-contract and 64-contract snapshots show this layout. Daily OHLC alone is insufficient for funding and liquidation simulation.
+
+Use `foundry.import_perpetual(output, symbols="BTCUSDT ETHUSDT SOLUSDT", history_start="2025-01-01", start="2025-07-01", end="2025-12-31")` for explicit acquisition parameters. The following CLI uses the default symbols and dates:
+
+```bash
+python -m foundry import-perpetual data/crypto_perpetual_new
+```
+
+The importer preserves source records and verifies archive checksums. Research the result with `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_new", start=..., end=...)`. Existing snapshots take their asset order from the manifest; `symbols` controls new imports. Custom sources require the verified event contract or an explicit adapter and execution specification. See [perpetual_data.py](../foundry/adapters/perpetual_data.py) and [crypto execution](#crypto-execution).
+
+## Public Python API
+
+Start with `import foundry`. `foundry.open(...)` owns a local compute session; `foundry.connect((host, port))` connects to an existing service. Both offer the same reports, model registration, neighbourhood exploration and portfolio operations. Native Windows Python can act as a remote client; local numerical computation uses WSL2. Linux/Colab runs directly. Importing the package loads no data and initializes no GPU.
+
+```python
+import foundry
+
+with foundry.open(
+    "production/my_portfolio.json",
+    market="us_equity", backend="cuda",
+    start="2025-07-01", end="2026-06-30",
+    cuda=foundry.CUDA(candidate_batch=64),
+    admission=foundry.Admission(min_sharpe_gain=0.02),
+) as session:
+    report = session.evaluate({"trend": "gt(ma_dist_20,0)"})
+    decision = session.commit(report)
+    foundry.export(decision, "output/decision.json")
+```
+
+`evaluate` accepts a formula string, sequence of formulas or `{candidate_id: formula}` mapping. Each `report.rows` entry contains `metrics`, `risk`, `decision` and an ID. `commit(report)` rechecks admission against the reviewed portfolio version; evaluation does not change the portfolio. Callers do not construct stores, snapshots or version tokens.
+
+Pass parameters directly; there is no INI or implicit configuration file. Common arguments are `market`, `backend`, `data_dir`, `start` and `end`. Market-specific fees and leverage use `cost_rate`, `commission`, `stamp_tax_sell`, `leverage`, `maintenance_rate` and related fields. Advanced groups are `foundry.CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`, with one set of defaults in `foundry/parameters.py`. `foundry.schema()` returns the parameter schema and market defaults; `session.describe()["parameters"]` reports resolved values.
+
+Parameter objects are immutable; open another session to change settings. `foundry.mine(output, **parameters)` and `foundry.serve(portfolio, **parameters)` use the same parameters. The CLI accepts JSON with the same schema, for example `python -m foundry --parameters '{"market":"a_share","backend":"cuda"}' fields`, without creating a configuration file.
+
+### External models and target positions
+
+`session.grid` supplies ordered dates, assets and their data identity. This zero-signal example uses no observations or fitted model; replace the values and cutoffs with your actual producer's outputs:
+
+```python
+import numpy as np
+import foundry
+
+with foundry.open() as session:
+    grid = session.grid
+    days, assets = len(grid.dates), len(grid.assets)
+    values = np.zeros((1, days, assets), dtype=np.float32)
+    unused = np.full((1, days), -1, dtype=np.int64)
+    candidates = session.register(
+        values, kind="signals", ids=("model-v1",), grid=grid,
+        producer="external-program-v1",
+        observed_through=unused, fit_through=unused,
+    )
+    report = session.evaluate(candidates)
+```
+
+Choose `signals`, `target_weights` or `target_exposure`; units and market constraints are in the [candidate contract](#candidate-interface). Both cutoffs are integer row indices shaped `(candidates, dates)`. They must honestly describe consumed information and cannot exceed the decision row; `-1` means no observations or fit were used. Remote sessions upload NumPy arrays automatically without server paths. In-process sessions also accept CuPy arrays.
+
+### Portfolio operations and lifecycle
+
+- `session.explore(formulas, hypothesis="trend")` explores parameter and field neighbourhoods.
+- `session.portfolio()` returns members, weights and metrics; `baseline` identifies a new study's equal-weight comparison baseline.
+- `session.trial_weights(matrix)` evaluates finite nonnegative `(trials, members)` component weights in `portfolio()` order. These are not per-asset target positions.
+- `session.commit_weights(trials, index)` submits a selected trial through the shared admission rules. All-zero weights mean cash, not a restored equal-weight position.
+- `foundry.export(report, path)` writes JSON and creates parent directories.
+
+Omit a portfolio path for in-memory research. With a path, the portfolio is published atomically and external arrays use `Admission.artifact_dir`. Stale reports fail without automatic retries; call `session.refresh()` after another writer changes the portfolio, then evaluate again. Leaving `with` releases local resources; closing a remote client does not stop its shared service. In-process miners can use `session.evaluate_device(inputs)` to retain device arrays; remote calls use structured reports.
+
 ## Architecture
 
-The modular monolith separates the responsibilities below. [Architecture checks](../tests/test_architecture.py) reject dependency cycles, forbidden imports and import-time side effects.
+The modular monolith separates the responsibilities below. [Architecture checks](../validation/test_architecture.py) reject dependency cycles, forbidden imports and import-time side effects.
 
 | Owner | Responsibility |
 | --- | --- |
@@ -19,25 +135,25 @@ The modular monolith separates the responsibilities below. [Architecture checks]
 | runtime | Immutable settings, backend preparation and resource ownership |
 | monitor | Published status only; no data, engine or GPU ownership |
 
-Configuration is loaded explicitly by load_config(). Imports do not load market data, inspect GPUs, compile kernels or allocate device memory. open_runtime(settings, study) owns these operations and exposes close(). Domain dependencies are passed as arguments, with no global service locator.
+Public entry points resolve explicit parameters into immutable settings once. Imports do not read data, probe GPUs or allocate resources. Sessions own and release computation resources; domain dependencies are passed explicitly.
 
-Study fixes the research interval. Its snapshot also binds data, execution specifications, numerical policy and implementation identity. Query results carry the portfolio version. Evaluation never writes a portfolio; commit is a separate compare-and-swap command that atomically publishes one replacement. Device-resident batch evaluation and CLI/RPC serialization share typed use cases. The exported JSON Schema is the machine contract; python -m foundry --help is the command list.
+Study fixes the research interval. Its snapshot also binds data, execution specifications, numerical policy and implementation identity. Query results carry the portfolio version. Evaluation never writes a portfolio; commit is a separate compare-and-swap command that atomically publishes one replacement. Device-resident batch evaluation and CLI/RPC serialization share typed use cases. The exported JSON Schema is the machine contract; `python -m foundry --help` is the command list.
 
 Old wire, portfolio and checkpoint protocols are rejected explicitly. There are no compatibility shims or automatic baseline rewrites. Obsolete Quantiacs source, submission notebooks, configuration and platform-specific tests are removed. Historical Quantiacs data, including data/qnt_crypto, source manifests and private production artifacts, remain preserved; preservation does not imply complete PIT provenance.
 
 ## Candidate interface
 
-`research-v11` uses `Candidate(id, source)`. The tagged source is `Formula(expression)`, `ArraySource(kind, digest, snapshot, producer)`, or the explicit `EqualWeight()` portfolio seed. Formula miners and family exploration construct `Formula` objects. External model outputs enter through `Research.register_batch(batch, context_id)` and then use the same evaluation, weight trials, admission and commit rules.
+`research-v12` uses `Candidate(id, source)`. The tagged source is `Formula(expression)`, `ArraySource(kind, digest, snapshot, producer)`, or the explicit `EqualWeight()` portfolio seed. Formula miners and family exploration construct `Formula` objects. External model outputs enter through `Research.register_batch(batch, context_id)` and then use the same evaluation, weight trials, admission and commit rules.
 
-Construct `Research(engine, library_store, array_store, null_shift=False)` with explicit stores. `evaluate(candidates, context_id)` returns scalar reports; `evaluate_device(sources, context_id, report=False)` retains device books and daily returns. Queries do not publish artifacts or change the portfolio. `commit(candidates, context_id)` publishes one atomic successor. Registration is a separate command that stores immutable content-addressed artifacts and takes an owned copy, so the producer may reuse its input buffers after it returns. Reloading a committed array member verifies its artifact and declared cutoffs before execution.
+Public sessions assemble runtimes and stores. `evaluate` returns structured reports, while in-process `evaluate_device` retains device positions and returns. Queries do not change the portfolio; `commit` publishes an atomic successor. Registration takes an owned copy, and persisted array members are verified when a portfolio reopens.
 
-`ArrayBatch` in `foundry.candidates` carries `kind`, `ids`, `values`, `snapshot`, `producer`, `dates`, `assets`, `observed_through` and `fit_through`. Values are NumPy/CuPy `float32` or `float64` with shape `(B,T,S)` on the complete ordered study grid. For cash markets, `signals` use the same `clip(0,1)/eligible_count` conversion as formulas; NaN represents missing input. `target_weights` are finite nonnegative portfolio fractions, with zero weight on ineligible assets and total daily exposure at most 1. An excess within `[portfolio] weight_sum_atol` is normalized to 1; a larger excess is rejected. These weights still pass through market execution rules and next-open timing.
+`ArrayBatch` in `foundry.candidates` carries `kind`, `ids`, `values`, `snapshot`, `producer`, `dates`, `assets`, `observed_through` and `fit_through`. Values are NumPy/CuPy `float32` or `float64` with shape `(B,T,S)` on the complete ordered study grid. For cash markets, `signals` use the same `clip(0,1)/eligible_count` conversion as formulas; NaN represents missing input. `target_weights` are finite nonnegative portfolio fractions, with zero weight on ineligible assets and total daily exposure at most 1. An excess within `Admission.weight_sum_atol` is normalized to 1; a larger excess is rejected. These weights still pass through market execution rules and next-open timing.
 
 Both cutoff arrays are `int64 (B,T)` inclusive row indices, from `-1` through the decision row. `-1` means no observed input or no fitted model. The engine rejects forward cutoffs, wrong axes and a mismatched snapshot. These are producer declarations: they do not prove that external training or feature generation avoided leakage. `producer` must identify the model/program version. `research.describe` publishes the axes, snapshot and these limits; use `context.snapshot.id` in the batch and `context.id` for query/command concurrency.
 
 Registration transfers the payload to host storage once for hashing and publication. The recent input cache holds at most `candidate_batch` candidates; repeated evaluation retains device arrays while cached, and evicted inputs reload from their verified artifacts. CUDA producers must make inputs ready on the runtime's current stream before calling. Registration waits for its owned copy before returning. Noise-control delays for external arrays depend on producer identity and kind, never the content hash of the full future series.
 
-For RPC, export a host batch with `foundry.adapters.arrays.write_bundle(path, batch)`, then call `research.register_batch` with `{context, path}`. The path is local to the service host; loading uses `allow_pickle=False`. Its response contains typed candidates ready for `research.evaluate` or `research.commit`. Formula requests use `{"id":"alpha-1","source":{"kind":"formula","expression":"gt(ma_dist_20,0)"}}`. Export the request and result schemas with `python -m foundry schema OUTPUT`; the same dataclasses define Python results and JSON serialization.
+Remote sessions upload NumPy bundles automatically. The `research.register_batch` request carries `{context, bytes}`, followed by exactly that many binary bytes after its JSON newline, up to 1 GiB per upload. Loading uses `allow_pickle=False`; no server path is accepted. Responses share the typed candidate/report contract. `python -m foundry schema OUTPUT` exports request, result and parameter schemas.
 
 ## Crypto execution
 
@@ -45,13 +161,13 @@ For RPC, export a host batch with `foundry.adapters.arrays.write_bundle(path, ba
 
 `crypto_perpetual` uses USDT linear contracts and isolated collateral. Daily close signals rebalance at the following UTC open. Hourly execution processes mark-price gaps, funding on existing positions, scheduled rebalance, adverse mark high/low liquidation touches, then close valuation. Collateral is redistributed only at daily rebalance; idle cash does not top up a losing isolated position. Signed `target_exposure` values are notional/equity ratios with gross exposure capped by the configured leverage. Formula and `signals` inputs are clipped to [-1,1] and divided by eligible asset count; they do not implicitly request maximum leverage.
 
-Configure `[crypto_perpetual]` and use the importer listed by `python -m foundry --help` to obtain checksum-verified Binance trade candles, mark candles and settled funding. The initial fixed BTC/ETH/SOL universe uses 2025 data. Historical exchange risk tiers, VIP fees, order-book fills, ADL and tick ordering are not reconstructed. Constant maintenance/fee assumptions and hourly adverse-touch liquidation define this research model. Funding timestamps are retained, but execution buckets them to their hour and uses hourly mark open because the archive lacks settlement marks. Discovery exposes these limitations; this is not an exact exchange simulation or certified vendor PIT dataset.
+Configure `market="crypto_perpetual"` and use the importer listed by `python -m foundry --help` to obtain checksum-verified Binance trade candles, mark candles and settled funding. The initial fixed BTC/ETH/SOL universe uses 2025 data. Historical exchange risk tiers, VIP fees, order-book fills, ADL and tick ordering are not reconstructed. Constant maintenance/fee assumptions and hourly adverse-touch liquidation define this research model. Funding timestamps are retained, but execution buckets them to their hour and uses hourly mark open because the archive lacks settlement marks. Discovery exposes these limitations; this is not an exact exchange simulation or certified vendor PIT dataset.
 
 Typed simulation results retain daily funding, trading/liquidation fees, isolated loss-cap adjustments, liquidation phase bitmaps, bankruptcy and final equity. Reports aggregate cashflows/counts over the research window and name the account model. Loss-cap adjustments are accounting in this model, not claimed exchange insurance payments. Actual maximum gross leverage may exceed the entry limit after adverse prices.
 
 Perpetual CUDA assigns one warp to each account and lanes to assets. Hourly funding, liquidation stages and daily collateral changes remain chronological. Rebalance reductions run across assets. The account uses native arithmetic because the paired account experiment changed decisions immediately beside liquidation thresholds; its production use must satisfy the measured query-plus-commit cost limit described below. CUDA statistics and admission moments use paired FP32.
 
-Small perpetual accounts are planned for CPU execution before launch using `[cuda] perpetual_host_cells` and the complete `B*T*S` workload. The result returns to the runtime's device arrays. This is a declared size-based dispatch, with no runtime-error fallback or result-dependent rerun. Discovery publishes the threshold. Formula operators retain chronological rolling std/slope/correlation and population-standardization semantics; unstable compositions can still amplify tiny backend math differences, so sampled parity is not a guarantee for arbitrary formulas.
+Small perpetual accounts are planned for CPU execution before launch using `CUDA.perpetual_host_cells` and the complete `B*T*S` workload. The result returns to the runtime's device arrays. This is a declared size-based dispatch, with no runtime-error fallback or result-dependent rerun. Discovery publishes the threshold. Formula operators retain chronological rolling std/slope/correlation and population-standardization semantics; unstable compositions can still amplify tiny backend math differences, so sampled parity is not a guarantee for arbitrary formulas.
 
 The 64-contract experiment found no end-to-end benefit from the BF16 Tensor Core funding-prefix prototype. It is outside production. The replaced prefix kernels and scalar precision-refinement branch are deleted. Legitimate changes in funding intervals are accepted only with schedule evidence; missing funding events remain errors.
 
@@ -79,7 +195,7 @@ Two-observation windows use their closed forms: nonconstant Pearson correlation 
 
 MAD uses a directly centered window mean, WMA sums the current window oldest first, and cross-sectional reductions share one logical 256-lane tree across all three backends. Departed observations cannot leave a spurious MAD/WMA position, and identical cross-sectional inputs use the same rounding order. The fixed reduction order is a numerical contract, independent of host thread count.
 
-The [66-operator audit and 4,096-formula workflow](benchmarks/operator66.md) includes individual timing/error results, precision trials and the scope of the current 1.5× qualification.
+The [66-operator audit and 4,096-formula workflow](benchmarks/README.md) includes individual timing/error results, precision trials and the scope of the current 1.5× qualification.
 
 ## Development and validation
 
@@ -94,42 +210,19 @@ python -m pip install -r requirements.txt
 bash build.sh
 ```
 
-`bash build.sh backtest` rebuilds only that extension; omitting targets builds `ops`, `backtest` and `search`. The script derives Python/NumPy headers and the ABI suffix from the active `python3`, accepts paths with spaces, and uses no machine-specific interpreter or compiler paths. Operator, backtest and policy compilation retain their existing numerical flags. Linux CI builds on Python 3.12/3.13 and checks ASan/UBSan; it does not maintain a separate Windows toolchain.
+`bash build.sh backtest` rebuilds only that extension; omitting targets builds `ops`, `backtest` and `search`. The script derives Python/NumPy headers and the ABI suffix from the active `python3`, accepts paths with spaces, and uses no machine-specific interpreter or compiler paths. Operator, backtest and policy compilation retain their existing numerical flags. Native builds use Linux Python, including WSL2; Windows remote clients do not build these extensions.
 
-Install CuPy separately for the runtime's CUDA major; the validated Colab CUDA 13 environment uses `python -m pip install cupy-cuda13x`. CPU execution needs no CuPy or GPU. All tunable values live in `config/config.ini`. Architecture and pure-rule tests do not require private data, portfolios or credentials.
+Install CuPy for the runtime CUDA major; CPU execution needs no CuPy or GPU. Pass tunable values through the public API and inspect foundry.schema() for defaults. Architecture and pure-rule checks need no private data, portfolios or credentials.
 
-CPU CI covers architecture, expressions, native ABI, search policy, publication semantics and request/storage protocols. Cloud integration tests use explicit US/A-share, crypto-spot and isolated-perpetual studies and isolated temporary portfolio stores. They do not use the private production portfolio as an undisclosed seed. test_production separately checks an explicitly provisioned baseline and never silently records a replacement.
+The pytest validation suite covers architecture, expressions, native ABI, search policy, publication semantics and request/storage protocols. Cloud integration tests use explicit US/A-share, crypto-spot and isolated-perpetual studies and isolated temporary portfolio stores. They do not use the private production portfolio as an undisclosed seed. test_production separately checks an explicitly provisioned baseline and never silently records a replacement.
 
-Run CPU smoke before data/GPU integration in the environment authorized for the work:
+Use the unified entry point in the authorized cloud environment. GitHub Actions displays and archives these saved reports; it does not run the numerical suite:
 
 ```bash
-PYTHONPATH=tests python -m unittest test_architecture test_expr test_native test_policy test_monitor test_pit test_api test_service test_runtime test_candidates test_crypto_spot test_perpetual test_perpetual_data
-PYTHONPATH=tests python -m unittest test_cuda_backtest test_cuda_statistics test_cuda_moments test_cuda_operator_contracts test_cuda_markets test_cuda_pit test_cuda_candidates test_cuda_perpetual test_markets test_portfolio test_search
+python -m pip install -r requirements-benchmark.txt
+python -m foundry benchmark output/benchmark-new
 ```
 
 Performance reports distinguish loading, transfer/JIT, resident batches and complete use cases, and state GPU, full universe, precision and observed error.
 
-### Historical PRO 6000 validation under the former 2× budget
-
-The fixed-policy implementation passed 182 tests on Colab RTX PRO 6000 Blackwell Server Edition (97,887 MiB, driver 580.82.07; Python 3.13.16, NumPy 2.4.6, CuPy 14.0.1). Builds, smoke, CPU references, GPU tests and endpoint timing all ran there. The legacy private `production/regression.npz` lacks the current protocol/study identity: `test_production` was excluded and that artifact was not rewritten. This is not a claim of bitwise reproduction of the legacy portfolio.
-
-The comparison runs one warmed query followed by an ordered commit from the same initial portfolio, with identical candidates, order and market rules. Formula caches are cleared after warm-up. Loading, registration and JIT are outside the ratio. Each condition is measured once; the results qualify these workloads, not every device or input size.
-
-The **single-FP32 probe** changes GPU formula arithmetic and account arithmetic to single components. Both sides retain the same paired statistics, wide interchange arrays and preplanned small-perpetual CPU dispatch. It is an arithmetic-cost comparison, not an all-FP32 production implementation. The production formula operators and perpetual account recurrence retain native double arithmetic; cash accounts and CUDA statistics use paired FP32. Queries and commits never trigger precision reruns.
-
-| Workload | Single probe, seconds | Production, seconds | Ratio | Accepted |
-| --- | ---: | ---: | ---: | ---: |
-| US: 500 assets × 269 days, 64 formulas | 0.05081 | 0.08930 | 1.758× | 6 |
-| A-share: 365 assets × 601 days, 64 formulas | 0.10562 | 0.20479 | 1.939× | 8 |
-| Crypto spot: 73 assets × 4,018 days, 64 formulas | 0.22727 | 0.42082 | 1.852× | 5 |
-| Perpetual: 64 contracts, 64 formulas | 0.45509 | 0.83460 | 1.834× | 7 |
-| Perpetual: 64 contracts, 64 target books | 0.91915 | 1.56882 | 1.707× | 17 |
-| Perpetual: 64 contracts, 4,096 target books | 15.25573 | 26.91782 | 1.764× | 39 |
-
-All times in the table are **query + commit**. Perpetual inputs retain 365 days and all 8,760 hourly events, with a 184-day evaluation window. The large target-book case spends 10.52891 seconds on query and 16.38891 on commit; prepare and registration add 0.84255 and 1.24893 seconds separately. Device memory at completion is 11,666 MiB; pool reservation is 10,958 MiB. These are end-state readings, not peak measurements.
-
-Against the independent CPU reference, all six conditions have identical admission/rejection decisions, reason codes, constraint booleans, liquidation counts/first timestamps and bankruptcy flags. Maximum absolute differences across query and commit reports are: Sharpe `7.32e-11`, CAGR `2.18e-12`, drawdown `3.48e-13`, and selected weight `5.03e-12`. The 4,096-book funding difference is below `1.00e-15` and trading-fee difference below `2.03e-15`, in initial-equity units. Other report quantities have different scales: the largest normalized scalar error is `1.71e-9`, using `abs(error)/max(1, abs(reference))`; this is not a universal absolute-error bound. Direct CUDA tests additionally check event-stage bitmaps and adjacent liquidation thresholds. Array correctness reuses the unchanged CPU reference collected on the preceding authorized PRO 6000 worker; no cross-worker CPU speedup is claimed.
-
-The single probe changes some selected weights and constraint checks; in spot it even exchanges accepted candidate identities while leaving the accepted count at five. It therefore serves only as a speed denominator. Accuracy is judged against the independent CPU implementation, never from equal accepted counts alone.
-
-Paired arithmetic uses Quick-Two-Sum only for ordered normalization and FMA product residuals. Division forms its residual directly with FMA and preserves round-to-nearest division; an exact unit denominator returns the original pair. This removed redundant pair construction and reduced the previously over-budget cash workloads without lowering precision or changing admission tolerances. Tensor-core funding-prefix experiments are not enabled in production: they did not establish an end-to-end improvement for the chronological account model.
+Historical precision experiments are archived [separately](benchmarks/archive/precision-history.md). Use the [current benchmark suite](benchmarks/README.md) for public-API timings and correctness reports.

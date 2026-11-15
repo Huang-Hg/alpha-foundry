@@ -1,12 +1,14 @@
 """JSON conversion at the application boundary; device buffers never cross it."""
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import MISSING, asdict, fields, is_dataclass
 import math
 import types
-from typing import Literal, get_args, get_origin, get_type_hints
+from typing import Literal, get_args, get_origin, get_type_hints, is_typeddict
 from foundry.candidates import ArraySource, EqualWeight, Formula, Source
 from foundry.ops.registry import OPS, ARITY, COST, MIN_WINDOW, MAX_WINDOW
+from foundry.parameters import PARAMETER_GROUPS
 from foundry.portfolio.library import PROTOCOL
-from foundry.research_types import Candidate, CommitResult, Metrics, ResearchContext, RiskSummary, Verdict
+from foundry.research_types import (Candidate, CandidateReport, CommitReport, CommitResult,
+                                   EvaluationReport, Metrics, RiskSummary)
 
 
 REPORT_NOTES = {
@@ -29,39 +31,6 @@ REPORT_NOTES = {
         'max_gross_leverage': 'Maximum full-run actual gross notional/account equity ratio sampled at mark open before liquidation, after daily rebalance, and at mark close; not an intrabar maximum. Adverse prices can exceed the entry limit; infinity at nonpositive equity serializes as null.',
     },
 }
-
-
-@dataclass(frozen=True)
-class CandidateReport:
-    id: str
-    source: Source
-    ok: bool
-    error: str | None
-    precision: str
-    metrics: Metrics | None
-    risk: RiskSummary | None
-    decision: Verdict
-    accepted: bool
-    weight: float
-
-
-@dataclass(frozen=True)
-class EvaluationReport:
-    context: ResearchContext
-    rows: tuple[CandidateReport, ...]
-
-
-@dataclass(frozen=True)
-class CommitReport:
-    before: ResearchContext
-    context: ResearchContext
-    rows: tuple[CandidateReport, ...]
-
-
-@dataclass(frozen=True)
-class RegisteredBatch:
-    context: ResearchContext
-    candidates: tuple[Candidate, ...]
 
 
 def source_from_json(record):
@@ -95,14 +64,43 @@ def candidate_result(result):
 
 
 def evaluation_result(result):
+    return json_value(asdict(evaluation_report(result)))
+
+
+def evaluation_report(result):
     rows = tuple(candidate_report(row) for row in result.rows)
-    report = CommitReport(result.before, result.context, rows) if isinstance(result, CommitResult) else EvaluationReport(result.context, rows)
-    return json_value(asdict(report))
+    return CommitReport(result.before, result.context, rows) if isinstance(result, CommitResult) else EvaluationReport(result.context, rows)
+
+
+def from_json(kind, value):
+    """Decode the published dataclass contract, including tagged candidate sources."""
+    if kind == Source:
+        return source_from_json(value)
+    origin, args = get_origin(kind), get_args(kind)
+    if origin is types.UnionType:
+        return None if value is None else from_json(next(t for t in args if t is not type(None)), value)
+    if is_dataclass(kind):
+        return kind(**{name: from_json(annotation, value[name])
+                       for name, annotation in get_type_hints(kind).items()})
+    if origin is tuple:
+        return tuple(from_json(args[0], item) for item in value) if args[-1] is Ellipsis else tuple(
+            from_json(annotation, item) for annotation, item in zip(args, value))
+    if kind is float and value is None:
+        return float('nan')
+    return value
 
 
 def schema_for(kind):
     """Describe the same dataclasses that the JSON serializer publishes."""
     origin, args = get_origin(kind), get_args(kind)
+    if is_typeddict(kind):
+        properties = {}
+        for name, annotation in get_type_hints(kind).items():
+            properties[name] = schema_for(annotation)
+            if is_dataclass(annotation):
+                properties[name]['required'] = [f.name for f in fields(annotation)
+                    if f.default is MISSING and f.default_factory is MISSING]
+        return dict(type='object', properties=properties, required=sorted(kind.__required_keys__), additionalProperties=False)
     if is_dataclass(kind):
         properties = {name: schema_for(annotation) for name, annotation in get_type_hints(kind).items()}
         schema = dict(type='object', properties=properties, required=list(properties), additionalProperties=False)
@@ -123,9 +121,17 @@ def schema_for(kind):
             float: dict(type=['number', 'null']), type(None): dict(type='null')}[kind]
 
 
+def parameter_values(settings):
+    """Expose the resolved public parameter names, rather than internal assembly fields."""
+    return dict(market=settings.market.name, backend=settings.execution.backend,
+                **asdict(getattr(settings, settings.market.name)),
+                **{name: asdict(getattr(settings, field)) for name, (field, _) in PARAMETER_GROUPS.items()})
+
+
 def describe(research):
     engine = research.engine
     return dict(protocol=PROTOCOL, context=asdict(research.context), precision=asdict(engine.context.precision),
+        parameters=parameter_values(engine.settings),
         allocation=asdict(engine.allocation),
         metrics=schema_for(Metrics),
         fields=[dict(name=name, category=engine.panel.fields[name].category, scope=engine.panel.fields[name].scope,

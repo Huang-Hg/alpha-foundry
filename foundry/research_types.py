@@ -167,6 +167,65 @@ class CommitResult:
     rows: tuple[CandidateResult, ...]
 
 
+@dataclass(frozen=True)
+class CandidateReport:
+    id: str
+    source: Source
+    ok: bool
+    error: str | None
+    precision: str
+    metrics: Metrics | None
+    risk: RiskSummary | None
+    decision: Verdict
+    accepted: bool
+    weight: float
+
+
+@dataclass(frozen=True)
+class EvaluationReport:
+    context: ResearchContext
+    rows: tuple[CandidateReport, ...]
+
+
+@dataclass(frozen=True)
+class CommitReport:
+    before: ResearchContext
+    context: ResearchContext
+    rows: tuple[CandidateReport, ...]
+
+
+@dataclass(frozen=True)
+class RegisteredBatch:
+    context: ResearchContext
+    candidates: tuple[Candidate, ...]
+
+
+@dataclass(frozen=True)
+class DataGrid:
+    """Producer-visible coordinates, bound to one immutable data snapshot."""
+    snapshot: str
+    dates: tuple[str, ...]
+    assets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PortfolioReport:
+    context: ResearchContext
+    sources: tuple[Source, ...]
+    weights: tuple[float, ...]
+    metrics: Metrics
+    baseline: bool
+
+
+@dataclass(frozen=True)
+class WeightReport:
+    context: ResearchContext
+    weights: tuple[tuple[float, ...], ...]
+    feasible: tuple[bool, ...]
+    utility: tuple[float, ...]
+    delta: tuple[tuple[float, ...], ...]
+
+
 class LibraryStore(Protocol):
     def read(self, study): ...
     def commit(self, expected, replacement) -> None: ...

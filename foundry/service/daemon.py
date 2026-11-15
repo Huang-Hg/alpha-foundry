@@ -11,11 +11,11 @@ import traceback
 from pathlib import Path
 
 from foundry.adapters.files import publish
-from foundry.adapters.arrays import load_bundle
-from foundry.adapters.serialization import (RegisteredBatch, candidate_from_json, describe,
+from foundry.adapters.arrays import decode_bundle
+from foundry.adapters.serialization import (candidate_from_json, describe,
                                             evaluation_result, json_value)
 from foundry.portfolio.library import PROTOCOL
-from foundry.research_types import FamilySeed, ContextConflict
+from foundry.research_types import FamilySeed, ContextConflict, RegisteredBatch
 from foundry.service import schema
 from foundry.service.protocol import HOST, LOGFILE, PORTFILE, STATE, STATUSFILE
 
@@ -25,8 +25,9 @@ HEARTBEAT_SECONDS = 10.
 
 
 class Job:
-    def __init__(self, request):
+    def __init__(self, request, payload=b''):
         self.request = request
+        self.payload = payload
         self.done = threading.Event()
         self.result = None
         self.error = None
@@ -96,7 +97,8 @@ class Server:
         request_id = None
         try:
             conn.settimeout(30.)
-            line = conn.makefile('rb').readline(MAX_REQUEST_BYTES + 1)
+            reader = conn.makefile('rb')
+            line = reader.readline(MAX_REQUEST_BYTES + 1)
             if len(line) > MAX_REQUEST_BYTES:
                 raise ValueError('request exceeds protocol byte limit')
             if not line:
@@ -106,6 +108,11 @@ class Server:
             request_id = raw.get('id')
             request = schema.parse(raw)
             method = request['method']
+            payload = b''
+            if method == 'research.register_batch':
+                payload = reader.read(request['params']['bytes'])
+                if len(payload) != request['params']['bytes']:
+                    raise ValueError('array upload ended before its declared length')
             if method == 'system.status':
                 value = self.status()
             elif method == 'system.stop':
@@ -119,7 +126,7 @@ class Server:
                 if not already_stopping:
                     socket.create_connection((HOST, self.port), timeout=2.).close()
             else:
-                job = Job(request)
+                job = Job(request, payload)
                 with self.submit_lock:
                     if self.stopping:
                         raise RuntimeError('service is draining; request was not accepted')
@@ -161,7 +168,7 @@ class Server:
             self.current = dict(op=request['method'], id=request['id'], t0=started, state=job.state)
             self._publish()
             try:
-                job.result = self.dispatch(request)
+                job.result = self.dispatch(request, job.payload)
                 job.state = 'succeeded'
             except Exception as error:
                 job.error = error
@@ -175,13 +182,20 @@ class Server:
             self._publish()
             job.done.set()
 
-    def dispatch(self, request):
+    def dispatch(self, request, payload=b''):
         method, params = request['method'], request['params']
         if method == 'research.describe':
             return describe(self.research)
         if method == 'research.register_batch':
-            candidates = self.research.register_batch(load_bundle(Path(params['path'])), params['context'])
+            with self.runtime.resources.scope():
+                candidates = self.research.register_batch(decode_bundle(payload), params['context'])
             return json_value(asdict(RegisteredBatch(self.research.context, candidates)))
+        if method == 'research.portfolio':
+            return json_value(asdict(self.research.portfolio_report(params['context'])))
+        if method == 'research.trial_weights':
+            return json_value(asdict(self.research.evaluate_weights(params['weights'], params['context'])))
+        if method == 'research.commit_weights':
+            return json_value(asdict(self.research.commit_weights(params['weights'], params['context'])))
         if method == 'research.family':
             result = self.research.family(tuple(FamilySeed(**row) for row in params['seeds']), params['context'])
             self.n_expr += result.variants

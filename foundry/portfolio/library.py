@@ -4,7 +4,7 @@ import hashlib
 from foundry.contracts import Study
 from foundry.candidates import EqualWeight, Source
 
-PROTOCOL = 'research-v11'
+PROTOCOL = 'research-v12'
 
 
 @dataclass(frozen=True)
