@@ -1,18 +1,26 @@
 """Local daily market artifacts. Files stop at this adapter boundary."""
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
-import pandas as pd
-import pyarrow.parquet as pq
+from numpy.typing import NDArray
 
-from foundry.config import path
-from foundry.types import DataContract, MarketData
-from foundry.core.pit import membership
-from foundry.adapters.perpetual_data import load_perpetual
+from foundry.config import Settings, path
+from foundry.types import DataContract, MarketData, Study
+from foundry.market.pit import membership
+from foundry.market.perpetual import PerpetualData, load_perpetual
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
-def long_table(df, start: str, end: str, columns):
+def long_table(df: pd.DataFrame, start: str, end: str, columns: Sequence[str]) -> tuple[
+        NDArray[np.datetime64], list[str], dict[str, NDArray[np.floating]], int]:
     """Materialize the historical date/asset grid; an absent observation is NaN."""
+    import pandas as pd
+
     df = df[df['date'] <= pd.Timestamp(end)]
     dates, symbols = np.sort(df['date'].unique()), np.sort(df['symbol'].unique())
     grids = {c: np.ascontiguousarray(df.pivot(index='date', columns='symbol', values=c)
@@ -21,7 +29,7 @@ def long_table(df, start: str, end: str, columns):
     return dates, list(symbols), grids, int(np.searchsorted(dates, np.datetime64(start)))
 
 
-def published_bars(df):
+def published_bars(df: pd.DataFrame) -> pd.DataFrame:
     """Freeze each bar at session close; late publication cannot rewrite history.
 
     `date` and `published` are exchange-session dates. Intraday availability
@@ -33,12 +41,15 @@ def published_bars(df):
                                                         how='left', validate='one_to_one')
 
 
-def crypto_grid(frame, asof):
+def crypto_grid(frame: pd.DataFrame, asof: str) -> tuple[
+        NDArray[np.datetime64], tuple[str, ...], dict[str, NDArray[np.floating]], NDArray[np.bool_]]:
     """UTC daily spot grid, including weekends and missing calendar days.
 
     Membership is a historical close-decision observation, separate from quote
     history. A column with no quote before the cutoff is not a past asset.
     """
+    import pandas as pd
+
     columns = ('open', 'high', 'low', 'close', 'volume')
     frame = frame[frame['date'] <= pd.Timestamp(asof)]
     quoted = frame['open'].notna() | frame['close'].notna()
@@ -51,7 +62,10 @@ def crypto_grid(frame, asof):
     return dates.to_numpy(dtype='datetime64[D]'), symbols, grids, members
 
 
-def load_data(settings, study):
+def load_data(settings: Settings, study: Study) -> MarketData | PerpetualData:
+    import pandas as pd
+    import pyarrow.parquet as pq
+
     if study.market == 'crypto_perpetual':
         return load_perpetual(path(settings.market.data_dir), study)
     cfg = settings.market

@@ -4,13 +4,13 @@ from dataclasses import dataclass, replace
 from foundry.types import Formula
 
 from foundry.types import Candidate, ConstraintCheck
-from foundry.search.policy import CEM
+from foundry.types import FloatArray
 
 
 @dataclass(frozen=True)
 class BehaviorState:
-    book: object
-    returns: object
+    book: FloatArray
+    returns: FloatArray
     expr: str
     portfolio_version: str
 
@@ -71,7 +71,7 @@ class Evaluator:
 
     def __init__(self, research, archive, rho_max=.9):
         self.research, self.portfolio = research, research.portfolio
-        self.engine, self.archive, self.rho_max = research.engine, archive, rho_max
+        self.pipeline, self.archive, self.rho_max = research.pipeline, archive, rho_max
         self.ref, self.version = self.portfolio.reference, self.portfolio.version
         self.context_id = research.context.id
         self.archive_version = archive.version
@@ -80,7 +80,7 @@ class Evaluator:
         self.best_score = -float('inf')
         self.counters = dict.fromkeys(self.COUNTERS, 0)
         self.weights, self.books, self.member_returns = research.member_states(self.context_id)
-        xp = self.engine.xp
+        xp = self.pipeline.xp
         self.reference_vectors, self.reference_valid = standardized(xp.concatenate((self.ref.rr[None], self.member_returns)), xp)
         self.archive_vectors = standardized(xp.stack([v.returns for v in archive.items.values()]), xp)[0] if archive.items else xp.empty((0, len(self.ref.rr)))
 
@@ -90,27 +90,27 @@ class Evaluator:
             raise RuntimeError('archive changed inside frozen search epoch')
 
     def context(self):
-        xp = self.engine.xp
+        xp = self.pipeline.xp
         r, weights = self.ref.rr, xp.asarray(self.weights)
         block = xp.minimum(xp.arange(len(r)) * 6 // len(r), 5)
         means = xp.bincount(block, weights=r, minlength=6) / xp.maximum(xp.bincount(block, minlength=6), 1)
         sig = xp.sqrt(xp.mean(r * r))
         member_vol = self.member_returns.std(1)
         values = xp.concatenate((xp.asarray([self.ref.wsharpe / 3, self.ref.sharpe / 3, self.ref.recent_growth, self.ref.cagr]),
-            xp.stack((xp.sum(weights * weights), xp.sum(weights * member_vol) * self.engine.ppy ** .5,
+            xp.stack((xp.sum(weights * weights), xp.sum(weights * member_vol) * self.pipeline.ppy ** .5,
                       xp.mean(xp.sum(self.ref.W, axis=1)), xp.asarray(len(self.weights) / 40))),
             means / xp.maximum(sig, 1e-8),
             xp.stack((xp.asarray(len(self.archive.items) / max(1, self.archive.capacity)),
                       xp.mean(self.archive_vectors @ self.reference_vectors[0]) if len(self.archive_vectors) else xp.asarray(0.)))))
-        return self.engine.to_host(xp.tanh(xp.nan_to_num(values))).tolist()
+        return self.pipeline.to_host(xp.tanh(xp.nan_to_num(values))).tolist()
 
     def evaluate(self, expressions):
         self.check_context()
         self.counters['requested'] += len(expressions)
         fresh = [x for x in dict.fromkeys(expressions) if x not in self.cache]
-        for lo in range(0, len(fresh), self.engine.candidate_batch):
-            sources = tuple(Formula(expression) for expression in fresh[lo:lo + self.engine.candidate_batch])
-            batch = self.research.evaluate_device(sources, self.context_id)
+        for lo in range(0, len(fresh), self.pipeline.candidate_batch):
+            sources = tuple(Formula(expression) for expression in fresh[lo:lo + self.pipeline.candidate_batch])
+            batch = self.research.evaluate_device(sources, self.context_id, delayed=self.pipeline.settings.search.noise_control)
             self.counters['unique_evaluations'] += len(batch.rows)
             for row in batch.rows:
                 self.cache[row.source.expression] = MiningResult(row.source.expression, -12., False, False, False, error=row.error)
@@ -120,7 +120,7 @@ class Evaluator:
         return [self.cache[x] for x in expressions]
 
     def _behavior(self, returns):
-        xp = self.engine.xp
+        xp = self.pipeline.xp
         vectors, nonzero = standardized(returns, xp)
         correlations = xp.clip(vectors @ self.reference_vectors.T, -1, 1)
         rho = xp.maximum(0, xp.where(self.reference_valid[None], correlations, -xp.inf).max(1))
@@ -132,7 +132,7 @@ class Evaluator:
         if key not in self.archive.items:
             return False
         old = self.archive.items[key]
-        return old.portfolio_version == self.version and bool(self.engine.xp.array_equal(book, old.book))
+        return old.portfolio_version == self.version and bool(self.pipeline.xp.array_equal(book, old.book))
 
     def _stage(self, staged, books, returns, rows):
         for key, i in list(staged.items())[-self.archive.capacity:]:
@@ -142,7 +142,7 @@ class Evaluator:
                 self.pending.popitem(last=False)
 
     def _valid_batch(self, pairs):
-        xp = self.engine.xp
+        xp = self.pipeline.xp
         rows, verdicts = zip(*pairs)
         books, returns = xp.stack([r.book for r in rows]), xp.stack([r.returns for r in rows])
         _, nonzero, rho, low_corr, novelty = self._behavior(returns)
@@ -153,9 +153,9 @@ class Evaluator:
         feasible = inputs[:, 0].astype(xp.bool_) & low_corr
         distance = inputs[:, 2] + xp.maximum(0, rho - self.rho_max) + (~nonzero)
         reward = xp.where(feasible, 1 + 3 / (1 + xp.exp(-(inputs[:, 1] - .25 * co_loss - .1 * inputs[:, 3] - .25 * novelty))), -6 - xp.minimum(4, distance))
-        reports = self.engine.to_host(xp.stack((reward, feasible, rho, co_loss, novelty, nonzero), axis=1)).tolist()
+        reports = self.pipeline.to_host(xp.stack((reward, feasible, rho, co_loss, novelty, nonzero), axis=1)).tolist()
         staged = OrderedDict()
-        for i, (row, verdict, proposal, values, key) in enumerate(zip(rows, verdicts, proposals, reports, self.engine.fingerprints(books))):
+        for i, (row, verdict, proposal, values, key) in enumerate(zip(rows, verdicts, proposals, reports, self.pipeline.fingerprints(books))):
             duplicate = self._duplicate(key, books[i])
             accepted = bool(values[1]) and not duplicate
             self.cache[row.source.expression] = MiningResult(row.source.expression, values[0] if not duplicate else -10., accepted, True,
@@ -176,49 +176,17 @@ class Evaluator:
 
     def accept(self):
         self.check_context()
-        if self.best is None:
+        if self.best is None or self.pipeline.settings.search.noise_control:
             return None
         result = self.research.commit((Candidate(self.best, Formula(self.best)),), self.context_id)
         row = result.rows[0]
-        assert row.accepted
+        if not row.accepted:
+            raise RuntimeError('selected candidate no longer passes admission in the frozen context')
         return CandidateAcceptance(row.row.source.expression, row.weight, row.verdict.proposal.utility)
 
     def reweight(self, iterations=3, count=32, seed=1):
         self.check_context()
-        if len(self.portfolio.library.members) < 2:
-            return None
-        xp = self.engine.xp
-        books = xp.stack(self.books)
-        base = xp.asarray(self.weights, dtype=xp.float64)
-        inside = xp.clip(base, 1e-6, 1 - 1e-6)
-        sampler = CEM(self.engine.to_host(xp.log(inside / (1 - inside))))
-        best = None
-        evaluations = 0
-        for iteration in range(iterations):
-            weights = xp.asarray(sampler.sample(count, seed + iteration))
-            deletes = xp.broadcast_to(base, (len(base), len(base))).copy()
-            deletes[xp.arange(len(base)), xp.arange(len(base))] = 0
-            trials = xp.concatenate((weights, base[None], deletes))
-            score_parts = []
-            for lo in range(0, len(trials), self.engine.candidate_batch):
-                part = trials[lo:lo + self.engine.candidate_batch]
-                trial = self.research.trial_weights(part, books, self.context_id)
-                feasible, utility = trial.feasible, trial.utility
-                scores = xp.where(feasible, utility, -1e6)
-                score_parts.append(scores)
-                at = int(xp.argmax(scores))
-                if bool(feasible[at]) and (best is None or float(scores[at]) > best[0]):
-                    best = (float(scores[at]), part[at].copy())
-                evaluations += len(part)
-            scores = xp.concatenate(score_parts)
-            nfeasible = int((scores[:count] > -1e5).sum())
-            if nfeasible:
-                sampler.update(self.engine.to_host(scores[:count]), min(nfeasible, max(1, count // 4)))
-        if best is None:
-            return ReweightResult(False, evaluations)
-        values = self.engine.to_host(best[1]).tolist()
-        committed = self.research.commit_weights(values, self.context_id)
-        return ReweightResult(committed.changed, evaluations, committed.utility, tuple(values))
+        return self.research.reweight(self.context_id, iterations=iterations, count=count, seed=seed)
 
 
 @dataclass(frozen=True)
@@ -226,11 +194,3 @@ class CandidateAcceptance:
     expr: str
     weight: float
     utility: float
-
-
-@dataclass(frozen=True)
-class ReweightResult:
-    changed: bool
-    evaluations: int
-    utility: float | None = None
-    weights: tuple[float, ...] = ()

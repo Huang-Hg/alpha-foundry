@@ -7,7 +7,7 @@ kept the best of what it tried). So every formula (the seed) is expanded and its
            4 such slots (5^k points), +-1 rung beyond (3^k), a seeded sample of GRID_CAP points past that
   fields   every field replaced, one at a time, by each other field of its category: does the formula need THIS
            field, or would any series of that kind do?
-  twins    a seeded sample of the grid again with every signal delayed 1-3 years (Engine null shift): same structure,
+  twins    a seeded sample of the grid again with every signal delayed 1-3 years (stateless forward delay): same structure,
            costs and exposure, no information about the days it trades - how often admission passes on noise here
 Every variant goes through production admission against the current portfolio and is read as the change it makes
 to the portfolio: full-period Sharpe (the gain, primary), CAGR and max drawdown. Verdict per seed:
@@ -21,14 +21,17 @@ The number of variants is the multiple-testing count of the round.
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 import itertools
 import random
 import statistics
 
-from foundry.expr.parse import TOKEN, validate
-from foundry.types import Formula
+from foundry.ops.parse import TOKEN, validate
+from foundry.types import DeviceBatch, FamilySeed, ResearchContext
+from foundry.portfolio.reference import Reference
 from foundry.types import FamilyPoint, Spread, PlateauPoint, FieldSummary, SkippedFamily, FamilySummary, FamilyResult
-from foundry.ops.registry import OPS, WINDOW_LADDER
+from foundry.ops.registry import OPS, WINDOW_LADDER, SCALAR_LADDER
 
 GRID_CAP = 2187                                      # 3^7 grid points per seed; sampled beyond
 TWIN_SAMPLE = 256                                    # twins only estimate the pass rate on noise
@@ -38,7 +41,6 @@ MIN_PASS_RATE = .25
 MIN_TWIN_RATIO = 3.
 MIN_ATTEND = .05                                     # a book in cash on 95%+ of days buys its Sharpe with a few lucky days
 SEED = 7
-SCALARS = (-2, -1, -.5, -.3, -.2, -.1, -.05, 0, .05, .1, .2, .3, .5, .8, 1, 1.5, 2, 3, 5)
 
 
 def slots(expr):
@@ -77,7 +79,7 @@ def ladder(value, role, op, steps):
         cap = WINDOW_LADDER[-1]
         rungs, value = [w for w in WINDOW_LADDER if w <= cap], int(value)
     else:
-        rungs = list(SCALARS)
+        rungs = list(SCALAR_LADDER)
     below = [r for r in rungs if r < value][-steps:]
     return below + [value] + [r for r in rungs if r > value][:steps], len(below)
 
@@ -105,23 +107,20 @@ def neighbourhood(expr, categories):
 
 
 
-def evaluate(research, exprs, delayed, context_id):
+def points(batch: DeviceBatch, ref: Reference) -> dict[str, FamilyPoint]:
     out = {}
-    for lo in range(0, len(exprs), research.engine.candidate_batch):
-        part = exprs[lo:lo + research.engine.candidate_batch]
-        sources = tuple(Formula(expression) for expression in part)
-        batch = research.evaluate_noise_device(sources, context_id) if delayed else research.evaluate_device(sources, context_id, report=True)
-        for row, verdict in zip(batch.rows, batch.verdicts):
-            if verdict.stopped_at == 'G1':
-                out[row.source.expression] = FamilyPoint(row.source.expression, False, None, None, None, None, None, None)
-                continue
-            p, m, ref = verdict.proposal, row.metrics, research.portfolio.reference
-            days = sum(y.days for y in m.yearly)
-            out[row.source.expression] = FamilyPoint(row.source.expression, verdict.passed, m.sharpe, m.maxdd,
-                sum(y.attend * y.days for y in m.yearly) / days,
-                p.sharpe - ref.sharpe if p.valid else None,
-                p.cagr - ref.cagr if p.valid else None,
-                p.maxdd - ref.maxdd if p.valid else None)
+    for row, verdict in zip(batch.rows, batch.verdicts):
+        expression = row.source.expression
+        if verdict.stopped_at == 'G1':
+            out[expression] = FamilyPoint(expression, False, None, None, None, None, None, None)
+            continue
+        p, m = verdict.proposal, row.metrics
+        days = sum(y.days for y in m.yearly)
+        out[expression] = FamilyPoint(expression, verdict.passed, m.sharpe, m.maxdd,
+            sum(y.attend * y.days for y in m.yearly) / days,
+            p.sharpe - ref.sharpe if p.valid else None,
+            p.cagr - ref.cagr if p.valid else None,
+            p.maxdd - ref.maxdd if p.valid else None)
     return out
 
 
@@ -150,12 +149,20 @@ def plateau(grid, rows):
     return None
 
 
-def expand(research, seeds, context_id):
-    engine = research.engine
-    categories = {f: names for names in engine.panel.categories().values() for f in names}
+@dataclass(frozen=True)
+class FamilyPlan:
+    seeds: tuple[tuple[FamilySeed, list[tuple[str, tuple[int, ...]]], list[tuple[str, str, str]], str], ...]
+    skipped: tuple[SkippedFamily, ...]
+    expressions: tuple[str, ...]
+    twin_expressions: tuple[str, ...]
+    twins: Mapping[str, Sequence[str]]
+
+
+def plan(seeds: Sequence[FamilySeed], vocabulary: Sequence[str], categories: Mapping[str, Sequence[str]],
+         max_cost: float) -> FamilyPlan:
     plans, skipped = [], []
     for seed in seeds:
-        checked = validate(seed.expression, engine.vocabulary, engine.expr_cfg.max_cost)
+        checked = validate(seed.expression, vocabulary, max_cost)
         if not checked['ok']:
             skipped.append(SkippedFamily(seed.id, seed.expression, seed.hypothesis, checked['error']))
             continue
@@ -166,8 +173,12 @@ def expand(research, seeds, context_id):
     twins = {seed.id: [e for e, _ in grid] if len(grid) <= TWIN_SAMPLE else rng.sample([e for e, _ in grid], TWIN_SAMPLE)
              for seed, grid, _, _ in plans}
     twin_exprs = sorted({e for expressions in twins.values() for e in expressions})
-    real = evaluate(research, real_exprs, False, context_id)
-    twin = evaluate(research, twin_exprs, True, context_id)
+    return FamilyPlan(tuple(plans), tuple(skipped), tuple(real_exprs), tuple(twin_exprs), twins)
+
+
+def judge(planned: FamilyPlan, real: Mapping[str, FamilyPoint], twin: Mapping[str, FamilyPoint],
+          context: ResearchContext) -> FamilyResult:
+    plans, twins, skipped = planned.seeds, planned.twins, planned.skipped
     families = []
     for seed, grid, fields, seed_expr in plans:
         g = spread([real[e] for e, _ in grid])
@@ -188,4 +199,4 @@ def expand(research, seeds, context_id):
                                                 statistics.median(valid) if valid else None))
         families.append(FamilySummary(seed.id, seed.hypothesis, real[seed_expr], g, t, verdict, seed_rank,
                                       centre, tuple(field_summaries)))
-    return FamilyResult(research.context, tuple(families), len(real) + len(twin), tuple(skipped))
+    return FamilyResult(context, tuple(families), len(real) + len(twin), tuple(skipped))

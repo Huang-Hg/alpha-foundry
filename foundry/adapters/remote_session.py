@@ -3,7 +3,7 @@ from dataclasses import asdict
 
 import numpy as np
 
-from foundry.adapters.arrays import encode_bundle
+from foundry.study.store import encode_bundle
 from foundry.adapters.serialization import from_json
 from foundry.types import FamilyResult
 from foundry.types import (CommitReport, DataGrid, EvaluationReport, PortfolioReport,
@@ -33,6 +33,9 @@ class RemoteBackend:
 
     def evaluate(self, candidates, context):
         return self._call('research.evaluate', dict(context=context, candidates=[asdict(c) for c in candidates]), EvaluationReport)
+
+    def resident(self):
+        raise ValueError('resident views require an in-process session')
 
     def evaluate_device(self, candidates, context):
         raise ValueError('resident device results require foundry.open(); remote sessions return structured reports')

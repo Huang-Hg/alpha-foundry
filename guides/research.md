@@ -48,7 +48,7 @@ A-share and spot manifests must contain the seven `DataContract` fields: `schema
 
 The current US file reader reports a fixed legacy data contract; adding a custom `manifest.json` alone does not change that reported provenance. Keep your source record with the data. Exposing a custom US provenance contract requires updating the data adapter; numeric snapshot identity still derives from the loaded panel and execution specification.
 
-Additional Parquet columns are not automatically exposed as formula fields. Feed externally computed model outputs through `ArrayBatch`, or explicitly extend the data adapter and market field definitions. The integration boundaries are [`foundry/adapters/data.py`](../foundry/adapters/data.py), [`MarketData`](../foundry/contracts.py) and the market's `compile` method; changing a data source does not require rewriting the backtest kernels.
+Additional Parquet columns are not automatically exposed as formula fields. Feed externally computed model outputs through `ArrayBatch`, or explicitly extend the data adapter and market field definitions. The integration boundaries are [`foundry/market/data.py`](../foundry/market/data.py), [`MarketData`](../foundry/types.py) and the market's `compile` method; changing a data source does not require rewriting the backtest kernels.
 
 ### Perpetual data
 
@@ -60,7 +60,7 @@ Use `foundry.import_perpetual(output, symbols="BTCUSDT ETHUSDT SOLUSDT", history
 python -m foundry import-perpetual data/crypto_perpetual_new
 ```
 
-The importer preserves source records and verifies archive checksums. Research the result with `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_new", start=..., end=...)`. Existing snapshots take their asset order from the manifest; `symbols` controls new imports. Custom sources require the verified event contract or an explicit adapter and execution specification. See [perpetual_data.py](../foundry/adapters/perpetual_data.py) and [crypto execution](#crypto-execution).
+The importer preserves source records and verifies archive checksums. Research the result with `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_new", start=..., end=...)`. Existing snapshots take their asset order from the manifest; `symbols` controls new imports. Custom sources require the verified event contract or an explicit adapter and execution specification. See [market/perpetual.py](../foundry/market/perpetual.py) and [crypto execution](#crypto-execution).
 
 ## Public Python API
 
@@ -127,29 +127,29 @@ The modular monolith separates the responsibilities below. [Architecture checks]
 | Owner | Responsibility |
 | --- | --- |
 | types, config | Studies, snapshots, backend capabilities, typed sources/results and storage ports |
-| core, expr, market, portfolio | Panel/metric semantics, formulas, trading rules and admission |
-| ops, backtest, engine | CPU/portable/CUDA computation over explicit arrays and execution specifications |
-| research | Shared evaluation, family exploration and explicit versioned commit use cases |
+| numeric, ops | Shared statistics, operator contracts, formula parsing and CPU/CUDA implementations |
+| market | Data reading, PIT panels and immutable trading-rule compilation |
+| backtest | Cash and hourly isolated-perpetual accounts over explicit execution arrays |
+| portfolio | Tensor-only allocation, admission and portfolio weight solvers |
+| study | Resource ownership, bounded caches, atomic storage and session evaluation/commit use cases |
 | search, CLI/RPC | Proposals and transport using the same research decisions |
-| adapters | Data loading, fingerprints, atomic storage and serialization |
-| runtime | Immutable settings, backend preparation and resource ownership |
 | monitor | Published status only; no data, engine or GPU ownership |
 
 Public entry points resolve explicit parameters into immutable settings once. Imports do not read data, probe GPUs or allocate resources. Sessions own and release computation resources; domain dependencies are passed explicitly.
 
-Study fixes the research interval. Its snapshot also binds data, execution specifications, numerical policy and implementation identity. Query results carry the portfolio version. Evaluation never writes a portfolio; commit is a separate compare-and-swap command that atomically publishes one replacement. Device-resident batch evaluation and CLI/RPC serialization share typed use cases. The exported JSON Schema is the machine contract; `python -m foundry --help` is the command list.
+Study fixes the research interval. Its snapshot also binds data, execution specifications, numerical parameters and explicit computation semantics versions. Query results carry the portfolio version. Evaluation never writes a portfolio; commit is a separate compare-and-swap command that atomically publishes one replacement. Device-resident batch evaluation and CLI/RPC serialization share typed use cases. The exported JSON Schema is the machine contract; `python -m foundry --help` is the command list.
 
 Old wire, portfolio and checkpoint protocols are rejected explicitly. There are no compatibility shims or automatic baseline rewrites. Obsolete Quantiacs source, submission notebooks, configuration and platform-specific tests are removed. Historical Quantiacs data, including data/qnt_crypto, source manifests and private production artifacts, remain preserved; preservation does not imply complete PIT provenance.
 
 ## Candidate interface
 
-`research-v12` uses `Candidate(id, source)`. The tagged source is `Formula(expression)`, `ArraySource(kind, digest, snapshot, producer)`, or the explicit `EqualWeight()` portfolio seed. Formula miners and family exploration construct `Formula` objects. External model outputs enter through `Research.register_batch(batch, context_id)` and then use the same evaluation, weight trials, admission and commit rules.
+`research-v13` uses `Candidate(id, source)`. The tagged source is `Formula(expression)`, `ArraySource(kind, digest, snapshot, producer, complexity)`, or the explicit `EqualWeight()` portfolio seed. Formula miners and family exploration construct `Formula` objects. External model outputs enter through `session.register(batch)` and then use the same evaluation, weight trials, admission and commit rules.
 
 Public sessions assemble runtimes and stores. `evaluate` returns structured reports, while in-process `evaluate_device` retains device positions and returns. Queries do not change the portfolio; `commit` publishes an atomic successor. Registration takes an owned copy, and persisted array members are verified when a portfolio reopens.
 
 `ArrayBatch` in `foundry.types` carries `kind`, `ids`, `values`, `snapshot`, `producer`, `dates`, `assets`, `observed_through` and `fit_through`. Values are NumPy/CuPy `float32` or `float64` with shape `(B,T,S)` on the complete ordered study grid. For cash markets, `signals` use the same `clip(0,1)/eligible_count` conversion as formulas; NaN represents missing input. `target_weights` are finite nonnegative portfolio fractions, with zero weight on ineligible assets and total daily exposure at most 1. An excess within `Admission.weight_sum_atol` is normalized to 1; a larger excess is rejected. These weights still pass through market execution rules and next-open timing.
 
-Both cutoff arrays are `int64 (B,T)` inclusive row indices, from `-1` through the decision row. `-1` means no observed input or no fitted model. The engine rejects forward cutoffs, wrong axes and a mismatched snapshot. These are producer declarations: they do not prove that external training or feature generation avoided leakage. `producer` must identify the model/program version. `research.describe` publishes the axes, snapshot and these limits; use `context.snapshot.id` in the batch and `context.id` for query/command concurrency.
+Both cutoff arrays are `int64 (B,T)` inclusive row indices, from `-1` through the decision row. `-1` means no observed input or no fitted model. The engine rejects forward cutoffs, wrong axes and a mismatched snapshot. These are producer declarations: they do not prove that external training or feature generation avoided leakage. `producer` must identify the model/program version. `session.describe()` publishes the axes, snapshot and these limits; use `context.snapshot.id` in the batch and `context.id` for query/command concurrency.
 
 Registration transfers the payload to host storage once for hashing and publication. The recent input cache holds at most `candidate_batch` candidates; repeated evaluation retains device arrays while cached, and evicted inputs reload from their verified artifacts. CUDA producers must make inputs ready on the runtime's current stream before calling. Registration waits for its owned copy before returning. Noise-control delays for external arrays depend on producer identity and kind, never the content hash of the full future series.
 

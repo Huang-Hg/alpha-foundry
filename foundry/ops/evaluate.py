@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from typing import Dict, Mapping
 
-from foundry.expr.ast import Node
-from foundry.types import Backend
+from foundry.ops.ast import Node
+from foundry.types import Backend, BoolArray, FloatArray
 
 
-def evaluate(n: Node, fields: Mapping, backend: Backend, cache: Dict[int, object], universe):
+def evaluate(n: Node, fields: Mapping[str, FloatArray], backend: Backend, cache: Dict[int, FloatArray],
+             universe: BoolArray) -> FloatArray:
     if n.kind == 'operand':
         return fields[n.op]
     if n.kind in ('const_add', 'const_mul'):
@@ -23,7 +24,7 @@ def evaluate(n: Node, fields: Mapping, backend: Backend, cache: Dict[int, object
     f = backend.impl[n.op]
     kind, ch = n.kind, n.children
 
-    def sub(i):
+    def sub(i: int) -> FloatArray:
         return evaluate(ch[i], fields, backend, cache, universe)
 
     if kind == 'unary':

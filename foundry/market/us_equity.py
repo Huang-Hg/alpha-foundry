@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from foundry.backtest.spec import ExecutionSpec
-from foundry.types import Allocation, LoadedStudy, Window
-from foundry.core.panel import Field, Panel
+from foundry.market.execution import cash_spec
+from foundry.types import Allocation, Backend, BoolArray, ExecutionSpec, LoadedStudy, MarketData, Study, Window
+from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
 
 
-class UsEquity(Market):
+class UsEquity(Market[MarketData, ExecutionSpec]):
     allocation = Allocation(1., False)
     name = 'us_equity'
     ppy = 252.0
@@ -25,7 +25,7 @@ class UsEquity(Market):
     def __init__(self, cost_rate: float, daily_borrow: float):
         self.cost_rate, self.daily_borrow = cost_rate, daily_borrow
 
-    def compile(self, data, backend, study):
+    def compile(self, data: MarketData, backend: Backend, study: Study) -> LoadedStudy[UsEquity, Panel, ExecutionSpec]:
         dates, symbols, g = data.dates, data.assets, data.values
         start = int(np.searchsorted(dates, np.datetime64(study.start)))
         src = {k: g[k] * g['adj_factor'] for k in ('open', 'high', 'low', 'close')}
@@ -33,9 +33,9 @@ class UsEquity(Market):
         src['member'] = data.members
         fields = [Field(k, 'price', formula=False) for k in src] + ohlcv_fields() + trend_fields()
         carry = None if self.daily_borrow == 0 else np.full(src['close'].shape, self.daily_borrow)
-        spec = ExecutionSpec.build(src['open'], src['close'], self.cost_rate * src['open'], carry=carry)
+        spec = cash_spec(src['open'], src['close'], self.cost_rate * src['open'], carry=carry)
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
                            Window(dates, start), data.contract)
 
-    def universe(self, panel):
+    def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel.backend.xp.isfinite(panel['close'])

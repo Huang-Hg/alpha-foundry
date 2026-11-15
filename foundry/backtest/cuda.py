@@ -2,13 +2,16 @@
 Prices, holdings and trial grids stay on device; CPU execution is an independent reference.
 """
 from __future__ import annotations
-from pathlib import Path
+
 from functools import cached_property
+from pathlib import Path
+
 import cupy as cp
 import numpy as np
+
 from foundry.numeric.cuda_source import paired_source
-from foundry.backtest.spec import ExecutionSpec
-from foundry.types import SimulationResult
+from foundry.types import ExecutionSpec, FloatArray, IntArray, SimulationResult
+
 _KERNELS = Path(__file__).parent / 'kernels'
 MAX_ASSETS = 128
 _FINGERPRINT_SOURCE = r'''
@@ -90,7 +93,7 @@ class Executor:
         self._general_modules = {}
         self._fingerprint = cp.RawKernel(_FINGERPRINT_SOURCE, 'fingerprints')
 
-    def fingerprints(self, W):
+    def fingerprints(self, W: FloatArray) -> list[int]:
         hashes = cp.empty(len(W), dtype=cp.uint64)
         self._fingerprint((len(W),), (256,), (W, hashes, np.int32(W.shape[1]*W.shape[2])))
         return cp.asnumpy(hashes).tolist()
@@ -116,7 +119,7 @@ class Executor:
         B, T = rr.shape
         self._STATS((B,), (128,), (rr, np.int32(T), np.int32(start), np.float64(ppy), stats))
 
-    def simulate(self, W, spec: _DeviceSpec, start: int, ppy: float, precision):
+    def simulate(self, W: FloatArray, spec: _DeviceSpec, start: int, ppy: float, precision: str) -> SimulationResult:
         """Books W (B,T,S) -> (net daily returns (B,T), stats (B,5) = sharpe, mean, vol, max drawdown, total return
     over rows [start:]). One launch walks the days in order, so it has a latency floor independent of B
     (V100S, T=4262 x S=73: ~31 ms for 1..256 books): batch books into as few launches as possible."""
@@ -131,7 +134,8 @@ class Executor:
         self._statistics(rr, stats, start, ppy)
         return SimulationResult(rr, stats, None)
 
-    def blend(self, W, U, owners, weights, spec: _DeviceSpec, start: int, ppy: float, precision, batch: int):
+    def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
+              spec: _DeviceSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
         """Trial n = (U + weights[n] * W[owners[n]]) / max(1, exposure), fused into the kernel (U = the portfolio's raw
     additive sum). -> (returns over [start:], stats)."""
         eref = cp.ascontiguousarray(U.sum(1), dtype=cp.float64)
@@ -152,12 +156,12 @@ class Executor:
         self._statistics(rr, stats, start, ppy)
         return SimulationResult(rr[:, start:], stats, None)
 
-    def device_spec(self, host):
+    def device_spec(self, host: ExecutionSpec) -> _DeviceSpec:
         return _DeviceSpec(host, self.paired)
 
-    def close(self):
+    def close(self) -> None:
         self._general_modules.clear()
         self.__dict__.clear()
 
-def prepare():
+def prepare() -> Executor:
     return Executor()

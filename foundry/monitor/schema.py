@@ -94,7 +94,7 @@ class SearchStatus(Source, total=False):
     error: str                               # failed / interrupted
     mode: Literal['gfn', 'random']
     objective: str                           # key of objectives.OBJECTIVES; runs that predate it are 'portfolio'
-    null_shift: bool                         # noise control: every signal delayed
+    noise_control: bool                         # noise control: every signal delayed
     device: str
     epoch: RunCounter
     epochs: int

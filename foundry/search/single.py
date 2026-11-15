@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import math
 from foundry.types import Formula
 
-from foundry.core import metrics as M
+from foundry.numeric import metrics as M
 from foundry.search.evaluator import Evaluator, MiningResult
 from foundry.search.policy import Policy
 
@@ -30,7 +30,7 @@ class SingleGate:
 
 def population(research, archive):
     """Ordinary candidates and forward-delayed twins for this study snapshot."""
-    engine, context = research.engine, research.context
+    engine, context = research.pipeline, research.context
     key = context.snapshot.id
     if key not in archive.populations:
         settings, xp = engine.settings, engine.xp
@@ -55,7 +55,7 @@ def population(research, archive):
 
 def prior(research, archive, reference):
     real, twins = population(research, archive)
-    engine = research.engine
+    engine = research.pipeline
     observed, noise = measures(engine, real, reference)[4], measures(engine, twins, reference)[4]
     return float(observed.mean()), 1 - float(noise.var() / observed.var())
 
@@ -111,7 +111,7 @@ class SingleEvaluator(Evaluator):
 
     def __init__(self, research, archive, rho_max):
         super().__init__(research, archive, rho_max)
-        self.cfg, self.portfolio_cfg = self.engine.settings.single, self.engine.portfolio_cfg
+        self.cfg, self.portfolio_cfg = self.pipeline.settings.single, self.pipeline.portfolio_cfg
         mean, shrinkage = prior(research, archive, self.ref)
         self.kappa = required_appraisal(self.ref, mean, shrinkage, self.portfolio_cfg)
         self.gate = SingleGate(mean, shrinkage, self.ref.sharpe, self.kappa, self.cfg.anchor_correlation,
@@ -120,13 +120,13 @@ class SingleEvaluator(Evaluator):
                                self.cfg.recent_year_sharpe)
 
     def _valid_batch(self, pairs):
-        xp, cfg = self.engine.xp, self.cfg
+        xp, cfg = self.pipeline.xp, self.cfg
         rows, verdicts = zip(*pairs)
         books = xp.stack([row.book for row in rows])
         returns = xp.stack([row.returns for row in rows])
         maxdd = xp.stack([xp.asarray(row.maxdd) for row in rows])
         _, nonzero, rho, low_corr, novelty = self._behavior(returns)
-        sharpe, cagr, years, rho_p, appraisal = measures(self.engine, returns, self.ref)
+        sharpe, cagr, years, rho_p, appraisal = measures(self.pipeline, returns, self.ref)
         rho_m = mean_correlation(returns, self.member_returns, xp)
         required = required_sharpe(rho_p, rho_m, self.ref, self.kappa, cfg, self.portfolio_cfg, xp)
         room = self.ref.n < self.portfolio_cfg.max_members
@@ -139,10 +139,10 @@ class SingleEvaluator(Evaluator):
                      + xp.maximum(0, rho - self.rho_max) + (~nonzero) + (~admitted) + (0 if room else 1))
         score = utility(sharpe, maxdd, cagr, cfg, xp)
         reward = xp.where(feasible, 1 + 3 * score, -6 - xp.minimum(4, violation))
-        host = self.engine.to_host(xp.concatenate((xp.stack((reward, feasible, gate, rho, novelty, nonzero,
+        host = self.pipeline.to_host(xp.concatenate((xp.stack((reward, feasible, gate, rho, novelty, nonzero,
                          score, sharpe, cagr, maxdd, rho_p, appraisal, required, worth, rho_m), axis=1), years), axis=1)).tolist()
         staged = OrderedDict()
-        for i, (row, verdict, values, key) in enumerate(zip(rows, verdicts, host, self.engine.fingerprints(books))):
+        for i, (row, verdict, values, key) in enumerate(zip(rows, verdicts, host, self.pipeline.fingerprints(books))):
             duplicate = self._duplicate(key, books[i])
             accepted = bool(values[1]) and not duplicate
             proposal = verdict.proposal

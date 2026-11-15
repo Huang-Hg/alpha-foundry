@@ -4,10 +4,29 @@ Daily row t is observed at session close. Its target can first execute at the ne
 session open. Event rows carry both their effective date and publication date;
 later publications never rewrite an earlier decision row.
 """
+from __future__ import annotations
+
+from typing import Sequence, TypedDict
+
 import numpy as np
+from numpy.typing import NDArray
 
 
-def event_grid(dates, assets, records):
+class PublishedEvent(TypedDict):
+    symbol: str
+    effective: str
+    published: str
+    value: float
+
+
+class MembershipInterval(TypedDict):
+    symbol: str
+    start: str
+    end: str | None
+
+
+def event_grid(dates: NDArray[np.datetime64], assets: Sequence[str],
+               records: Sequence[PublishedEvent]) -> NDArray[np.floating]:
     """Publication-aware state for (symbol, effective, published, value) records.
 
     A newly published correction replaces the same effective observation only
@@ -31,7 +50,8 @@ def event_grid(dates, assets, records):
     return out
 
 
-def membership(dates,assets,intervals):
+def membership(dates: NDArray[np.datetime64], assets: Sequence[str],
+               intervals: Sequence[MembershipInterval]) -> NDArray[np.bool_]:
     """Effective interval [start,end); membership is observed at that day's close.
 
     A null end means there has been no exit event. An exit after the study cutoff

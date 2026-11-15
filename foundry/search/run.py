@@ -6,14 +6,14 @@ import os
 from pathlib import Path
 import time
 
-from foundry.adapters.files import publish
-from foundry.adapters.library import FileLibraryStore, MemoryLibraryStore, member_from_json
-from foundry.adapters.arrays import FileArrayStore
+from foundry.study.store import publish
+from foundry.study.store import FileLibraryStore, MemoryLibraryStore, member_from_json
+from foundry.study.store import FileArrayStore
 from foundry.adapters.serialization import json_value
 from foundry.config import ROOT, Settings, path
 from foundry.portfolio.library import PROTOCOL, Library
-from foundry.research import Research
-from foundry.runtime import configured_study, open_runtime
+from foundry.study.session import Ledger
+from foundry.study.resources import configured_study, open_runtime
 from foundry.search.evaluator import Archive, Evaluator
 from foundry.search.policy import Policy
 from foundry.search.single import SingleEvaluator
@@ -38,11 +38,11 @@ def train(policy, rewards, epoch, cfg):
 def run(output: Path, settings: Settings):
     run_started = time.perf_counter()
     cfg = settings.search
-    if cfg.null_shift and cfg.seed_portfolio != 'equal':
+    if cfg.noise_control and cfg.seed_portfolio != 'equal':
         raise ValueError('The noise control delays every expression book: set search.seed_portfolio=equal')
     if cfg.seed_portfolio == 'equal' and cfg.accept:
         raise ValueError('An equal-weight experiment cannot overwrite the production portfolio')
-    if cfg.objective == 'single' and (cfg.accept or cfg.null_shift):
+    if cfg.objective == 'single' and (cfg.accept or cfg.noise_control):
         raise ValueError('The single-alpha experiment requires an in-memory portfolio and undelayed candidates')
     output = output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -52,7 +52,7 @@ def run(output: Path, settings: Settings):
     os.write(fd, str(os.getpid()).encode())
     os.close(fd)
     state = dict(phase='loading', market=settings.market.name, epoch=0, epochs=cfg.epochs,
-                 mode=cfg.mode, objective=cfg.objective, null_shift=cfg.null_shift, accepted=0,
+                 mode=cfg.mode, objective=cfg.objective, noise_control=cfg.noise_control, accepted=0,
                  checkpoint_seconds_total=0.)
     try:
         write_json(status_path, state)
@@ -72,7 +72,7 @@ def run(output: Path, settings: Settings):
 
 
 def _epochs(output, settings, runtime, trainer, state):
-    cfg, engine = settings.search, runtime.engine
+    cfg, engine = settings.search, runtime.pipeline
     status_path = output / 'status.json'
     started = time.perf_counter()
     Scorer = SingleEvaluator if cfg.objective == 'single' else Evaluator
@@ -98,7 +98,7 @@ def _epochs(output, settings, runtime, trainer, state):
         started -= old['elapsed_seconds']
         state['accepted'] = old['accepted']
     store = disk_store if cfg.accept else MemoryLibraryStore(library)
-    research = Research(engine, store, FileArrayStore(path(settings.portfolio.artifact_dir)), null_shift=cfg.null_shift)
+    research = Ledger(engine, store, FileArrayStore(path(settings.portfolio.artifact_dir)))
     if resume:
         rebuild = Scorer(research, archive, cfg.rho_max)
         rebuild.evaluate(old['archive'])
@@ -147,7 +147,7 @@ def _epochs(output, settings, runtime, trainer, state):
         write_json(status_path, state)
         reweight = None
         reweight_start = time.perf_counter()
-        if cfg.reweight_iterations and (candidate is not None or epoch % cfg.reweight_every == 0):
+        if not cfg.noise_control and cfg.reweight_iterations and (candidate is not None or epoch % cfg.reweight_every == 0):
             optim = Evaluator(research, archive, cfg.rho_max)
             reweight = optim.reweight(cfg.reweight_iterations, cfg.reweight_batch, cfg.seed + epoch)
             del optim

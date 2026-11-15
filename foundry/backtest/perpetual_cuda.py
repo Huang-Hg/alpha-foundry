@@ -1,22 +1,35 @@
 """Warp-parallel perpetual accounts with a fixed study policy and paired statistics."""
+from __future__ import annotations
+
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cupy as cp
 import numpy as np
-from foundry.numeric.cuda_source import paired_source
+from foundry.numeric.allocation import cap_book
 
-from foundry.backtest.perpetual import (ARRAY_FIELDS, PerpetualSpec,
-                                      concatenate_results, simulation_result)
-from foundry.types import Allocation
-from foundry.portfolio.allocation import cap_book
+from foundry.backtest.perpetual import concatenate_results, simulation_result
+from foundry.numeric.cuda_source import paired_source
+from foundry.types import (
+    PERPETUAL_ARRAY_FIELDS,
+    Allocation,
+    Array,
+    FloatArray,
+    IntArray,
+    PerpetualSpec,
+    SimulationResult,
+)
+
+if TYPE_CHECKING:
+    from foundry.backtest.perpetual_cpu import Executor as HostExecutor
 
 
 @dataclass(frozen=True)
 class DeviceSpec:
     host: PerpetualSpec
-    arrays: tuple
-    offsets: object
+    arrays: tuple[Array, ...]
+    offsets: IntArray
     backend: str = 'cuda'
 
 
@@ -24,7 +37,7 @@ class Executor:
     parallel_trials = True
     precisions = frozenset({'native'})
 
-    def __init__(self, host_executor, host_cells):
+    def __init__(self, host_executor: HostExecutor, host_cells: int):
         self._modules = {}
         self.host_executor, self.host_cells = host_executor, host_cells
         self.calls = {'cpu': 0, 'cuda': 0}
@@ -40,7 +53,7 @@ class Executor:
                                                 options=('--std=c++17', '--fmad=false'))
         return self._modules[assets]
 
-    def device_spec(self, host):
+    def device_spec(self, host: PerpetualSpec) -> DeviceSpec:
         offsets = np.searchsorted(host.day_index, np.arange(host.days + 1)).astype(np.int64)
         assert np.all(np.diff(offsets) > 0), 'each daily interval has execution events'
         self._module(host.shape[1]).get_function('perpetual_asset_native')
@@ -50,11 +63,11 @@ class Executor:
         exponents = np.frexp(host.mark_open[0])[1]
         price_fields = {'trade_open', 'mark_open', 'mark_high', 'mark_low', 'mark_close', 'funding_mark'}
         arrays = tuple(cp.asarray(np.ldexp(getattr(host, name), -exponents)
-                       if name in price_fields else getattr(host, name)) for name in ARRAY_FIELDS)
+                       if name in price_fields else getattr(host, name)) for name in PERPETUAL_ARRAY_FIELDS)
         offsets = cp.asarray(offsets)
         return DeviceSpec(host, arrays, offsets)
 
-    def simulate(self, W, spec, start, ppy, precision):
+    def simulate(self, W: FloatArray, spec: DeviceSpec, start: int, ppy: float, precision: str) -> SimulationResult:
         assert precision == 'native'
         if W.size <= self.host_cells:
             self.calls['cpu'] += 1
@@ -65,7 +78,7 @@ class Executor:
         self.calls['cuda'] += 1
         return self.simulate_device(W, spec, start, ppy)
 
-    def simulate_device(self, W, spec, start, ppy):
+    def simulate_device(self, W: FloatArray, spec: DeviceSpec, start: int, ppy: float) -> SimulationResult:
         """One CUDA execution; also the explicit kernel verification boundary."""
         B, T, S = W.shape
         E = len(spec.host.event_times_ms)
@@ -82,7 +95,8 @@ class Executor:
             (arrays[0], np.int32(T), np.int32(start), np.float64(ppy), stats))
         return simulation_result(arrays, stats)
 
-    def blend(self, W, U, owners, weights, spec, start, ppy, precision, batch):
+    def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
+              spec: DeviceSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
         results = []
         allocation = Allocation(spec.host.leverage, True)
         for lo in range(0, len(weights), batch):
@@ -91,17 +105,17 @@ class Executor:
             results.append(self.simulate(books, spec, start, ppy, precision))
         return concatenate_results(results, start, cp)
 
-    def fingerprints(self, W):
+    def fingerprints(self, W: FloatArray) -> list[int]:
         hashes = cp.empty(len(W), cp.uint64)
         fingerprint = self._module(W.shape[2]).get_function('perpetual_fingerprints')
         fingerprint((len(W),), (256,), (cp.ascontiguousarray(W, dtype=cp.float64), hashes,
                                        np.int64(W.shape[1] * W.shape[2])))
         return cp.asnumpy(hashes).tolist()
 
-    def close(self):
+    def close(self) -> None:
         self._modules.clear()
         self.host_executor.close()
 
 
-def prepare(host_executor, host_cells):
+def prepare(host_executor: HostExecutor, host_cells: int) -> Executor:
     return Executor(host_executor, host_cells)

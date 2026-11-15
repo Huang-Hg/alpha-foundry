@@ -3,7 +3,9 @@ from dataclasses import MISSING, asdict, fields, is_dataclass
 import math
 import types
 from typing import Literal, get_args, get_origin, get_type_hints, is_typeddict
-from foundry.types import ArraySource, EqualWeight, Formula, Source
+from foundry.types import Source
+from foundry.study.session import candidate_report, evaluation_report
+from foundry.study.store import source_from_json
 from foundry.ops.registry import OPS, ARITY, COST, MIN_WINDOW, MAX_WINDOW
 from foundry.config import PARAMETER_GROUPS
 from foundry.portfolio.library import PROTOCOL
@@ -33,10 +35,7 @@ REPORT_NOTES = {
 }
 
 
-def source_from_json(record):
-    factory = {'formula': Formula, 'signals': ArraySource, 'target_weights': ArraySource, 'target_exposure': ArraySource,
-               'equal_weight': EqualWeight}[record['kind']]
-    return factory(**record)
+
 
 
 def candidate_from_json(record):
@@ -53,10 +52,7 @@ def json_value(value):
     return value
 
 
-def candidate_report(result):
-    row = result.row
-    return CandidateReport(result.id, row.source, row.ok, row.error, row.precision, row.metrics, row.risk,
-                           result.verdict, result.accepted, result.weight)
+
 
 
 def candidate_result(result):
@@ -67,9 +63,7 @@ def evaluation_result(result):
     return json_value(asdict(evaluation_report(result)))
 
 
-def evaluation_report(result):
-    rows = tuple(candidate_report(row) for row in result.rows)
-    return CommitReport(result.before, result.context, rows) if isinstance(result, CommitResult) else EvaluationReport(result.context, rows)
+
 
 
 def from_json(kind, value):
@@ -129,7 +123,7 @@ def parameter_values(settings):
 
 
 def describe(research):
-    engine = research.engine
+    engine = research.pipeline
     return dict(protocol=PROTOCOL, context=asdict(research.context), precision=asdict(engine.context.precision),
         parameters=parameter_values(engine.settings),
         allocation=asdict(engine.allocation),

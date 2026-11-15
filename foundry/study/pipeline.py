@@ -1,45 +1,124 @@
 """Batched candidate execution over an already assembled, immutable study.
 
 The runtime supplies arrays, operators, execution kernels and resource ownership.
-The engine owns expression/member caches and never selects or loads a market.
+The pipeline borrows resources and bounded caches, and never loads a market.
 """
 from __future__ import annotations
 
-from functools import wraps
-from collections import OrderedDict
-from dataclasses import replace
 import hashlib
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass, replace
+from functools import wraps
+from types import ModuleType
+from typing import (
+    TYPE_CHECKING,
+    Concatenate,
+    ParamSpec,
+    Protocol,
+    TypeVar,
+)
 
-from foundry.types import Backend, LoadedStudy, ReturnBatch, StudySnapshot
-from foundry.types import ArraySource, EqualWeight, Formula
-from foundry.core import metrics as M
-from foundry.expr.evaluate import evaluate
-from foundry.expr.parse import validate
-from foundry.types import ContextConflict, EvaluationRow, Metrics, RiskSummary, StatsRow, YearMetrics
-from foundry.portfolio.allocation import cap_book, signal_to_book
+from foundry.numeric.allocation import cap_book
 
+from foundry.config import CudaConfig, Settings
+from foundry.numeric import metrics as M
+from foundry.ops.evaluate import evaluate
+from foundry.ops.parse import validate
+from foundry.portfolio.allocation import signal_to_book
+from foundry.study.cache import CandidateCache, MeasurementKey, MemberKey
+from foundry.types import (
+    ArrayBatch,
+    ArraySource,
+    Backend,
+    BoolArray,
+    ContextConflict,
+    EqualWeight,
+    EvaluationRow,
+    ExecutionRiskBatch,
+    FloatArray,
+    Formula,
+    IntArray,
+    LoadedStudy,
+    Metrics,
+    ReturnBatch,
+    RiskSummary,
+    SimulationResult,
+    Source,
+    StatsRow,
+    StudySnapshot,
+    YearMetrics,
+)
 
-NULL_LAG = (365, 1095)
+if TYPE_CHECKING:
+    from cupy.cuda import Stream
+
+    from foundry.backtest.cpu import Executor as CashHostExecutor
+    from foundry.backtest.cuda import Executor as CashDeviceExecutor
+    from foundry.backtest.perpetual_cpu import Executor as PerpetualHostExecutor
+    from foundry.backtest.perpetual_cuda import Executor as PerpetualDeviceExecutor
+    from foundry.market.a_share import AShare
+    from foundry.market.crypto_spot import CryptoSpot
+    from foundry.market.panel import Panel
+    from foundry.market.perpetual import CryptoPerpetual
+    from foundry.market.us_equity import UsEquity
+    from foundry.types import ExecutionSpec, PerpetualSpec
+
+    ExecutionBackend = CashHostExecutor | CashDeviceExecutor | PerpetualHostExecutor | PerpetualDeviceExecutor
+    StudyData = LoadedStudy[AShare | UsEquity | CryptoSpot | CryptoPerpetual, Panel, ExecutionSpec | PerpetualSpec]
+
+Item = TypeVar('Item')
+Result = TypeVar('Result')
+Arguments = ParamSpec('Arguments')
+DELAY_LAG = (365, 1095)
 INVALID = 'G1 数值无效:含无穷值或全为缺失'
 
 
-def null_lag(expr: str) -> int:
+@dataclass(frozen=True)
+class ResourceStatus:
+    device: str
+    used_mib: int
+
+
+class DeviceResources(Protocol):
+    """Explicit host/device ownership needed by candidate computation."""
+    streams: tuple[nullcontext[None] | Stream, ...]
+
+    def scope(self) -> AbstractContextManager[None]: ...
+    def start_batch(self) -> None: ...
+    def finish_batch(self) -> None: ...
+    def synchronize(self) -> None: ...
+    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]: ...
+    def status(self) -> ResourceStatus: ...
+    def close(self) -> None: ...
+
+
+def delay_lag(key: str) -> int:
     """Deterministic forward-only noise control; the sample end never wraps."""
-    lo, hi = NULL_LAG
-    return lo + int.from_bytes(hashlib.sha256(expr.encode()).digest()[:8], 'big') % (hi - lo + 1)
+    lo, hi = DELAY_LAG
+    return lo + int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], 'big') % (hi - lo + 1)
 
 
-def resource_scope(method):
+def delay_shift(values: FloatArray, keys: Sequence[str], xp: ModuleType, fill: float) -> FloatArray:
+    """Shift (B,T,S) values by causal identities without wrapping or state."""
+    lag = xp.asarray([delay_lag(key) for key in keys])
+    at = xp.arange(values.shape[1])[None, :] - lag[:, None]
+    return xp.where((at >= 0)[:, :, None],
+                    values[xp.arange(len(keys))[:, None], xp.maximum(at, 0)], fill)
+
+
+def resource_scope(method: Callable[Concatenate[Pipeline, Arguments], Result]
+                   ) -> Callable[Concatenate[Pipeline, Arguments], Result]:
     @wraps(method)
-    def scoped(self, *args, **kwargs):
+    def scoped(self: Pipeline, *args: Arguments.args, **kwargs: Arguments.kwargs) -> Result:
         with self.resources.scope():
             return method(self, *args, **kwargs)
     return scoped
 
 
-class Engine:
-    def __init__(self, loaded: LoadedStudy, backend: Backend, executor, resources,
-                 settings, context: StudySnapshot):
+class Pipeline:
+    def __init__(self, loaded: StudyData, backend: Backend, executor: ExecutionBackend,
+                 resources: DeviceResources, settings: Settings, context: StudySnapshot):
         self.study, self.market, self.panel = loaded.study, loaded.market, loaded.panel
         self.allocation = self.market.allocation
         self.backend, self.executor, self.resources = backend, executor, resources
@@ -59,12 +138,15 @@ class Engine:
         self.candidate_batch, self.trial_batch = resources.batch_sizes(settings.cuda, self.panel.shape)
         self.commit_batch = self.candidate_batch if executor.parallel_trials else 1
         self.precision = context.precision.effective
-        self._members: dict[tuple, tuple] = {}
-        self._arrays: OrderedDict[ArraySource, object] = OrderedDict()
-        self._reports = OrderedDict()
+        self.cache = CandidateCache(self.candidate_batch, settings.portfolio.max_members)
+
+    def batches(self, items: Sequence[Item]) -> Iterator[Sequence[Item]]:
+        """Apply the runtime's resident candidate bound at every batch boundary."""
+        for lo in range(0, len(items), self.candidate_batch):
+            yield items[lo:lo + self.candidate_batch]
 
     @resource_scope
-    def validate_batch(self, batch):
+    def validate_batch(self, batch: ArrayBatch) -> None:
         """Check external arrays once, before publishing any immutable artifact."""
         xp = self.xp
         if batch.kind not in ('signals', 'target_weights', 'target_exposure'):
@@ -111,23 +193,24 @@ class Engine:
                     raise ValueError('target allocation must be zero for ineligible assets')
 
     @resource_scope
-    def register_arrays(self, sources, values):
+    def register_arrays(self, sources: Sequence[ArraySource], values: FloatArray) -> None:
         """Own the device copy; no IO or content hashing inside computation."""
         for source, value in zip(sources, values):
-            self._arrays[source] = self.xp.ascontiguousarray(self.xp.asarray(value)).copy()
-            self._arrays.move_to_end(source)
-            if len(self._arrays) > self.candidate_batch:
-                self._arrays.popitem(last=False)
+            self.cache.arrays[source] = self.xp.ascontiguousarray(self.xp.asarray(value)).copy()
         self.resources.synchronize()
 
-    def has_array(self, source):
-        if source in self._arrays:
-            self._arrays.move_to_end(source)
+    def has_array(self, source: ArraySource) -> bool:
+        if source in self.cache.arrays:
+            self.cache.arrays[source]
             return True
         return False
 
     @resource_scope
-    def evaluate(self, exprs: list[str], report=True, null_shift=False) -> list[EvaluationRow]:
+    def evaluate(self, exprs: Sequence[str], report: bool = True, *, delayed: bool = False) -> list[EvaluationRow]:
+        """Evaluate formula batches through the same bounded source pipeline."""
+        return self.evaluate_sources([Formula(text) for text in exprs], report, delayed=delayed)
+
+    def _evaluate_formulas(self, exprs: Sequence[str], report: bool, delayed: bool) -> list[EvaluationRow]:
         """Evaluate candidates without publishing state; device books/returns belong to this runtime."""
         xp, precision = self.xp, self.precision
         self.resources.start_batch()
@@ -153,20 +236,14 @@ class Engine:
         if not ids:
             return rows
         values = xp.stack(values)
-        if null_shift:
-            values = self._delayed(values, [rows[i].source.expression for i in ids], xp.nan)
+        if delayed:
+            values = delay_shift(values, [rows[i].source.expression for i in ids], xp, xp.nan)
         finite = (~xp.isinf(values).any(axis=(1, 2))) & xp.isfinite(values).any(axis=(1, 2))
         books = self.signal_to_book(values)
         return self._measure(rows, ids, books, finite, report, precision)
 
-    def _delayed(self, values, identities, missing):
-        xp = self.xp
-        lag = xp.asarray([null_lag(identity) for identity in identities])
-        at = xp.arange(values.shape[1])[None, :] - lag[:, None]
-        return xp.where((at >= 0)[:, :, None],
-                        values[xp.arange(len(identities))[:, None], xp.maximum(at, 0)], missing)
-
-    def _measure(self, rows, ids, books, finite, report, precision):
+    def _measure(self, rows: list[EvaluationRow], ids: Sequence[int], books: FloatArray,
+                 finite: BoolArray, report: bool, precision: str) -> list[EvaluationRow]:
         xp = self.xp
         if report:
             for i, stats, good in zip(ids, self.metrics(books), self.to_host(finite).tolist()):
@@ -188,45 +265,47 @@ class Engine:
         return rows
 
     @resource_scope
-    def evaluate_sources(self, sources, report=True, null_shift=False):
+    def evaluate_sources(self, sources: Sequence[Source], report: bool = True, *,
+                         delayed: bool = False) -> list[EvaluationRow]:
         """Snapshot-scoped measurements; returned buffers are borrowed read-only.
 
         Each caller gets its own mutable row. Portfolio verdicts are recomputed.
         """
+        return [row for part in self.batches(sources) for row in self._evaluate_batch(part, report, delayed)]
+
+    def _evaluate_batch(self, sources: Sequence[Source], report: bool, delayed: bool) -> list[EvaluationRow]:
         precision = self.precision
         if not report:
-            return self._compute_sources(sources, report, precision, null_shift)
-        keys = [(self.context.id, source, precision, null_shift) for source in sources]
-        found = {key: self._reports[key] for key in keys if key in self._reports}
+            return self._compute_sources(sources, report, precision, delayed)
+        keys = [MeasurementKey(self.context.id, source, precision, delayed) for source in sources]
+        found = {key: self.cache.reports[key] for key in keys if key in self.cache.reports}
         missing = list(dict.fromkeys(key for key in keys if key not in found))
         if missing:
-            computed = self._compute_sources([key[1] for key in missing], True, precision, null_shift)
+            computed = self._compute_sources([key.source for key in missing], True, precision, delayed)
             found.update(zip(missing, computed))
         for key in keys:
-            self._reports[key] = found[key]
-            self._reports.move_to_end(key)
-            if len(self._reports) > self.candidate_batch:
-                self._reports.popitem(last=False)
+            self.cache.reports[key] = found[key]
         return [replace(found[key]) for key in keys]
 
-    def _compute_sources(self, sources, report, precision, null_shift):
+    def _compute_sources(self, sources: Sequence[Source], report: bool, precision: str,
+                         delayed: bool) -> list[EvaluationRow]:
         """Every source becomes a book before the same execution/metrics path."""
         rows = [EvaluationRow(source, True, None, precision) for source in sources]
         formulas = [i for i, source in enumerate(sources) if isinstance(source, Formula)]
         if formulas:
-            computed = self.evaluate([sources[i].expression for i in formulas], report, null_shift)
+            computed = self._evaluate_formulas([sources[i].expression for i in formulas], report, delayed)
             for i, row in zip(formulas, computed):
                 rows[i] = row
         for kind in ('signals', 'target_weights', 'target_exposure'):
             ids = [i for i, source in enumerate(sources) if isinstance(source, ArraySource) and source.kind == kind]
             if not ids:
                 continue
-            values = self.xp.stack([self._arrays[sources[i]] for i in ids]).astype(self.xp.float64)
-            if null_shift:
+            values = self.xp.stack([self.cache.arrays[sources[i]] for i in ids]).astype(self.xp.float64)
+            if delayed:
                 # Full-array hashes include later values: using them as a noise
                 # clock would let a future edit change historical delays.
-                values = self._delayed(values, [sources[i].producer + ':' + kind for i in ids],
-                                       self.xp.nan if kind == 'signals' else 0.)
+                values = delay_shift(values, [sources[i].producer + ':' + kind for i in ids],
+                                     self.xp, self.xp.nan if kind == 'signals' else 0.)
             if kind == 'signals':
                 finite = self.xp.isfinite(values).any(axis=(1, 2))
                 books = self.signal_to_book(values)
@@ -240,41 +319,45 @@ class Engine:
                           self.xp.ones(len(ids), dtype=bool), report, precision)
         return rows
 
-    def members(self, sources, null_shift=False) -> list[tuple]:
-        """Books and returns cached within this engine's study snapshot only."""
-        missing = list(dict.fromkeys(source for source in sources if (source, null_shift) not in self._members))
-        for lo in range(0, len(missing), self.candidate_batch):
-            part = missing[lo:lo + self.candidate_batch]
-            for source, row in zip(part, self.evaluate_sources(part, null_shift=null_shift)):
+    def members(self, sources: Sequence[Source], *, delayed: bool = False) -> list[tuple[FloatArray, FloatArray]]:
+        """Borrow books and returns within this pipeline's immutable study snapshot."""
+        keys = [MemberKey(source, delayed) for source in sources]
+        found = {key: self.cache.members[key] for key in keys if key in self.cache.members}
+        missing = list(dict.fromkeys(key for key in keys if key not in found))
+        for part in self.batches(missing):
+            for key, row in zip(part, self.evaluate_sources([key.source for key in part], delayed=delayed)):
+                source = key.source
                 assert row.ok, (source, row.error)
-                self._members[(source, null_shift)] = (row.book, row.returns)
-        return [self._members[(source, null_shift)] for source in sources]
+                found[key] = (row.book, row.returns)
+        for key in keys:
+            self.cache.members[key] = found[key]
+        return [found[key] for key in keys]
 
-    def retain_member(self, row, null_shift):
+    def retain_member(self, row: EvaluationRow, *, delayed: bool = False) -> None:
         """Keep an admitted book while its raw input can leave the bounded cache."""
-        self._members[(row.source, null_shift)] = (row.book, row.returns)
+        self.cache.members[MemberKey(row.source, delayed)] = (row.book, row.returns)
 
     @resource_scope
-    def signal_to_book(self, values):
+    def signal_to_book(self, values: FloatArray) -> FloatArray:
         return signal_to_book(values, self.universe, self.slots, self.allocation, self.xp)
 
     @resource_scope
-    def equal_weight(self):
+    def equal_weight(self) -> FloatArray:
         return self.universe / self.slots
 
     @resource_scope
-    def simulate(self, W):
+    def simulate(self, W: FloatArray) -> SimulationResult:
         return self.executor.simulate(W, self.spec, self.start, self.ppy, self.precision)
 
     @resource_scope
-    def blend(self, W, U, owners, weights):
+    def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray) -> SimulationResult:
         return self.executor.blend(W, U, owners, weights, self.spec, self.start, self.ppy, self.precision, self.trial_batch)
 
     @resource_scope
-    def fingerprints(self, W):
+    def fingerprints(self, W: FloatArray) -> list[int]:
         return self.executor.fingerprints(W)
 
-    def _stack(self, books):
+    def _stack(self, books: FloatArray | Sequence[FloatArray]) -> FloatArray:
         xp = self.xp
         W = xp.ascontiguousarray(books if isinstance(books, xp.ndarray)
                                 else xp.stack([xp.asarray(b, dtype=xp.float64) for b in books]), dtype=xp.float64).copy()
@@ -282,13 +365,13 @@ class Engine:
         return W
 
     @resource_scope
-    def returns(self, books):
+    def returns(self, books: FloatArray | Sequence[FloatArray]) -> ReturnBatch:
         W = self._stack(books)
         result = self.simulate(W)
         rt = result.returns[:, self.start:]
         return ReturnBatch(W, rt, M.sound(rt, self.xp), result.statistics[:, 3], result.risk)
 
-    def _risk_summaries(self, risk, size):
+    def _risk_summaries(self, risk: ExecutionRiskBatch | None, size: int) -> list[RiskSummary | None]:
         if risk is None:
             return [None] * size
         xp = self.xp
@@ -302,7 +385,7 @@ class Engine:
                 for v, count, timestamp, failed in zip(scalars, counts, timestamps, bankrupt)]
 
     @resource_scope
-    def metrics(self, books, result=None) -> list[StatsRow]:
+    def metrics(self, books: FloatArray | Sequence[FloatArray], result: SimulationResult | None = None) -> list[StatsRow]:
         """Compute one semantic report; transfer only report scalars to the host."""
         xp = self.xp
         W = self._stack(books)
@@ -331,11 +414,8 @@ class Engine:
                     span=f'{dates[0]}..{dates[-1]}', n_days=len(dates)), bool(v[-1]), risks[i])
                 for i, v in enumerate(host)]
 
-    def close(self):
+    def close(self) -> None:
         """Release this study's caches; runtime closes its execution resources."""
-        self._members.clear()
-        self._arrays.clear()
-        self._reports.clear()
+        self.cache.close()
         self.fields.clear()
-        self.panel.release()
         del self.spec, self.universe, self.slots, self.years

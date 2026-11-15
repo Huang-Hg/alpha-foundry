@@ -1,3 +1,5 @@
 """Versioned arithmetic semantics, independent of source-file placement."""
 
 MOMENTS_SEMANTIC_VERSION = 'paired-centered-moments-log-growth-v1'
+
+BACKTEST_SEMANTIC_VERSION = 'paired-cash-hourly-isolated-warp-v1'

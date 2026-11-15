@@ -48,7 +48,7 @@ A 股和现货的 manifest 必须包含 `DataContract` 的七个字段：`schema
 
 当前美股文件读取器报告的是固定的遗留数据契约，仅增加自定义 `manifest.json` 不会改变报告中的来源说明。应随数据保留真实来源记录；要将自定义美股来源暴露到研究契约，需要修改数据适配器。数值快照身份仍由已加载面板与执行规格生成。
 
-额外的 Parquet 列不会自动成为公式字段。自己计算的模型输出通过 `ArrayBatch` 接入；需要新增公式字段时，明确扩展数据适配器与市场字段定义。相关边界是 [`foundry/adapters/data.py`](../foundry/adapters/data.py)、[`MarketData`](../foundry/contracts.py) 和市场的 `compile` 方法，更换数据来源无需重写回测数值核。
+额外的 Parquet 列不会自动成为公式字段。自己计算的模型输出通过 `ArrayBatch` 接入；需要新增公式字段时，明确扩展数据适配器与市场字段定义。相关边界是 [`foundry/market/data.py`](../foundry/market/data.py)、[`MarketData`](../foundry/types.py) 和市场的 `compile` 方法，更换数据来源无需重写回测数值核。
 
 ### 永续数据
 
@@ -60,7 +60,7 @@ A 股和现货的 manifest 必须包含 `DataContract` 的七个字段：`schema
 python -m foundry import-perpetual data/crypto_perpetual_new
 ```
 
-导入器保留来源记录并核验归档校验和。随后用 foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_new", start=..., end=...) 研究。已有快照的合约顺序由 manifest 决定，symbols 控制新导入。自有来源须满足经过验证的事件契约，或明确实现适配器和执行规格。详见 [perpetual_data.py](../foundry/adapters/perpetual_data.py) 和[加密货币执行](#加密货币执行)。
+导入器保留来源记录并核验归档校验和。随后用 foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_new", start=..., end=...) 研究。已有快照的合约顺序由 manifest 决定，symbols 控制新导入。自有来源须满足经过验证的事件契约，或明确实现适配器和执行规格。详见 [market/perpetual.py](../foundry/market/perpetual.py) 和[加密货币执行](#加密货币执行)。
 
 ## 公开 Python 接口
 
@@ -127,29 +127,29 @@ with foundry.open() as session:
 | 所有者 | 职责 |
 | --- | --- |
 | types、config | 研究区间、快照、后端能力、类型化来源/结果与存储端口 |
-| core、expr、market、portfolio | 面板与指标语义、公式、交易规则和准入 |
-| ops、backtest、engine | 基于明确数组和执行规格的 CPU/portable/CUDA 计算 |
-| research | 共用评价、邻域探索和显式版本化提交 |
+| numeric、ops | 共用统计口径、算子契约、公式解析与 CPU/CUDA 实现 |
+| market | 数据读取、PIT 面板与不可变交易规则编译 |
+| backtest | 基于明确执行数组的现金账户与逐仓永续小时事件账户 |
+| portfolio | 纯张量输入的持仓转换、硬准入与组合配权求解器 |
+| study | 资源生命周期、有界缓存、原子存储与会话评价/提交用例 |
 | search、CLI/RPC | 提案或传输，共用研究决策 |
-| adapters | 数据读取、指纹、原子存储和序列化 |
-| runtime | 不可变配置、后端准备与资源所有权 |
 | monitor | 只读取发布状态，不持有行情、引擎或 GPU |
 
 公开入口将显式参数一次解析为不可变设置。导入不读取行情、探测 GPU 或分配资源；会话拥有并释放计算资源，领域依赖由参数传入。
 
-Study 固定研究区间；快照进一步绑定数据、执行规格、数值策略和实现身份。查询结果携带组合版本。评价不写组合，commit 是独立的 compare-and-swap 命令，一次原子发布替换结果。设备驻留接口与 CLI/RPC 序列化共用类型化用例。可导出 JSON Schema 是机器契约，`python -m foundry --help` 是命令清单。
+Study 固定研究区间；快照进一步绑定数据、执行规格、数值参数与显式计算语义版本。查询结果携带组合版本。评价不写组合，commit 是独立的 compare-and-swap 命令，一次原子发布替换结果。设备驻留接口与 CLI/RPC 序列化共用类型化用例。可导出 JSON Schema 是机器契约，`python -m foundry --help` 是命令清单。
 
 旧请求、组合和 checkpoint 协议明确拒绝，不保留兼容层，不自动重录基线。Quantiacs 专属源码、提交 notebook、配置与测试已从当前工程移除；历史数据（包括 data/qnt_crypto）、来源 manifest 和私有生产工件继续保留。保留数据不代表其具备完整 PIT 来源证明。
 
 ## 候选接口
 
-`research-v12` 使用 `Candidate(id, source)`。来源明确区分 `Formula(expression)`、`ArraySource(kind, digest, snapshot, producer)` 和组合基准 `EqualWeight()`。公式挖掘器与邻域探索构造 `Formula`；模型输出通过 `Research.register_batch(batch, context_id)` 注册，然后共用评价、权重试探、准入和提交规则。
+`research-v13` 使用 `Candidate(id, source)`。来源明确区分 `Formula(expression)`、`ArraySource(kind, digest, snapshot, producer, complexity)` 和组合基准 `EqualWeight()`。公式挖掘器与邻域探索构造 `Formula`；模型输出通过 `session.register(batch)` 注册，然后共用评价、权重试探、准入和提交规则。
 
 公开会话自动装配运行环境与存储。`evaluate` 返回结构化报告，进程内 `evaluate_device` 保留设备持仓和收益。查询不修改组合，`commit` 原子发布完整后继组合。注册复制输入，返回后生产者可复用缓冲区；重新打开组合时验证数组工件和截止点。
 
 `foundry.types.ArrayBatch` 包含 `kind`、`ids`、`values`、`snapshot`、`producer`、`dates`、`assets`、`observed_through`、`fit_through`。`values` 是 NumPy/CuPy 的 `float32` 或 `float64 (B,T,S)`，必须覆盖研究快照完整且有序的日期/资产网格。股票与现货的 `signals` 与公式一样经过 `clip(0,1)/当日可持有资产数`，NaN 表示缺失。`target_weights` 是有限、非负的组合比例；无资格资产权重必须为零，单日总敞口不得超过 1。仅对 `Admission.weight_sum_atol` 内的微小超额归一化到 1，更大超额明确拒绝。目标权重继续服从市场执行规则和次日开盘时序。
 
-两个截止点数组均为 `int64 (B,T)`，使用包含端点的面板行号，范围为 `-1` 到对应决策行；`-1` 表示未使用观测或拟合模型。引擎拒绝未来截止点、错误坐标和旧快照。时间信息来自生产者声明，不能证明外部训练或特征计算没有泄露未来；`producer` 应标识模型/程序版本。`research.describe` 发布完整坐标、快照及这些限制：batch 的 `snapshot` 使用 `context.snapshot.id`，查询/命令的版本令牌使用 `context.id`。
+两个截止点数组均为 `int64 (B,T)`，使用包含端点的面板行号，范围为 `-1` 到对应决策行；`-1` 表示未使用观测或拟合模型。引擎拒绝未来截止点、错误坐标和旧快照。时间信息来自生产者声明，不能证明外部训练或特征计算没有泄露未来；`producer` 应标识模型/程序版本。`session.describe()` 发布完整坐标、快照及这些限制：batch 的 `snapshot` 使用 `context.snapshot.id`，查询/命令的版本令牌使用 `context.id`。
 
 注册时向宿主传输一次数据，用于内容摘要和保存；最近输入的设备缓存最多保留 `candidate_batch` 个候选。缓存命中后评价继续使用设备数组，逐出的输入从已验证工件重载。CUDA 生产者须在提交前让输入就绪于 runtime 当前 stream；注册会等自有复制完成再返回。外部数组的噪声对照延迟只依赖生产者身份与输入类型，不依赖包含未来数值的全序列摘要。
 

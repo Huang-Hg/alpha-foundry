@@ -12,16 +12,16 @@ from __future__ import annotations
 
 import numpy as np
 
-from foundry.backtest.spec import ExecutionSpec, ffill, previous
-from foundry.types import Allocation, LoadedStudy, Window
-from foundry.core.panel import Field, Panel
+from foundry.market.execution import cash_spec, ffill, previous
+from foundry.types import Allocation, Backend, BoolArray, ExecutionSpec, LoadedStudy, MarketData, Study, Window
+from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
 
 NO_BUY, NO_SELL = 1, 2
 TOLERANCE = 1e-3                              # adjusted prices are no longer on the 0.01 tick
 
 
-class AShare(Market):
+class AShare(Market[MarketData, ExecutionSpec]):
     allocation = Allocation(1., False)
     name = 'a_share'
     ppy = 242.0
@@ -32,7 +32,7 @@ class AShare(Market):
     def __init__(self, commission: float, transfer_fee: float, stamp_tax_sell: float):
         self.commission, self.transfer_fee, self.stamp_tax_sell = commission, transfer_fee, stamp_tax_sell
 
-    def compile(self, data, backend, study):
+    def compile(self, data: MarketData, backend: Backend, study: Study) -> LoadedStudy[AShare, Panel, ExecutionSpec]:
         dates, symbols, g = data.dates, data.assets, data.values
         start = int(np.searchsorted(dates, np.datetime64(study.start)))
         src = {k:g[k] for k in ('open','high','low','close','volume')}
@@ -49,9 +49,9 @@ class AShare(Market):
         block = (np.where(gap >= limit - TOLERANCE, NO_BUY, 0) | np.where(gap <= -limit + TOLERANCE, NO_SELL, 0)
                  | np.where(suspended, NO_BUY | NO_SELL, 0))
         fee = self.commission + self.transfer_fee
-        spec = ExecutionSpec.build(open_, close, fee * open_, cost_sell=(fee + self.stamp_tax_sell) * open_, block=block)
+        spec = cash_spec(open_, close, fee * open_, cost_sell=(fee + self.stamp_tax_sell) * open_, block=block)
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
                            Window(dates, start), data.contract)
 
-    def universe(self, panel):
+    def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel['trading']

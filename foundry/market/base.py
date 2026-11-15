@@ -6,21 +6,26 @@ execution kernel, statistics, admission and search are shared by every market.
 """
 from __future__ import annotations
 
-from foundry.core.panel import Field
-from foundry.types import Backend, LoadedStudy, MarketData, Study
+from typing import Generic, TypeVar
+
+from foundry.market.panel import Field, Panel
+from foundry.types import Backend, BoolArray, ExecutionSpec, FloatArray, LoadedStudy, PerpetualSpec, Study
+
+MarketInput = TypeVar('MarketInput')
+MarketSpec = TypeVar('MarketSpec', ExecutionSpec, PerpetualSpec)
 
 
-class Market:
+class Market(Generic[MarketInput, MarketSpec]):
     name = ''
     decision_clock = 'session_close'
     execution_clock = 'next_session_open'
     ppy = 252.0
     geometric = True                   # Market-level descriptive statistics use log returns.
-    categories: dict = {}              # category -> description, for formula authors
-    def compile(self, data: MarketData, backend: Backend, study: Study) -> LoadedStudy:
+    categories: dict[str, str] = {}    # category -> description, for formula authors
+    def compile(self, data: MarketInput, backend: Backend, study: Study) -> LoadedStudy[Market, Panel, MarketSpec]:
         raise NotImplementedError
 
-    def universe(self, panel):
+    def universe(self, panel: Panel) -> BoolArray:
         """Bool (T,S) on the panel's device: the assets a book may hold each day."""
         raise NotImplementedError
 
@@ -28,9 +33,9 @@ class Market:
 EPS = 1e-12
 
 
-def ohlcv_fields():
+def ohlcv_fields() -> list[Field]:
     """Scale-free daily price/volume primitives from open/high/low/close/volume (NaN where a price is missing)."""
-    def rng(B, h, l):
+    def rng(B: Backend, h: FloatArray, l: FloatArray) -> FloatArray:
         return h - l + EPS
     return [
         Field('rangepos', 'pricevolume', deps=('high', 'low', 'close'), doc='(c-l)/(h-l): close within the day range',
@@ -47,7 +52,7 @@ def ohlcv_fields():
     ]
 
 
-def trend_fields(price: str = 'price', windows=(20, 60, 120)):
+def trend_fields(price: str = 'price', windows: tuple[int, ...] = (20, 60, 120)) -> list[Field]:
     """Distance to the moving average and trailing return of a price field, derived with the panel's backend."""
     out = []
     for w in windows:

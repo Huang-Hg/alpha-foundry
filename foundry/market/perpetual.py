@@ -1,37 +1,101 @@
-"""Binance public USD-M archives and their explicit hourly research projection.
+"""USDT isolated perpetual data, acquisition and rule compilation."""
+from __future__ import annotations
 
-The importer verifies official SHA256 checksums, retains source bytes and records
-retrieval time. A completed output directory is immutable: a new revision needs
-a new output path. The loader performs no network access.
-"""
-from dataclasses import asdict
-from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
-from urllib.request import urlopen
+from typing import TYPE_CHECKING, Callable, Iterator, Mapping, Sequence, TypedDict
 from zipfile import ZipFile
 
 import numpy as np
-import pandas as pd
+from numpy.typing import NDArray
 
-from foundry.adapters.files import publish
-from foundry.types import DataContract, MarketData
-from foundry.perpetual_types import PerpetualData
+from foundry.config import CryptoPerpetualConfig
+from foundry.types import Allocation, Backend, BoolArray, DataContract, LoadedStudy, MarketData, PerpetualSpec, Study, Window
+from foundry.market.panel import Field, Panel
+from foundry.market.base import Market, ohlcv_fields, trend_fields
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+Publisher = Callable[[Path, bytes], None]
+
+
+@dataclass(frozen=True)
+class PerpetualData:
+    """Owned host event arrays: integer (E,) clocks and floating (E,S) prices/rates."""
+    daily: MarketData
+    event_times_ms: NDArray[np.int64]
+    day_index: NDArray[np.int32]
+    trade_open: NDArray[np.floating]
+    mark_open: NDArray[np.floating]
+    mark_high: NDArray[np.floating]
+    mark_low: NDArray[np.floating]
+    mark_close: NDArray[np.floating]
+    funding_rate: NDArray[np.floating]
+    funding_mark: NDArray[np.floating]
+
+
+class SourceRecord(TypedDict, total=False):
+    url: str
+    checksum_url: str
+    retrieved_at: str
+    sha256: str
+    bytes: int
+    kind: str
+    symbol: str
+    month: str
+    archive: str
+    checksum: str
+    first: int
+    last: int
+
+
+class ArtifactRecord(TypedDict):
+    path: str
+    sha256: str
+    rows: int
+
+
+class Manifest(TypedDict):
+    schema: str
+    source: str
+    retrieved_at: str
+    features: str
+    execution_prices: str
+    publication: str
+    membership: str
+    history_start: str
+    end: str
+    symbols: list[str]
+    timezone: str
+    interval: str
+    sources: list[SourceRecord]
+    artifacts: dict[str, ArtifactRecord]
+    built_at: str
 
 
 BASE = 'https://data.binance.vision/data/futures/um/monthly'
+
+
 HOUR_MS = 3_600_000
+
+
 SCHEMA = 'binance-um-hourly-v1'
+
+
 KINDS = {'trade': 'klines', 'mark': 'markPriceKlines', 'funding': 'fundingRate'}
+
+
 COLUMNS = {'trade': ('open_time', 'open', 'high', 'low', 'close', 'volume'),
            'mark': ('open_time', 'open', 'high', 'low', 'close'),
            'funding': ('calc_time', 'funding_interval_hours', 'last_funding_rate')}
 
 
-def archive_url(kind, symbol, month):
+def archive_url(kind: str, symbol: str, month: str) -> str:
     dataset = KINDS[kind]
     folder = f'{dataset}/{symbol}'
     if kind == 'funding':
@@ -42,7 +106,11 @@ def archive_url(kind, symbol, month):
     return f'{BASE}/{folder}/{filename}'
 
 
-def _verified_archive(raw, kind, symbol, month):
+def _verified_archive(raw: Path, kind: str, symbol: str, month: str,
+                      publish: Publisher) -> tuple[pd.DataFrame, SourceRecord]:
+    from urllib.request import urlopen
+    import pandas as pd
+
     url = archive_url(kind, symbol, month)
     filename = url.rsplit('/', 1)[1]
     directory = raw / KINDS[kind] / symbol
@@ -87,8 +155,11 @@ def _verified_archive(raw, kind, symbol, month):
     return frame, record
 
 
-def import_perpetual(output, cfg):
+def import_perpetual(output: str | Path, cfg: CryptoPerpetualConfig, publish: Publisher) -> Manifest:
     """Import configured monthly archives; do not overwrite a published dataset."""
+    from concurrent.futures import ThreadPoolExecutor
+    import pandas as pd
+
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     if (output / 'manifest.json').exists():
@@ -105,7 +176,7 @@ def import_perpetual(output, cfg):
     jobs = [(kind, symbol, str(month)) for symbol in symbols for month in months for kind in KINDS]
     jobs.extend(('funding', symbol, str(months[-1] + 1)) for symbol in symbols)
     with ThreadPoolExecutor(max_workers=8) as workers:
-        imported = workers.map(lambda job: _verified_archive(output / 'raw', *job), jobs)
+        imported = workers.map(lambda job: _verified_archive(output / 'raw', *job, publish), jobs)
         for frame, record in imported:
             frames[record['kind']].append(frame)
             sources.append(record)
@@ -132,7 +203,7 @@ def import_perpetual(output, cfg):
         payload = table.to_parquet(index=False)
         artifacts[kind] = dict(path=kind + '.parquet', sha256=hashlib.sha256(payload).hexdigest(), rows=len(table))
         publish(output / artifacts[kind]['path'], payload)
-    transitions = _verify_transitions(output, tables['funding'])
+    transitions = _verify_transitions(output, tables['funding'], publish)
     sources.extend(transitions)
     manifest = dict(asdict(contract), history_start=cfg.history_start, end=cfg.end, symbols=list(symbols),
                     timezone='UTC', interval='1h', sources=sources, artifacts=artifacts,
@@ -143,7 +214,8 @@ def import_perpetual(output, cfg):
     return manifest
 
 
-def _hourly_grid(frame, assets, times, columns, name):
+def _hourly_grid(frame: pd.DataFrame, assets: Sequence[str], times: NDArray[np.int64],
+                 columns: Sequence[str], name: str) -> dict[str, NDArray[np.floating]]:
     if frame.duplicated(['symbol', 'open_time']).any():
         raise ValueError(f'{name} contains duplicate asset/hour rows')
     if set(frame['symbol']) != set(assets) or len(frame) != len(times) * len(assets):
@@ -161,7 +233,7 @@ def _hourly_grid(frame, assets, times, columns, name):
     return grids
 
 
-def _transition_candidates(funding):
+def _transition_candidates(funding: pd.DataFrame) -> Iterator[tuple[str, int, int]]:
     """Only a shortened gap at an interval change can be a transition."""
     for symbol, events in funding.groupby('symbol', sort=False):
         events = events.sort_values('calc_time')
@@ -172,8 +244,10 @@ def _transition_candidates(funding):
             yield symbol, int(times[i]), int(times[i+1])
 
 
-def _verify_transitions(output, funding):
+def _verify_transitions(output: Path, funding: pd.DataFrame, publish: Publisher) -> list[SourceRecord]:
     """Resolve ambiguous frequency changes against the independent REST history."""
+    from urllib.request import urlopen
+
     records = []
     for symbol, first, last in _transition_candidates(funding):
         url = (f'https://fapi.binance.com/fapi/v1/fundingRate?symbol={symbol}'
@@ -192,8 +266,11 @@ def _verify_transitions(output, funding):
     return records
 
 
-def _funding_coverage(funding, successors, assets, lower, upper, transitions):
+def _funding_coverage(funding: pd.DataFrame, successors: pd.DataFrame, assets: Sequence[str], lower: int, upper: int,
+                      transitions: set[tuple[str, int, int]]) -> None:
     """Constant intervals prove adjacency; API evidence resolves frequency changes."""
+    import pandas as pd
+
     if set(successors['symbol']) != set(assets):
         raise ValueError('funding requires the next settlement timestamp/interval to prove tail coverage')
     proof = pd.concat((funding[['symbol', 'calc_time', 'funding_interval_hours']], successors), ignore_index=True)
@@ -218,8 +295,10 @@ def _funding_coverage(funding, successors, assets, lower, upper, transitions):
                 raise ValueError(f'funding settlement coverage has a gap or inconsistent interval: {asset}')
 
 
-def _project(tables, manifest, asof):
+def _project(tables: Mapping[str, pd.DataFrame], manifest: Manifest, asof: str) -> PerpetualData:
     """Truncate observations before any daily aggregation or event mapping."""
+    import pandas as pd
+
     if manifest['schema'] != SCHEMA or manifest['timezone'] != 'UTC' or manifest['interval'] != '1h':
         raise ValueError('unsupported perpetual dataset contract')
     first, last = pd.Timestamp(manifest['history_start']), pd.Timestamp(asof)
@@ -269,7 +348,9 @@ def _project(tables, manifest, asof):
                          rates, mark['open'].copy())
 
 
-def load_perpetual(directory, study):
+def load_perpetual(directory: str | Path, study: Study) -> PerpetualData:
+    import pandas as pd
+
     directory = Path(directory)
     manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
     upper = (pd.Timestamp(study.asof) + pd.Timedelta(days=1)).value // 1_000_000
@@ -295,3 +376,35 @@ def load_perpetual(directory, study):
             raise ValueError(f'perpetual artifact SHA256 differs: {kind}')
         tables[kind] = pd.read_parquet(BytesIO(payload))
     return _project(tables, manifest, study.asof)
+
+
+class CryptoPerpetual(Market[PerpetualData, PerpetualSpec]):
+    name = 'crypto_perpetual'
+    decision_clock = 'utc_day_close'
+    execution_clock = 'next_utc_day_open_then_hourly_funding_and_mark_risk'
+    ppy = 365.
+    geometric = True
+    categories = {'pricevolume': 'completed UTC daily trade-price/volume primitives',
+                  'trend': 'daily trend; execution-only funding and mark risk stay outside features'}
+
+    def __init__(self, leverage: float, cost_rate: float, maintenance_rate: float, liquidation_fee: float):
+        self.allocation = Allocation(leverage, True)
+        self.cost_rate, self.maintenance_rate, self.liquidation_fee = cost_rate, maintenance_rate, liquidation_fee
+
+    def compile(self, data: PerpetualData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
+        daily = data.daily
+        src = dict(daily.values, member=daily.members)
+        fields = [Field(k, 'price', formula=False) for k in src] + ohlcv_fields() + trend_fields()
+        shape = data.trade_open.shape
+        spec = PerpetualSpec(data.event_times_ms, data.day_index,
+            np.r_[True, data.day_index[1:] != data.day_index[:-1]], data.trade_open,
+            data.mark_open, data.mark_high, data.mark_low, data.mark_close,
+            data.funding_rate, data.funding_mark, np.full(shape, self.maintenance_rate),
+            np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee),
+            self.allocation.max_gross, len(daily.dates))
+        panel = Panel(daily.dates, daily.assets, fields, src, backend)
+        return LoadedStudy(study, self, panel, spec,
+                           Window(daily.dates, int(np.searchsorted(daily.dates, np.datetime64(study.start)))), daily.contract)
+
+    def universe(self, panel: Panel) -> BoolArray:
+        return panel['member'] & panel.backend.xp.isfinite(panel['close'])

@@ -6,7 +6,8 @@ a device library. Field documentation defines dtype, units and ownership.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
+import hashlib
 from types import ModuleType
 from typing import Callable, Generic, Literal, Mapping, Protocol, TypeAlias, TypeVar
 
@@ -17,6 +18,7 @@ MarketValue = TypeVar('MarketValue')
 PanelValue = TypeVar('PanelValue')
 SpecValue = TypeVar('SpecValue')
 LibraryValue = TypeVar('LibraryValue')
+ResidentValue = TypeVar('ResidentValue', covariant=True)
 
 
 class DeviceArray(Protocol):
@@ -409,7 +411,6 @@ class ResearchContext:
     id: str
     snapshot: StudySnapshot
     portfolio: str
-    null_shift: bool
 
 
 @dataclass(frozen=True)
@@ -601,7 +602,7 @@ class FamilyResult:
     skipped: tuple[SkippedFamily, ...]
 
 
-class SessionBackend(Protocol):
+class SessionBackend(Protocol[ResidentValue]):
     def context(self) -> ResearchContext: ...
     def refresh(self) -> ResearchContext: ...
     def grid(self) -> DataGrid: ...
@@ -614,4 +615,119 @@ class SessionBackend(Protocol):
     def portfolio(self, context: str) -> PortfolioReport: ...
     def trial_weights(self, weights: Array, context: str) -> WeightReport: ...
     def commit_weights(self, weights: tuple[float, ...], context: str) -> WeightCommit: ...
+    def resident(self) -> ResidentValue: ...
     def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class ExecutionSpec:
+    open_raw: HostArray
+    prev_close: HostArray
+    open_ff0: HostArray
+    close_ff0: HostArray
+    cost_buy: HostArray
+    live: HostArray
+    cost_sell: HostArray | None = None
+    block: HostArray | None = None
+    carry: HostArray | None = None
+
+    def __post_init__(self):
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if value is not None:
+                owned = np.array(value, order='C', copy=True)
+                owned.flags.writeable = False
+                object.__setattr__(self, field.name, owned)
+
+
+    @property
+    def snapshot(self):
+        digest=hashlib.sha256()
+        for field in fields(self):
+            value=getattr(self,field.name)
+            digest.update(field.name.encode())
+            if value is not None:
+                digest.update(str((value.shape, value.dtype.str)).encode())
+                digest.update(value.tobytes())
+        return digest.hexdigest()
+
+    @property
+    def symmetric(self) -> bool:
+        return self.cost_sell is None and self.block is None and self.carry is None
+
+    def rows(self, end: int) -> 'ExecutionSpec':
+        return replace(self, **{f.name: getattr(self, f.name)[:end] for f in fields(self) if getattr(self, f.name) is not None})
+
+
+PERPETUAL_MODEL = 'linear_usdt_isolated_daily_collateral_hourly_mark_touch_v1'
+PERPETUAL_EVENT_FIELDS = ('event_times_ms', 'day_index', 'rebalance')
+PERPETUAL_PANEL_FIELDS = ('trade_open', 'mark_open', 'mark_high', 'mark_low', 'mark_close',
+                'funding_rate', 'funding_mark', 'maintenance_rate', 'fee_rate', 'liquidation_fee')
+PERPETUAL_ARRAY_FIELDS = PERPETUAL_EVENT_FIELDS + PERPETUAL_PANEL_FIELDS
+
+@dataclass(frozen=True)
+class PerpetualSpec:
+    """Owned read-only host arrays for T daily targets and E hourly events.
+
+    event_times_ms/day_index are int64 (E,), UTC bar-start milliseconds and
+    indices in [0, days); rebalance is bool (E,). Price and rate arrays are
+    float64 (E,S): prices use USDT per asset unit, funding_rate is the signed
+    settlement fraction, and maintenance/fee/liquidation_fee are fractions of
+    mark/traded notional. The loader validates a complete, ordered event grid.
+    Intrabar first-liquidation timestamps identify the bar, not a known tick.
+    """
+    event_times_ms: HostArray
+    day_index: HostArray
+    rebalance: HostArray
+    trade_open: HostArray
+    mark_open: HostArray
+    mark_high: HostArray
+    mark_low: HostArray
+    mark_close: HostArray
+    funding_rate: HostArray
+    funding_mark: HostArray
+    maintenance_rate: HostArray
+    fee_rate: HostArray
+    liquidation_fee: HostArray
+    leverage: float
+    days: int
+
+    def __post_init__(self):
+        for name in PERPETUAL_ARRAY_FIELDS:
+            dtype = np.int64 if name in PERPETUAL_EVENT_FIELDS[:2] else np.bool_ if name == 'rebalance' else np.float64
+            owned = np.array(getattr(self, name), dtype=dtype, order='C', copy=True)
+            owned.flags.writeable = False
+            object.__setattr__(self, name, owned)
+        ratio = self.trade_open / self.mark_open
+        if not np.all(self.leverage * (np.abs(1 - ratio).max(1)
+                                      + (self.fee_rate * ratio).max(1)) < 1):
+            raise ValueError('non-monotone rebalance root')
+
+    @property
+    def shape(self):
+        return self.days, self.trade_open.shape[1]
+
+    @property
+    def snapshot(self):
+        digest = hashlib.sha256(PERPETUAL_MODEL.encode())
+        for definition in fields(self):
+            value = getattr(self, definition.name)
+            digest.update(definition.name.encode())
+            if definition.name in PERPETUAL_ARRAY_FIELDS:
+                digest.update(str((value.shape, value.dtype.str)).encode())
+                digest.update(value.tobytes())
+            else:
+                digest.update(str(value).encode())
+        return digest.hexdigest()
+
+    def rows(self, end):
+        stop = int(np.searchsorted(self.day_index, end))
+        return replace(self, **{name: getattr(self, name)[:stop] for name in PERPETUAL_ARRAY_FIELDS}, days=end)
+
+
+@dataclass(frozen=True)
+class ReweightResult:
+    changed: bool
+    evaluations: int
+    utility: float | None = None
+    weights: tuple[float, ...] = ()

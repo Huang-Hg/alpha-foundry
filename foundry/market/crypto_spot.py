@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from foundry.backtest.spec import ExecutionSpec, ffill
-from foundry.types import Allocation, LoadedStudy, Window
-from foundry.core.panel import Field, Panel
+from foundry.market.execution import cash_spec, ffill
+from foundry.types import Allocation, Backend, BoolArray, ExecutionSpec, LoadedStudy, MarketData, Study, Window
+from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
 
 
-class CryptoSpot(Market):
+class CryptoSpot(Market[MarketData, ExecutionSpec]):
     allocation = Allocation(1., False)
     name = 'crypto_spot'
     decision_clock = 'utc_day_close'
@@ -29,7 +29,7 @@ class CryptoSpot(Market):
     def __init__(self, cost_rate: float):
         self.cost_rate = cost_rate
 
-    def compile(self, data, backend, study):
+    def compile(self, data: MarketData, backend: Backend, study: Study) -> LoadedStudy[CryptoSpot, Panel, ExecutionSpec]:
         dates, symbols, g = data.dates, data.assets, data.values
         start = int(np.searchsorted(dates, np.datetime64(study.start)))
         src = {k: g[k] for k in ('open', 'high', 'low', 'close', 'volume')}
@@ -39,9 +39,9 @@ class CryptoSpot(Market):
         seen = np.maximum.accumulate(src['trading'], axis=0)
         open_, close = (np.where(seen, ffill(g[k]), np.nan) for k in ('open', 'close'))
         block = np.where(seen & ~src['trading'], 3, 0)
-        spec = ExecutionSpec.build(open_, close, self.cost_rate * open_, block=block)
+        spec = cash_spec(open_, close, self.cost_rate * open_, block=block)
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
                            Window(dates, start), data.contract)
 
-    def universe(self, panel):
+    def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel['trading']

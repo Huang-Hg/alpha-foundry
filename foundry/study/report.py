@@ -4,7 +4,7 @@ from foundry.ops.registry import ARITY, MAX_WINDOW, MIN_WINDOW, OPS
 
 
 def fields(runtime):
-    engine, market, panel = runtime.engine, runtime.market, runtime.panel
+    engine, market, panel = runtime.pipeline, runtime.market, runtime.panel
     universe = engine.to_host(engine.universe)[engine.start:]
     print(f'{market.name}: {len(panel.vocabulary)} 个字段\n')
     for category, names in panel.categories().items():

@@ -12,7 +12,7 @@ import sys
 import time
 
 from foundry.config import ROOT
-from foundry.adapters.files import publish
+from foundry.study.store import publish
 from .cells import BASE
 from .watch import watch
 

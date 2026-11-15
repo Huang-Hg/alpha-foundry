@@ -10,8 +10,8 @@ import time
 import traceback
 from pathlib import Path
 
-from foundry.adapters.files import publish
-from foundry.adapters.arrays import decode_bundle
+from foundry.study.store import publish
+from foundry.study.store import decode_bundle
 from foundry.adapters.serialization import (candidate_from_json, describe,
                                             evaluation_result, json_value)
 from foundry.portfolio.library import PROTOCOL
@@ -54,10 +54,10 @@ class Server:
 
     def status(self):
         ref = self.research.portfolio.reference
-        return dict(protocol=PROTOCOL, kind='service', market=self.research.engine.study.market,
+        return dict(protocol=PROTOCOL, kind='service', market=self.research.pipeline.study.market,
             phase='stopped' if self.stopped else 'stopping' if self.stopping else 'serve', pid=os.getpid(), port=self.port,
             now=time.time(), elapsed_seconds=time.time() - self.started, busy_seconds=0.,
-            device=self.research.engine.spec.backend, vram='', warm='', queue=self.q.qsize(), clients=0,
+            device=self.research.pipeline.spec.backend, vram='', warm='', queue=self.q.qsize(), clients=0,
             served=self.served, exprs=self.n_expr, batches=self.served, cur=self.current,
             portfolio=dict(n=ref.n, sharpe=ref.wsharpe, cagr=ref.cagr, maxdd=ref.maxdd), jobs=list(self.jobs), sources={})
 

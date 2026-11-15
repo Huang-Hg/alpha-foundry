@@ -1,18 +1,44 @@
-"""NumPy bundles and immutable content-addressed external candidate artifacts."""
+"""Atomic publication, content-addressed arrays, CAS libraries and causal provenance."""
+from __future__ import annotations
+
+import os
+import tempfile
+from pathlib import Path
 import hashlib
 from io import BytesIO
 import json
-from pathlib import Path
 import re
-
 import numpy as np
-
-from foundry.adapters.files import publish
 from foundry.types import ArrayBatch, ArraySource
+from dataclasses import asdict
+from foundry.types import Formula, EqualWeight
+from foundry.portfolio.library import Library, Member, PROTOCOL
+from foundry.types import ContextConflict
+from foundry.numeric.semantics import BACKTEST_SEMANTIC_VERSION
+from foundry.config import Settings
+from foundry.numeric.semantics import MOMENTS_SEMANTIC_VERSION
+from foundry.ops.registry import OPS_SEMANTIC_VERSION
+from foundry.types import LoadedStudy, PrecisionPlan, StudySnapshot
+
+
+def publish(path: Path, content: bytes) -> None:
+    """Replace `path` atomically: a reader sees the old file or the new one, never a partial write."""
+    fd, name = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(content)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 FORMAT = 'candidate-array-v2'
+
+
 BUNDLE = 'candidate-batch-v2'
+
+
 ARRAY_KEYS = {'metadata', 'values', 'observed_through', 'fit_through'}
 
 
@@ -136,3 +162,84 @@ def decode_bundle(payload: bytes) -> ArrayBatch:
     return ArrayBatch(metadata['kind'], tuple(metadata['ids']), values, metadata['snapshot'],
                       metadata['producer'], tuple(metadata['dates']), tuple(metadata['assets']),
                       observed, fitted, None if metadata['complexity'] is None else tuple(metadata['complexity']))
+
+
+def member_from_json(record):
+    return Member(source_from_json(record['source']), record['weight'])
+
+
+class FileLibraryStore:
+    def __init__(self, path: Path):
+        self.path = path
+
+    def read(self, study):
+        if not self.path.exists():
+            return Library((), study)
+        record = json.loads(self.path.read_bytes())
+        if record['protocol'] != PROTOCOL:
+            raise ValueError('library protocol differs; rebuild the library')
+        if record['study'] != asdict(study):
+            raise ContextConflict('library belongs to a different study')
+        return Library(tuple(member_from_json(m) for m in record['members']), study)
+
+    def commit(self, expected, replacement):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock = self.path.with_suffix('.lock')
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        except FileExistsError as exc:
+            raise ContextConflict('portfolio publication is already in progress') from exc
+        try:
+            if self.read(expected.study).version != expected.version:
+                raise ContextConflict('portfolio changed on disk')
+            payload = dict(protocol=PROTOCOL, study=asdict(replacement.study), members=[asdict(m) for m in replacement.members])
+            publish(self.path, json.dumps(payload, ensure_ascii=False, indent=1).encode())
+        finally:
+            lock.unlink()
+
+
+class MemoryLibraryStore:
+    def __init__(self, library):
+        self.library = library
+
+    def read(self, study):
+        if study != self.library.study:
+            raise ContextConflict('library belongs to a different study')
+        return self.library
+
+    def commit(self, expected, replacement):
+        if self.library.version != expected.version:
+            raise ContextConflict('portfolio changed')
+        self.library = replacement
+
+
+def digest(value) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def implementation_digest() -> str:
+    """Bump explicit versions when mathematical or execution semantics change."""
+    return digest((OPS_SEMANTIC_VERSION, BACKTEST_SEMANTIC_VERSION, MOMENTS_SEMANTIC_VERSION))
+
+
+def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: PrecisionPlan) -> StudySnapshot:
+    admission = asdict(settings.portfolio)
+    admission.pop('artifact_dir')
+    configuration = digest(dict(operators=asdict(settings.expr), admission=admission,
+        precision=precision.effective, return_atol=settings.cuda.return_atol,
+        perpetual_host_cells=settings.cuda.perpetual_host_cells))
+    values = dict(study=loaded.study, data_snapshot=loaded.panel.snapshot,
+                  execution_snapshot=loaded.host_spec.snapshot, implementation=implementation_digest(),
+                  configuration=configuration, data_contract=loaded.data_contract,
+                  evaluation='in_sample_research', decision=loaded.market.decision_clock,
+                  execution=loaded.market.execution_clock, allocation=loaded.market.allocation, precision=precision)
+    identity = digest(dict(data=values['data_snapshot'], execution=values['execution_snapshot'],
+        semantics=values['implementation'], configuration=configuration, window=asdict(loaded.study),
+        allocation=asdict(loaded.market.allocation), decision=values['decision'], clock=values['execution']))
+    return StudySnapshot(id=identity, **values)
+
+
+def source_from_json(record):
+    factory = {'formula': Formula, 'signals': ArraySource, 'target_weights': ArraySource,
+               'target_exposure': ArraySource, 'equal_weight': EqualWeight}[record['kind']]
+    return factory(**record)

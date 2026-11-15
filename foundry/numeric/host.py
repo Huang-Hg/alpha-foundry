@@ -2,7 +2,7 @@
 import numpy as np
 
 from foundry.types import ReturnMoments
-from foundry.core import metrics
+from foundry.numeric import metrics
 
 
 def measure(returns, weights, ppy):

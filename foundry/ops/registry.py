@@ -13,6 +13,7 @@ This module imports nothing numerical, so hosts without the native extensions (a
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Dict
 
 OPS_SEMANTIC_VERSION = 'operators-66-paired-two-point-v1'
@@ -25,6 +26,8 @@ COST = {'operand': 1, 'const_add': 1, 'const_mul': 1, 'unary': 2, 'binary': 3, '
 WINDOWED = frozenset({'ts', 'ts_param', 'pair', 'pair_param'})
 # Window ladder shared by the search grammar and the neighbourhood of a hypothesis family.
 WINDOW_LADDER = (2, 3, 5, 7, 10, 14, 20, 30, 45, 60, 90, 120, 180, 240, 365, 730)
+SCALAR_LADDER = (-2., -1., -.5, -.3, -.2, -.1, -.05, 0., .05, .1, .2, .3, .5, .8, 1., 1.5, 2., 3., 5.)
+SEARCH_CONSTANTS = ('-2', '-1', '-0.5', '-0.2', '-0.1', '-0.05', '0', '0.05', '0.1', '0.2', '0.5', '0.8', '1', '2')
 MIN_WINDOW, MAX_WINDOW = 2, 1500      # w=1 makes most time-series operators the identity; the top is ~ the panel depth
 
 
@@ -73,5 +76,33 @@ _TABLE = (
 OPS: Dict[str, Op] = {op.name: op for op in _TABLE}
 
 
-def by_kind(kind: str):
+class Slot(IntEnum):
+    PANEL = 0
+    CONST = 1
+    WINDOW = 2
+    NONZERO = 3
+    PAIR_WINDOW = 4
+
+
+@dataclass(frozen=True)
+class Production:
+    operator: str
+    slots: tuple[Slot, ...]
+
+
+# Production order fixes native action identifiers and seeded sampled sequences.
+SEARCH_PRODUCTIONS = (
+    *(Production(name, (Slot.PANEL,)) for name in ('sign', 'abs', 'neg', 'log', 'sqrt', 'tanh', 's_log_1p')),
+    *(Production(name, (Slot.PANEL, Slot.PANEL)) for name in ('add', 'sub', 'mul', 'div', 'max', 'min', 'gt', 'lt')),
+    *(Production(name, (Slot.PANEL, Slot.CONST)) for name in ('gt', 'lt')),
+    Production('add_const', (Slot.PANEL, Slot.CONST)),
+    *(Production(name, (Slot.PANEL, Slot.NONZERO)) for name in ('mul_const', 'pow_const')),
+    *(Production(name, (Slot.PANEL, Slot.WINDOW)) for name in (
+        'ts_mean', 'ts_std', 'ts_min', 'ts_max', 'ts_delta', 'ts_ref', 'ts_slope', 'ts_zscore', 'ts_chanpos',
+        'ts_arg_min', 'ts_arg_max', 'ts_ddown', 'ts_rank')),
+    *(Production(name, (Slot.PANEL, Slot.PANEL, Slot.PAIR_WINDOW)) for name in ('ts_corr', 'ts_cov')),
+)
+
+
+def by_kind(kind: str) -> tuple[str, ...]:
     return tuple(name for name, op in OPS.items() if op.kind == kind)

@@ -123,7 +123,7 @@ class SearchConfig:
     mode: str = 'gfn'
     seed_portfolio: str = 'equal'
     objective: str = 'portfolio'
-    null_shift: bool = False
+    noise_control: bool = False
     accept: bool = False
     seed: int = 25
     epochs: int = 5

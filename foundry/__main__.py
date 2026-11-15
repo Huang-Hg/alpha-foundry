@@ -37,15 +37,15 @@ def cmd_schema(a):
 
 
 def cmd_fields(a):
-    from foundry import report
-    from foundry.runtime import open_runtime, configured_study
+    from foundry.study import report
+    from foundry.study.resources import open_runtime, configured_study
     settings = configure(**a.parameters)
     with open_runtime(settings, configured_study(settings)) as runtime:
         report.fields(runtime)
 
 
 def cmd_ops(a):
-    from foundry import report
+    from foundry.study import report
     report.ops(configure(**a.parameters).expr)
 
 

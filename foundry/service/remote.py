@@ -26,7 +26,7 @@ from typing import Dict, List
 import paramiko
 
 from foundry.config import ROOT
-from foundry.adapters.files import publish
+from foundry.study.store import publish
 from foundry.service.protocol import PORTFILE
 
 REMOTE_ROOT = '/root/quant'                  # deployment convention: the code root on the system disk

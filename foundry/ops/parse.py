@@ -12,11 +12,25 @@ to the search grammar, not to hand-written formulas).
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable
+from typing import Iterable, TypedDict, cast
 
-from foundry.expr.ast import Node, Tree
+from foundry.ops.ast import Node, Tree
 from foundry.ops.registry import ARITY, MAX_WINDOW, MIN_WINDOW, OPS
 
+
+class Validation(TypedDict, total=False):
+    ok: bool
+    error: str | None
+    cost: int
+    n_ops: int
+    fields: list[str]
+    windows: list[int]
+    pretty: str
+    tree: Tree
+
+
+Token = tuple[str | None, str | None, int]
+Number = tuple[float, int] | None
 
 
 class ExprError(ValueError):
@@ -26,7 +40,7 @@ class ExprError(ValueError):
 TOKEN = re.compile(r'\s*(?:(?P<num>-?\d+\.?\d*(?:[eE][-+]?\d+)?)|(?P<id>[A-Za-z_][A-Za-z_0-9]*)|(?P<p>[(),]))')
 
 
-def tokens(s: str):
+def tokens(s: str) -> list[Token]:
     out, i = [], 0
     while i < len(s):
         m = TOKEN.match(s, i)
@@ -41,20 +55,20 @@ def tokens(s: str):
 
 
 class _Parser:
-    def __init__(self, s: str, fields):
+    def __init__(self, s: str, fields: set[str]):
         self.s, self.t, self.i, self.fields = s, tokens(s), 0, fields
 
-    def peek(self):
+    def peek(self) -> Token:
         return self.t[self.i] if self.i < len(self.t) else (None, None, len(self.s))
 
-    def eat(self, want=None):
+    def eat(self, want: str | None = None) -> tuple[str, int]:
         k, v, p = self.peek()
         if k is None:
             raise ExprError(f'表达式在位置 {p} 意外结束(缺 {want or "内容"})\n  {self.s}')
         if want is not None and v != want:
             raise ExprError(f'位置 {p}:期望 {want!r},实际 {v!r}\n  {self.s}\n  {" " * p}^')
         self.i += 1
-        return v, p
+        return cast(str, v), p
 
     def parse(self) -> Node:
         n = self.expr()
@@ -98,7 +112,7 @@ class _Parser:
             break
         return self.build(v, args, nums, p)
 
-    def build(self, name, args, nums, p) -> Node:
+    def build(self, name: str, args: list[Node | None], nums: list[Number], p: int) -> Node:
         kind = OPS[name].kind
         if len(args) != ARITY[kind]:
             raise ExprError(f'位置 {p}:{name} 需要 {ARITY[kind]} 个参数,给了 {len(args)}\n  {self.s}')
@@ -125,21 +139,21 @@ class _Parser:
         return Node.make(kind, name, self.window(name, nums, 2, p),
                          (self.sub(name, args, nums, 0), self.sub(name, args, nums, 1), Node.make('const_add', k)))
 
-    def panel(self, args, nums, i) -> Node:
+    def panel(self, args: list[Node | None], nums: list[Number], i: int) -> Node:
         """A panel slot: a subexpression, or a bare number broadcast as a constant panel."""
-        return args[i] if nums[i] is None else Node.make('const_add', nums[i][0])
+        return cast(Node, args[i]) if nums[i] is None else Node.make('const_add', nums[i][0])
 
-    def sub(self, name, args, nums, i) -> Node:
+    def sub(self, name: str, args: list[Node | None], nums: list[Number], i: int) -> Node:
         if nums[i] is not None:
             raise ExprError(f'位置 {nums[i][1]}:{name} 第 {i + 1} 个参数必须是子表达式,不能是常数 {nums[i][0]:g}\n  {self.s}')
-        return args[i]
+        return cast(Node, args[i])
 
-    def scalar(self, name, nums, i, p, what) -> float:
+    def scalar(self, name: str, nums: list[Number], i: int, p: int, what: str) -> float:
         if nums[i] is None:
             raise ExprError(f'位置 {p}:{name} 第 {i + 1} 个参数必须是{what}\n  {self.s}')
         return nums[i][0]
 
-    def window(self, name, nums, i, p) -> int:
+    def window(self, name: str, nums: list[Number], i: int, p: int) -> int:
         if nums[i] is None:
             raise ExprError(f'位置 {p}:{name} 第 {i + 1} 个参数必须是窗口整数 [{MIN_WINDOW}, {MAX_WINDOW}]\n  {self.s}')
         w, wp = nums[i]
@@ -156,7 +170,7 @@ def parse(s: str, fields: Iterable[str]) -> Tree:
     return Tree(_Parser(s.strip(), set(fields)).parse())
 
 
-def validate(s: str, fields: Iterable[str], max_cost: int) -> Dict:
+def validate(s: str, fields: Iterable[str], max_cost: int) -> Validation:
     """-> dict(ok, error, cost, n_ops, fields, windows, pretty, tree); never raises (batch screening)."""
     try:
         t = parse(s, fields)

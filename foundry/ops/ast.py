@@ -8,7 +8,7 @@ in hash order, so equivalent writings share one hash (the evaluators key their s
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Iterable, Iterator, Optional, Tuple, cast
 
 from foundry.ops.registry import COST, OPS
 
@@ -21,7 +21,7 @@ def _fnv(data: bytes, h: int = _FNV_OFFSET) -> int:
     return h
 
 
-def _combine(parts) -> int:
+def _combine(parts: Iterable[int]) -> int:
     return _fnv(b''.join(p.to_bytes(8, 'little') for p in parts))
 
 
@@ -34,7 +34,7 @@ class Node:
     hash: int
 
     @staticmethod
-    def make(kind: str, op, window: Optional[int] = None, children: Tuple['Node', ...] = ()) -> 'Node':
+    def make(kind: str, op: str | float, window: Optional[int] = None, children: Tuple['Node', ...] = ()) -> 'Node':
         if kind in ('binary', 'pair') and OPS[op].commutative and children[0].hash > children[1].hash:
             children = (children[1], children[0])
         seed = _fnv(f'{kind}|{op}|{window}'.encode('utf-8'))
@@ -44,7 +44,7 @@ class Node:
     def leaf(self) -> bool:
         return self.kind in ('operand', 'const_add', 'const_mul')
 
-    def walk(self):
+    def walk(self) -> Iterator[Node]:
         yield self
         for c in self.children:
             yield from c.walk()
@@ -61,8 +61,8 @@ class Tree:
     def cost(self) -> int:
         return sum(COST[n.kind] for n in self.root.walk())
 
-    def fields(self):
-        return sorted({n.op for n in self.root.walk() if n.kind == 'operand'})
+    def fields(self) -> list[str]:
+        return sorted({cast(str, n.op) for n in self.root.walk() if n.kind == 'operand'})
 
     def pretty(self) -> str:
         return _pretty(self.root)
@@ -70,7 +70,7 @@ class Tree:
 
 def _pretty(n: Node) -> str:
     if n.kind == 'operand':
-        return n.op
+        return cast(str, n.op)
     if n.kind in ('const_add', 'const_mul'):
         return f'{n.op:g}'
     args = [_pretty(c) for c in n.children]

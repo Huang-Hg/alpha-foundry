@@ -190,7 +190,7 @@ class SearchHeader(Header):
     def facts(self, ctx):
         st = ctx.st
         mode = st.get('mode', '').upper()
-        goal = ctx.objective.label + ' · 噪声对照'*bool(st.get('null_shift')) if mode else ''
+        goal = ctx.objective.label + ' · 噪声对照'*bool(st.get('noise_control')) if mode else ''
         return (mode, goal, gpu_name(st.get('device', ''))), (mode, goal), (mode,)
 
 
