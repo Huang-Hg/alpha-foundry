@@ -40,6 +40,46 @@ class BoundedCache(Generic[Key, Value]):
         self._values.clear()
 
 
+class ArrayCache:
+    """Evict whole owned batch allocations; row views never pin expired groups."""
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self._groups: OrderedDict[int, tuple[ArraySource, ...]] = OrderedDict()
+        self._rows: dict[ArraySource, tuple[int, FloatArray]] = {}
+        self._sequence = 0
+
+    def __contains__(self, source: ArraySource) -> bool:
+        return source in self._rows
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def __getitem__(self, source: ArraySource) -> FloatArray:
+        group, values = self._rows[source]
+        self._groups.move_to_end(group)
+        return values
+
+    def _remove(self, group: int) -> None:
+        for source in dict.fromkeys(self._groups.pop(group)):
+            del self._rows[source]
+
+    def put(self, sources: Sequence[ArraySource], values: FloatArray) -> None:
+        if len(sources) > self.capacity:
+            raise ValueError('array allocation exceeds the resident candidate bound')
+        for group in {self._rows[s][0] for s in sources if s in self._rows}:
+            self._remove(group)
+        while sum(map(len, self._groups.values())) + len(sources) > self.capacity:
+            self._remove(next(iter(self._groups)))
+        self._sequence += 1
+        self._groups[self._sequence] = tuple(sources)
+        self._rows.update((source, (self._sequence, values[i])) for i, source in enumerate(sources))
+
+    def clear(self) -> None:
+        self._rows.clear()
+        self._groups.clear()
+
+
 @dataclass(frozen=True)
 class MeasurementKey:
     snapshot: str
@@ -105,7 +145,7 @@ class CandidateCache:
     """Own bounded inputs/member books and compact snapshot measurements."""
 
     def __init__(self, candidate_batch: int, max_members: int, budget: int, days: int):
-        self.arrays: BoundedCache[ArraySource, FloatArray] = BoundedCache(candidate_batch)
+        self.arrays = ArrayCache(candidate_batch)
         self.reports = MeasurementCache(budget, days)
         self.members: BoundedCache[MemberKey, tuple[FloatArray, FloatArray]] = BoundedCache(
             2 * (max_members + 1))

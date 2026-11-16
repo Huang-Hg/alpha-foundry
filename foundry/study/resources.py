@@ -29,6 +29,8 @@ from foundry.study.pipeline import DeviceResources, Pipeline
 from foundry.study.store import study_snapshot
 from foundry.types import (
     ComputeDevice,
+    Array,
+    HostArray,
     Backend,
     BoolArray,
     FloatArray,
@@ -122,6 +124,9 @@ class HostResources:
     def synchronize(self) -> None:
         pass
 
+    def stage_host(self, values: Array) -> HostArray:
+        return np.ascontiguousarray(values)
+
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
         return self.cfg.candidate_batch, self.cfg.workers
 
@@ -174,6 +179,19 @@ class CudaResources:
     def synchronize(self) -> None:
         with self.device:
             self.cp.cuda.get_current_stream().synchronize()
+
+    def stage_host(self, values: Array) -> HostArray:
+        """Queue one bounded D2H copy; the caller synchronizes before host use.
+
+        A direct pinned allocation expires with the NumPy view, outside any
+        process-global pinned pool. Existing host metadata needs no transfer.
+        """
+        if isinstance(values, np.ndarray):
+            return np.ascontiguousarray(values)
+        memory = self.cp.cuda.PinnedMemoryPointer(self.cp.cuda.PinnedMemory(values.nbytes), 0)
+        host = np.ndarray(values.shape, dtype=values.dtype, buffer=memory)
+        values.get(out=host, blocking=False)
+        return host
 
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
         free, _ = self.cp.cuda.runtime.memGetInfo()

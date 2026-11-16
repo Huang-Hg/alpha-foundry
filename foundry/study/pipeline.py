@@ -28,6 +28,8 @@ from foundry.portfolio.allocation import signal_to_book
 from foundry.study.cache import CandidateCache, MeasurementKey, MemberKey
 from foundry.types import (
     ComputeDevice,
+    Array,
+    HostArray,
     ArrayBatch,
     ArraySource,
     Backend,
@@ -88,6 +90,7 @@ class DeviceResources(Protocol):
     def start_batch(self) -> None: ...
     def finish_batch(self) -> None: ...
     def synchronize(self) -> None: ...
+    def stage_host(self, values: Array) -> HostArray: ...
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]: ...
     def measurement_budget(self, cfg: CudaConfig) -> int: ...
     def status(self) -> ResourceStatus: ...
@@ -195,10 +198,10 @@ class Pipeline:
                     raise ValueError('target allocation must be zero for ineligible assets')
 
     @resource_scope
-    def register_arrays(self, sources: Sequence[ArraySource], values: FloatArray) -> None:
+    def register_arrays(self, sources: Sequence[ArraySource], values: FloatArray, *, owned: bool = False) -> None:
         """Own the device copy; no IO or content hashing inside computation."""
-        for source, value in zip(sources, values):
-            self.cache.arrays[source] = self.xp.ascontiguousarray(self.xp.asarray(value)).copy()
+        resident = values if owned else self.xp.array(values, copy=True, order='C')
+        self.cache.arrays.put(sources, resident)
         self.resources.synchronize()
 
     def has_array(self, source: ArraySource) -> bool:

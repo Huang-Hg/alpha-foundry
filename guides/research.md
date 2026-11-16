@@ -223,6 +223,8 @@ with foundry.open(
 
 Array registration includes host hashing and NPZ persistence. Only learning feedback is event-ordered, resident and zero-copy; the complete workflow still transfers data. Outputs and fitting cutoffs are declared through `session.register`. Causal prediction fitting does not establish unbiased out-of-sample model selection: hyperparameter/factor search uses research-window feedback, and reported returns are in-sample research results.
 
+Registration keeps one owned GPU allocation per chunk for evaluation, transfers a bounded pinned host mirror for persistence, and streams artifacts to atomic files. `candidate_batch` limits staging and resident inputs; whole-allocation eviction prevents row views from retaining old batches. Source identities and recovery after reopening remain unchanged. The [same-L4 registration comparison](benchmarks/registration-l4-20261116/README.md) shows about 2× faster registration and a 1.51× faster factor mining loop with exact numerical/decision parity. Durable storage still requires a host copy.
+
 Unified measurement entry point:
 
 ```bash

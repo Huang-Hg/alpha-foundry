@@ -79,24 +79,47 @@ class Ledger:
             return admission.admit(rows, selected)
 
     def _prepare_sources(self, sources):
-        for source in dict.fromkeys(sources):
-            if isinstance(source, ArraySource):
-                if source.snapshot != self.pipeline.context.id:
-                    raise ContextConflict('candidate array belongs to a different research snapshot')
-                if not self.pipeline.has_array(source):
-                    batch = self.arrays.read(source)
-                    self.pipeline.validate_batch(batch)
-                    self.pipeline.register_arrays((source,), batch.values)
+        pipeline = self.pipeline
+        with pipeline.resources.scope():
+            arrays = tuple(source for source in dict.fromkeys(sources) if isinstance(source, ArraySource))
+            for part in pipeline.batches(arrays):
+                values, missing = [], False
+                for source in part:
+                    if source.snapshot != self.pipeline.context.id:
+                        raise ContextConflict('candidate array belongs to a different research snapshot')
+                    if pipeline.has_array(source):
+                        values.append(pipeline.cache.arrays[source])
+                    else:
+                        batch = self.arrays.read(source)
+                        pipeline.validate_batch(batch)
+                        values.append(pipeline.xp.asarray(batch.values[0]))
+                        missing = True
+                if missing:
+                    # Keep the complete requested group together: evicting an old
+                    # allocation cannot discard an earlier cache hit in this call.
+                    pipeline.register_arrays(part, pipeline.xp.stack(values), owned=True)
 
     def register_batch(self, batch, context_id):
         self.require_context(context_id)
-        self.pipeline.validate_batch(batch)
-        host = replace(batch, values=self.pipeline.to_host(batch.values),
-                       observed_through=self.pipeline.to_host(batch.observed_through),
-                       fit_through=self.pipeline.to_host(batch.fit_through))
-        sources = self.arrays.put(host)
-        self.pipeline.register_arrays(sources, batch.values)
-        return tuple(Candidate(identity, source) for identity, source in zip(batch.ids, sources))
+        pipeline = self.pipeline
+        with pipeline.resources.scope():
+            pipeline.validate_batch(batch)
+            candidates = []
+            for lo in range(0, len(batch.ids), pipeline.candidate_batch):
+                hi = lo + pipeline.candidate_batch
+                # One owned device allocation also feeds the durable host mirror.
+                # Temporary staging never grows with the complete candidate count.
+                resident = pipeline.xp.array(batch.values[lo:hi], copy=True, order='C')
+                host = replace(batch, ids=batch.ids[lo:hi],
+                    values=pipeline.resources.stage_host(resident),
+                    observed_through=pipeline.resources.stage_host(batch.observed_through[lo:hi]),
+                    fit_through=pipeline.resources.stage_host(batch.fit_through[lo:hi]),
+                    complexity=None if batch.complexity is None else batch.complexity[lo:hi])
+                pipeline.resources.synchronize()
+                sources = self.arrays.put(host)
+                pipeline.register_arrays(sources, resident, owned=True)
+                candidates.extend(Candidate(identity, source) for identity, source in zip(host.ids, sources))
+            return tuple(candidates)
 
     @property
     def context(self):

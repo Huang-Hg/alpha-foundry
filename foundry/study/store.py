@@ -5,6 +5,7 @@ import os
 import tempfile
 from pathlib import Path
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from foundry.types import MiningCheckpoint, MiningEpoch, MiningStatus
 import hashlib
 from io import BytesIO
@@ -64,20 +65,33 @@ def _digest(metadata, arrays):
     digest = hashlib.sha256(_json(metadata).encode())
     for array in arrays:
         digest.update(str((array.dtype.str, array.shape)).encode())
-        digest.update(np.ascontiguousarray(array).tobytes())
+        digest.update(memoryview(np.ascontiguousarray(array)).cast('B'))
     return digest.hexdigest()
 
 
-def _records(batch):
+def _record(batch: ArrayBatch, index: int):
     metadata = dict(format=FORMAT, kind=batch.kind, snapshot=batch.snapshot,
                     producer=batch.producer, dates=batch.dates, assets=batch.assets)
-    complexities = (0.,) * len(batch.ids) if batch.complexity is None else batch.complexity
-    for values, observed, fitted, complexity in zip(batch.values, batch.observed_through, batch.fit_through, complexities):
-        metadata = dict(metadata, complexity=complexity)
-        arrays = (np.ascontiguousarray(values), np.ascontiguousarray(observed, dtype=np.int64),
-                  np.ascontiguousarray(fitted, dtype=np.int64))
-        source = ArraySource(batch.kind, _digest(metadata, arrays), batch.snapshot, batch.producer, complexity)
-        yield source, encode_archive(metadata, *arrays)
+    complexity = 0. if batch.complexity is None else batch.complexity[index]
+    metadata['complexity'] = complexity
+    arrays = (np.ascontiguousarray(batch.values[index]),
+              np.ascontiguousarray(batch.observed_through[index], dtype=np.int64),
+              np.ascontiguousarray(batch.fit_through[index], dtype=np.int64))
+    source = ArraySource(batch.kind, _digest(metadata, arrays), batch.snapshot, batch.producer, complexity)
+    return source, metadata, arrays
+
+
+def publish_archive(path: Path, metadata: dict, arrays: tuple[np.ndarray, ...]) -> None:
+    """Stream one NPZ to its atomic staging file, without a payload-sized BytesIO."""
+    fd, name = tempfile.mkstemp(prefix=path.name + '.', suffix='.tmp', dir=path.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            np.savez(stream, metadata=np.asarray(_json(metadata)), values=arrays[0],
+                     observed_through=arrays[1], fit_through=arrays[2])
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _read(payload, source):
@@ -106,15 +120,20 @@ class FileArrayStore:
 
     def put(self, batch: ArrayBatch):
         self.root.mkdir(parents=True, exist_ok=True)
-        sources = []
-        for source, payload in _records(batch):
+        def write(index: int) -> ArraySource:
+            source, metadata, arrays = _record(batch, index)
             path = self.path_for(source)
             if path.exists():
                 self.read(source)
             else:
-                publish(path, payload)
-            sources.append(source)
-        return tuple(sources)
+                publish_archive(path, metadata, arrays)
+            return source
+
+        if len(batch.ids) == 1:
+            return (write(0),)
+        # Four IO/hash workers share the bounded host batch; map preserves IDs.
+        with ThreadPoolExecutor(max_workers=min(4, len(batch.ids))) as workers:
+            return tuple(workers.map(write, range(len(batch.ids))))
 
     def read(self, source: ArraySource):
         return _read(self.path_for(source).read_bytes(), source)
@@ -126,8 +145,9 @@ class MemoryArrayStore:
 
     def put(self, batch: ArrayBatch):
         sources = []
-        for source, payload in _records(batch):
-            self.artifacts[source.digest] = payload
+        for index in range(len(batch.ids)):
+            source, metadata, arrays = _record(batch, index)
+            self.artifacts[source.digest] = encode_archive(metadata, *arrays)
             sources.append(source)
         return tuple(sources)
 
