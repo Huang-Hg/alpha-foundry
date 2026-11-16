@@ -37,13 +37,14 @@ def publish(path: Path, content: bytes) -> None:
         temp.unlink(missing_ok=True)
 
 
-ARRAY_KEYS = {'metadata', 'values', 'observed_through', 'fit_through'}
+ARRAY_KEYS = {'metadata', 'values', 'observed_at', 'fit_at', 'update_mask'}
 
 
-def encode_archive(metadata, values, observed, fitted):
+def encode_archive(metadata, values, observed, fitted, update_mask=None):
     output = BytesIO()
     np.savez(output, metadata=np.asarray(canonical_json(metadata)), values=values,
-             observed_through=observed, fit_through=fitted)
+             observed_at=observed, fit_at=fitted,
+             update_mask=np.empty(0, dtype=bool) if update_mask is None else update_mask)
     return output.getvalue()
 
 
@@ -51,13 +52,21 @@ def decode_archive(payload):
     with np.load(BytesIO(payload), allow_pickle=False) as archive:
         if set(archive.files) != ARRAY_KEYS:
             raise ValueError('array artifact fields differ from the declared format')
-        return (json.loads(str(archive['metadata'].item())), archive['values'],
-                archive['observed_through'], archive['fit_through'])
+        metadata = json.loads(str(archive['metadata'].item()))
+        if not isinstance(metadata, dict):
+            raise ValueError('array metadata must be a JSON object')
+        mask = archive['update_mask']
+        if mask.dtype != np.dtype(bool):
+            raise ValueError('array update_mask must have boolean dtype')
+        return (metadata, archive['values'],
+                archive['observed_at'], archive['fit_at'], None if mask.shape == (0,) else mask)
 
 
 def _payload(batch: ArrayBatch, index: int):
     metadata = metadata_for(batch, index)
-    arrays = (batch.values[index], batch.observed_through[index], batch.fit_through[index])
+    arrays = (batch.values[index], batch.observed_at[index], batch.fit_at[index])
+    if batch.update_mask is not None:
+        arrays += (batch.update_mask[index],)
     return metadata, arrays
 
 
@@ -68,25 +77,32 @@ def publish_archive(path: Path, metadata: dict, arrays: tuple[np.ndarray, ...]) 
     try:
         with os.fdopen(fd, 'wb') as stream:
             np.savez(stream, metadata=np.asarray(canonical_json(metadata)), values=arrays[0],
-                     observed_through=arrays[1], fit_through=arrays[2])
+                     observed_at=arrays[1], fit_at=arrays[2],
+                     update_mask=arrays[3] if len(arrays) == 4 else np.empty(0, dtype=bool))
         os.replace(temp, path)
     finally:
         temp.unlink(missing_ok=True)
 
 
 def _read(payload, source):
-    metadata, values, observed, fitted = decode_archive(payload)
+    metadata, values, observed, fitted, mask = decode_archive(payload)
+    expected = {'format', 'kind', 'unit', 'snapshot', 'producer', 'decision_times',
+                'assets', 'update_mask', 'complexity'}
+    if set(metadata) != expected:
+        raise ValueError('array artifact metadata fields differ from the declared format')
     if metadata['format'] != FORMAT:
         raise ValueError('array artifact protocol differs; register a current bundle')
-    arrays = (values, observed, fitted)
+    if metadata['update_mask'] != ('all' if mask is None else 'explicit'):
+        raise ValueError('array artifact update mask differs from its metadata')
+    arrays = (values, observed, fitted) + (() if mask is None else (mask,))
     actual = source_for(metadata, digest_for(metadata, arrays, tuple(host_leaves(a[None])[0] for a in arrays)))
     if actual != source:
         raise ValueError('array artifact digest or provenance differs from its source')
-    for array in (values, observed, fitted):
+    for array in arrays:
         array.setflags(write=False)
     return ArrayBatch(source.kind, (source.digest,), values[None], source.snapshot, source.producer,
-                      tuple(metadata['dates']), tuple(metadata['assets']), observed[None], fitted[None],
-                      (metadata['complexity'],))
+                      tuple(metadata['decision_times']), tuple(metadata['assets']), observed[None], fitted[None],
+                      (metadata['complexity'],), source.unit, None if mask is None else mask[None])
 
 
 class FileArrayStore:
@@ -206,6 +222,9 @@ def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: Precision
     admission = asdict(settings.portfolio)
     admission.pop('artifact_dir')
     configuration = digest(dict(operators=asdict(settings.expr), admission=admission,
+        clock=asdict(settings.clock), sizing=asdict(settings.sizing), account=asdict(settings.account),
+        execution=asdict(settings.execution), decision_times=loaded.window.clock.decision_times,
+        calendar=loaded.window.clock.calendar, clock_provenance=loaded.window.clock.provenance,
         precision=precision.effective, return_atol=settings.cuda.return_atol,
         perpetual_host_cells=settings.cuda.perpetual_host_cells))
     values = dict(study=loaded.study, data_snapshot=loaded.panel.snapshot,
@@ -220,8 +239,8 @@ def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: Precision
 
 
 def source_from_json(record):
-    factory = {'formula': Formula, 'signals': ArraySource, 'target_weights': ArraySource,
-               'target_exposure': ArraySource, 'equal_weight': EqualWeight}[record['kind']]
+    factory = {'formula': Formula, 'scores': ArraySource, 'targets': ArraySource,
+               'equal_weight': EqualWeight}[record['kind']]
     return factory(**record)
 
 

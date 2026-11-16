@@ -37,7 +37,7 @@ with foundry.open(backend="cuda") as session:
 | 加密货币现货 | UTC 日线、365 日年化、交易资格与手续费 |
 | USDT 线性永续 | 多空敞口、逐仓保证金、小时资金费事件与强平 |
 
-永续采用日线决策、小时账户事件递推。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
+当前 R1 契约支持日线决策与统计，永续使用小时账户事件递推；日内决策网格、有状态策略回调和订单属于后续交付阶段。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
 
 ## 接入自己的数据
 
@@ -56,7 +56,7 @@ with foundry.open(
 
 美股需要包含 OHLCV 和复权因子的 `panel.parquet`，以及记录历史资格区间的 `membership.parquet`。保留研究起点之前的历史，以便计算滚动特征。其他市场同样有明确的数据契约；永续还需要小时成交价、标记价和资金费记录。详见[文件格式与转换示例](guides/research.zh-CN.md#接入自己的数据)。
 
-如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明日期、资产坐标与信息截止点。临时 GPU 候选保持驻留，用完调用 `session.release(batch)`；只有入选、检查点引用或明确要求保留的候选才落盘。
+如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明 UTC 决策时间、资产坐标、显式单位和时间戳信息截止点。评分默认使用 `Sizing(rule="equal_slots")`；`Sizing(rule="independent", scale=...)` 避免资产数量稀释。直接目标使用 `kind="targets", unit="equity_fraction"`。临时 GPU 候选保持驻留，用完调用 `session.release(batch)`；只有入选、检查点引用或明确要求保留的候选才落盘。
 
 ## 在 Linux 或 Windows 上使用
 
@@ -121,7 +121,7 @@ with foundry.open("var/runs/my_portfolio.json") as session:
 ```python
 with foundry.open(
     market="crypto_perpetual",
-    leverage=3.0,
+    account=foundry.Account(margin="isolated", leverage=3.0, gross_limit=3.0),
     cost_rate=0.0004,
     cuda=foundry.CUDA(candidate_batch=64, precision="paired"),
     admission=foundry.Admission(min_sharpe_gain=0.02),
@@ -133,7 +133,7 @@ with foundry.open(
 
 ## 性能实测
 
-4096 条公式、269 日×500 美股的评价＋有序提交。CPU 固定为独立 Colab CPU 类型运行时（EPYC 7B12），不随显卡更换。
+以下为 R1 协议迁移前的历史实测，不代表 R1 验收结果。4096 条公式、269 日×500 美股的评价＋有序提交。CPU 固定为独立 Colab CPU 类型运行时（EPYC 7B12），不随显卡更换。
 
 | 设备 | 耗时 |
 | --- | ---: |

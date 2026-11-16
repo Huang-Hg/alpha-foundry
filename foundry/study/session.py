@@ -130,8 +130,9 @@ class Ledger:
             pending = [source for source in live if source not in pipeline.inputs.retained]
             for part, batch in pipeline.inputs.select(pending):
                 host = replace(batch, values=pipeline.resources.stage_host(batch.values),
-                    observed_through=pipeline.resources.stage_host(batch.observed_through),
-                    fit_through=pipeline.resources.stage_host(batch.fit_through))
+                    observed_at=pipeline.resources.stage_host(batch.observed_at),
+                    fit_at=pipeline.resources.stage_host(batch.fit_at),
+                    update_mask=None if batch.update_mask is None else pipeline.resources.stage_host(batch.update_mask))
                 pipeline.resources.synchronize()
                 saved = tuple(replace(source, scope='') for source in part)
                 self.arrays.put(host, saved)
@@ -334,7 +335,7 @@ class LocalBackend:
 
     def grid(self):
         engine = self.research.pipeline
-        return DataGrid(engine.context.id, tuple(str(day) for day in engine.dates), tuple(engine.panel.assets))
+        return DataGrid(engine.context.id, engine.decision_times, tuple(engine.panel.assets))
 
     def describe(self):
         return self._describe(self.research)
@@ -468,12 +469,14 @@ class Session:
         self._context = result.context
         return result
 
-    def register(self, values: FloatArray, *, kind: Literal['signals', 'target_weights', 'target_exposure'],
-                 ids: Sequence[str], grid: DataGrid, producer: str, observed_through: IntArray,
-                 fit_through: IntArray, complexity: Sequence[float] | None = None) -> RegisteredBatch:
+    def register(self, values: FloatArray, *, kind: Literal['scores', 'targets'],
+                 ids: Sequence[str], grid: DataGrid, producer: str, observed_at: IntArray,
+                 fit_at: IntArray, complexity: Sequence[float] | None = None,
+                 unit: Literal['score', 'equity_fraction', 'quantity', 'notional'] = 'score',
+                 update_mask: BoolArray | None = None) -> RegisteredBatch:
         """Own a bounded resident batch until release; this command does not persist it."""
-        batch = ArrayBatch(kind, tuple(ids), values, grid.snapshot, producer, grid.dates, grid.assets,
-                           observed_through, fit_through, None if complexity is None else tuple(complexity))
+        batch = ArrayBatch(kind, tuple(ids), values, grid.snapshot, producer, grid.decision_times, grid.assets,
+                           observed_at, fit_at, None if complexity is None else tuple(complexity), unit, update_mask)
         registered = self._backend.register(batch, self._context.id)
         self._leases.add(registered.lease)
         return registered
@@ -618,7 +621,7 @@ class ResidentPort:
     @property
     def grid(self) -> DataGrid:
         pipeline = self.__ledger.pipeline
-        return DataGrid(self.context.snapshot.id, tuple(str(day) for day in pipeline.dates), pipeline.panel.assets)
+        return DataGrid(self.context.snapshot.id, pipeline.decision_times, pipeline.panel.assets)
 
     @property
     def stat_dates(self) -> tuple[str, ...]:

@@ -37,7 +37,7 @@ The example uses the bundled US equity snapshot. You can replace it with your ow
 | Crypto spot | Daily UTC calendar, 365-day annualization, eligibility and trading fees |
 | USDT linear perpetuals | Long/short exposure, isolated margin, hourly funding events and liquidation |
 
-Perpetuals use daily decisions with hourly account events. The [guide](guides/research.md#crypto-execution) describes the model's price, funding and liquidation assumptions.
+The current R1 contract supports daily decisions and statistics; perpetuals use hourly account events. Intraday decision grids, stateful strategy callbacks and orders are later delivery phases. The [guide](guides/research.md#crypto-execution) describes the model's price, funding and liquidation assumptions.
 
 ## Bring your own data
 
@@ -56,7 +56,7 @@ with foundry.open(
 
 For US equities, prepare `panel.parquet` with OHLCV and adjustment factors, plus `membership.parquet` with historical eligibility intervals. Retain earlier history for rolling features. Other markets have explicit data contracts; perpetuals additionally require hourly trade, mark and funding records. See [file formats and conversion examples](guides/research.md#bring-your-own-data).
 
-If your program already produces signals or positions, use `session.register(...)` instead. It accepts batches of model scores, long-only target weights or signed perpetual exposures with date/asset coordinates and information cutoffs. Temporary GPU candidates stay resident until `session.release(batch)`; only admitted, checkpoint-referenced or explicitly retained outputs are saved.
+If your program already produces signals or positions, use `session.register(...)` instead. It accepts batches of model scores, long-only target weights or signed perpetual exposures with UTC decision/asset coordinates, explicit units and timestamp information cutoffs. Scores use `Sizing(rule="equal_slots")` by default; `Sizing(rule="independent", scale=...)` avoids asset-count dilution. Targets use `kind="targets", unit="equity_fraction"`. Temporary GPU candidates stay resident until `session.release(batch)`; only admitted, checkpoint-referenced or explicitly retained outputs are saved.
 
 ## Start on Linux or Windows
 
@@ -121,7 +121,7 @@ Tune market costs, leverage, CUDA batching, admission and mining through argumen
 ```python
 with foundry.open(
     market="crypto_perpetual",
-    leverage=3.0,
+    account=foundry.Account(margin="isolated", leverage=3.0, gross_limit=3.0),
     cost_rate=0.0004,
     cuda=foundry.CUDA(candidate_batch=64, precision="paired"),
     admission=foundry.Admission(min_sharpe_gain=0.02),
@@ -133,7 +133,7 @@ with foundry.open(
 
 ## Performance evidence
 
-Evaluation + ordered commit for 4096 formulas over 269 days × 500 US equities. The CPU reference is one fixed, independent Colab CPU runtime (EPYC 7B12).
+Historical measurement from before the R1 protocol migration; this is not R1 validation evidence. Evaluation + ordered commit for 4096 formulas over 269 days × 500 US equities. The CPU reference is one fixed, independent Colab CPU runtime (EPYC 7B12).
 
 | Backend | Time |
 | --- | ---: |

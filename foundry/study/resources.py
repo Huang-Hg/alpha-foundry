@@ -92,13 +92,14 @@ def load_study(settings: Settings, study: Study, backend: Backend) -> StudyData:
     """Read one artifact snapshot, then compile its market rules without IO."""
     cfg = settings.market
     if isinstance(cfg, AShareConfig):
-        market = AShare(cfg.commission, cfg.transfer_fee, cfg.stamp_tax_sell)
+        market = AShare(cfg.commission, cfg.transfer_fee, cfg.stamp_tax_sell, settings.account.gross_limit)
     elif isinstance(cfg, UsEquityConfig):
-        market = UsEquity(cfg.cost_rate, cfg.daily_borrow)
+        market = UsEquity(cfg.cost_rate, cfg.daily_borrow, settings.account.gross_limit)
     elif isinstance(cfg, CryptoSpotConfig):
-        market = CryptoSpot(cfg.cost_rate)
+        market = CryptoSpot(cfg.cost_rate, settings.account.gross_limit)
     else:
-        market = CryptoPerpetual(cfg.leverage, cfg.cost_rate, cfg.maintenance_rate, cfg.liquidation_fee)
+        market = CryptoPerpetual(settings.account.leverage, cfg.cost_rate, cfg.maintenance_rate,
+                                 cfg.liquidation_fee, settings.account.gross_limit)
     return market.compile(load_data(settings, study), backend, study)
 
 
@@ -280,14 +281,14 @@ def plan_precision(requested: str, supported: frozenset[str]) -> PrecisionPlan:
 
 def open_runtime(settings: Settings, study: Study) -> Runtime:
     """Open exactly the backend configured for this explicit study snapshot."""
-    name = settings.execution.backend
+    name = settings.backend
     with ExitStack() as cleanup:
         if name == 'cuda':
             import cupy as cp
 
             from foundry.backtest import cuda
             resources = CudaResources(cp, settings.cuda.streams)
-            prepare_execution = cuda.prepare
+            prepare_execution = lambda: cuda.prepare(settings.account.gross_limit)
             if study.market == 'crypto_perpetual':
                 from foundry.backtest import perpetual_cpu, perpetual_cuda
                 prepare_execution = lambda: perpetual_cuda.prepare(perpetual_cpu.prepare(), settings.cuda.perpetual_host_cells)
@@ -295,7 +296,7 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             from foundry.backtest import cpu
             from foundry.ops import _ops
             resources = HostResources(settings.cpu, _ops.worker_init)
-            prepare_execution = lambda: cpu.prepare(resources.workers)
+            prepare_execution = lambda: cpu.prepare(resources.workers, settings.account.gross_limit)
             if study.market == 'crypto_perpetual':
                 from foundry.backtest import perpetual_cpu
                 prepare_execution = lambda: perpetual_cpu.prepare(resources.workers)

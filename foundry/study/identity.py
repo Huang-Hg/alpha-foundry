@@ -12,7 +12,7 @@ import numpy as np
 
 from foundry.types import Array, ArrayBatch, ArraySource, HostArray
 
-FORMAT = 'candidate-array-v3'
+FORMAT = 'candidate-array-v4'
 CHUNK_BYTES = 4096
 
 
@@ -51,8 +51,9 @@ class DeviceHasher:
 
 
 def metadata_for(batch: ArrayBatch, index: int) -> dict:
-    return dict(format=FORMAT, kind=batch.kind, snapshot=batch.snapshot, producer=batch.producer,
-                dates=batch.dates, assets=batch.assets,
+    return dict(format=FORMAT, kind=batch.kind, unit=batch.unit, snapshot=batch.snapshot, producer=batch.producer,
+                decision_times=batch.decision_times, assets=batch.assets,
+                update_mask='all' if batch.update_mask is None else 'explicit',
                 complexity=0. if batch.complexity is None else batch.complexity[index])
 
 
@@ -65,4 +66,4 @@ def digest_for(metadata: dict, arrays: tuple[Array, ...], leaves: tuple[HostArra
 
 
 def source_for(metadata: dict, digest: str, scope: str = '') -> ArraySource:
-    return ArraySource(metadata['kind'], digest, metadata['snapshot'], metadata['producer'], metadata['complexity'], scope)
+    return ArraySource(metadata['kind'], digest, metadata['snapshot'], metadata['producer'], metadata['complexity'], scope, metadata['unit'])

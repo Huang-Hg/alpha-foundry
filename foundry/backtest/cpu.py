@@ -21,8 +21,9 @@ class Executor:
     parallel_trials = True
     precisions = frozenset({'native'})
 
-    def __init__(self, workers: HostWorkers | None = None):
+    def __init__(self, workers: HostWorkers | None = None, gross_limit: float = 1.):
         self.map = map if workers is None else workers.map
+        self.gross_limit = gross_limit
 
     def device_spec(self,host: ExecutionSpec) -> HostSpec:
         return HostSpec(host)
@@ -47,7 +48,10 @@ class Executor:
         s = spec.host
         def trial(i: int) -> FloatArray:
             book = U + weights[i] * W[owners[i]]
-            book /= np.maximum(1., book.sum(1, keepdims=True))
+            gross = book.sum(1, keepdims=True)
+            if self.gross_limit != 1.:
+                gross /= self.gross_limit
+            book /= np.maximum(1., gross)
             return _bt.simulate(book, s.open_raw, s.prev_close, s.open_ff0, s.close_ff0,
                                 s.cost_buy, s.cost_sell, s.live, s.block, s.carry)
         result = self._result(np.stack(list(self.map(trial, range(len(weights))))), start, ppy)
@@ -65,5 +69,5 @@ class Executor:
         pass
 
 
-def prepare(workers: HostWorkers | None = None) -> Executor:
-    return Executor(workers)
+def prepare(workers: HostWorkers | None = None, gross_limit: float = 1.) -> Executor:
+    return Executor(workers, gross_limit)

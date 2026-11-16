@@ -84,7 +84,8 @@ class Executor:
     parallel_trials = True
     precisions = frozenset({'mixed', 'paired'})
 
-    def __init__(self):
+    def __init__(self, gross_limit: float = 1.):
+        self.gross_limit = gross_limit
         self._MOD = cp.RawModule(code=paired_source()+'\n'+'\n'.join(((_KERNELS / f).read_text(encoding='utf-8') for f in ('reductions.cuh', 'backtest.cu', 'statistics.cuh'))), options=('--std=c++14',))
         self._SIMULATE = {p: self._MOD.get_function(f'k_simulate_{p}') for p in ('mixed', 'paired')}
         self._BLEND = {p: self._MOD.get_function(f'k_blend_{p}') for p in ('mixed', 'paired')}
@@ -136,10 +137,13 @@ class Executor:
 
     def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
               spec: _DeviceSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
-        """Trial n = (U + weights[n] * W[owners[n]]) / max(1, exposure), fused into the kernel (U = the portfolio's raw
+        """Trial n = (U + weights[n] * W[owners[n]]) / max(1, exposure/gross_limit), fused into the kernel (U = the portfolio's raw
     additive sum). -> (returns over [start:], stats)."""
         eref = cp.ascontiguousarray(U.sum(1), dtype=cp.float64)
         eown = cp.ascontiguousarray(W.sum(2), dtype=cp.float64)
+        if self.gross_limit != 1.:
+            eref /= self.gross_limit
+            eown /= self.gross_limit
         T, S = W.shape[1:]
         N = len(weights)
         W, U = (self._pack(W, precision), self._pack(U, precision))
@@ -163,5 +167,5 @@ class Executor:
         self._general_modules.clear()
         self.__dict__.clear()
 
-def prepare() -> Executor:
-    return Executor()
+def prepare(gross_limit: float = 1.) -> Executor:
+    return Executor(gross_limit)

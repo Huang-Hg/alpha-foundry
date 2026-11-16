@@ -24,7 +24,7 @@ from foundry.numeric.allocation import cap_book
 from foundry.config import CudaConfig, Settings
 from foundry.numeric import metrics as M
 from foundry.ops.parse import validate
-from foundry.portfolio.allocation import signal_to_book
+from foundry.portfolio.allocation import score_to_book
 from foundry.study.cache import CandidateCache, MeasurementKey, MemberKey
 from foundry.study.inputs import ResidentInputs
 from foundry.types import (
@@ -44,6 +44,7 @@ from foundry.types import (
     IntArray,
     LoadedStudy,
     Metrics,
+    NO_INFORMATION,
     ReturnBatch,
     ResourceStatus,
     RiskSummary,
@@ -77,6 +78,7 @@ Result = TypeVar('Result')
 Arguments = ParamSpec('Arguments')
 DELAY_LAG = (365, 1095)
 INVALID = 'G1 数值无效:含无穷值或全为缺失'
+EXPOSURE = 'G1 gross exposure exceeds the configured account budget'
 
 
 class DeviceResources(Protocol):
@@ -135,6 +137,9 @@ class Pipeline:
         self.fields = {k: self.panel[k] for k in self.panel.vocabulary}
         self.vocabulary = self.panel.vocabulary
         self.dates, self.start, self.ppy = loaded.window.dates, loaded.window.start, self.market.ppy
+        self.clock = loaded.window.clock
+        self.decision_times = self.clock.decision_times
+        self.decision_ns = self.xp.asarray(self.clock.decision_ns)
         self.universe = self.market.universe(self.panel)
         self.slots = self.xp.maximum(self.universe.sum(1, keepdims=True), 1).astype(self.xp.float64)
         self.spec = executor.device_spec(loaded.host_spec)
@@ -157,14 +162,18 @@ class Pipeline:
     def validate_batch(self, batch: ArrayBatch) -> None:
         """Check external arrays once, before publishing any immutable artifact."""
         xp = self.xp
-        if batch.kind not in ('signals', 'target_weights', 'target_exposure'):
-            raise ValueError('batch kind must be signals, target_weights or target_exposure')
-        if batch.kind == 'target_weights' and self.allocation.allow_short:
-            raise ValueError('derivatives require explicit target_exposure, not cash target_weights')
+        if batch.kind not in ('scores', 'targets'):
+            raise ValueError('batch kind must be scores or targets')
+        if batch.kind == 'scores' and batch.unit != 'score':
+            raise ValueError('scores require unit=score')
+        if batch.kind == 'targets' and batch.unit not in ('equity_fraction', 'quantity', 'notional'):
+            raise ValueError('targets require equity_fraction, quantity or notional units')
+        if batch.kind == 'targets' and batch.unit != 'equity_fraction':
+            raise ValueError('this execution plan supports only equity_fraction targets; quantity/notional require account conversion')
         if batch.snapshot != self.context.id:
             raise ContextConflict('array batch belongs to a different snapshot')
-        if batch.dates != tuple(str(d) for d in self.dates) or batch.assets != self.panel.assets:
-            raise ValueError('batch dates/assets must exactly match the ordered study axes')
+        if batch.decision_times != self.decision_times or batch.assets != self.panel.assets:
+            raise ValueError('batch decision_times/assets must exactly match the ordered study axes')
         if not batch.ids or len(set(batch.ids)) != len(batch.ids) or not all(isinstance(i, str) and i for i in batch.ids):
             raise ValueError('batch candidate IDs must be nonempty and unique')
         if not isinstance(batch.producer, str) or not batch.producer:
@@ -173,27 +182,34 @@ class Pipeline:
                 or any(not 0 <= value <= 1 for value in batch.complexity)):
             raise ValueError('complexity must contain one normalized value in [0,1] per candidate')
         values = batch.values
-        B, T, S = len(batch.ids), *self.panel.shape
-        if values.shape != (B, T, S) or values.dtype not in (xp.dtype('float32'), xp.dtype('float64')):
-            raise ValueError('batch values must be float32/float64 with shape (B,T,S)')
-        for name, cutoff in (('observed_through', batch.observed_through), ('fit_through', batch.fit_through)):
-            if cutoff.shape != (B, T) or cutoff.dtype != xp.dtype('int64'):
-                raise ValueError(f'{name} must be int64 with shape (B,T)')
+        B, D, S = len(batch.ids), *self.panel.shape
+        if values.shape != (B, D, S) or values.dtype not in (xp.dtype('float32'), xp.dtype('float64')):
+            raise ValueError('batch values must be float32/float64 with shape (B,D,S)')
+        for name, cutoff in (('observed_at', batch.observed_at), ('fit_at', batch.fit_at)):
+            if cutoff.shape != (B, D) or cutoff.dtype != xp.dtype('int64'):
+                raise ValueError(f'{name} must be int64 with shape (B,D)')
+        if batch.update_mask is not None:
+            if batch.kind == 'scores':
+                raise ValueError('update_mask is defined only for targets')
+            if batch.update_mask.shape != (B, D, S) or batch.update_mask.dtype != xp.dtype('bool'):
+                raise ValueError('update_mask must be bool with shape (B,D,S)')
+            if not bool(xp.asarray(batch.update_mask).all()):
+                raise ValueError('this execution plan requires a new target at every decision; update_mask=False requires account-state execution')
         for lo in range(0, B, self.candidate_batch):
             hi = lo + self.candidate_batch
-            for name, cutoffs in (('observed_through', batch.observed_through), ('fit_through', batch.fit_through)):
+            for name, cutoffs in (('observed_at', batch.observed_at), ('fit_at', batch.fit_at)):
                 cutoff = xp.asarray(cutoffs[lo:hi])
-                if bool(((cutoff < -1) | (cutoff > xp.arange(T)[None, :])).any()):
-                    raise ValueError(f'{name} contains a future cutoff or an index below -1')
+                if bool(((cutoff != NO_INFORMATION) & (cutoff > self.decision_ns[None, :])).any()):
+                    raise ValueError(f'{name} contains information later than its decision time')
             part = xp.asarray(values[lo:hi])
-            if batch.kind == 'signals':
+            if batch.kind == 'scores':
                 if bool(xp.isinf(part).any()):
-                    raise ValueError('signals may contain NaN, but not infinity')
+                    raise ValueError('scores may contain NaN, but not infinity')
             else:
                 if not bool(xp.isfinite(part).all()):
                     raise ValueError('target allocation must be finite')
                 if not self.allocation.allow_short and bool((part < 0).any()):
-                    raise ValueError('cash target weights/exposures must be nonnegative')
+                    raise ValueError('cash equity_fraction targets must be nonnegative')
                 gross = (xp.abs(part) if self.allocation.allow_short else part).sum(2, dtype=xp.float64)
                 if bool((gross > self.allocation.max_gross + self.portfolio_cfg.weight_sum_atol).any()):
                     raise ValueError('target allocation exceeds the market gross exposure limit')
@@ -242,12 +258,23 @@ class Pipeline:
         if delayed:
             values = delay_shift(values, [rows[i].source.expression for i in ids], xp, xp.nan)
         finite = (~xp.isinf(values).any(axis=(1, 2))) & xp.isfinite(values).any(axis=(1, 2))
-        books = self.signal_to_book(values)
-        return self._measure(rows, ids, books, finite, report, saved)
+        books = self.score_to_book(values)
+        return self._measure(rows, ids, books, finite, report, saved,
+                             score_budget=self.settings.sizing.rule == 'independent')
 
     def _measure(self, rows: list[EvaluationRow], ids: Sequence[int], books: FloatArray,
-                 finite: BoolArray, report: bool, saved: Mapping[Source, EvaluationRow]) -> list[EvaluationRow]:
+                 finite: BoolArray, report: bool, saved: Mapping[Source, EvaluationRow], *,
+                 score_budget: bool = False) -> list[EvaluationRow]:
         xp = self.xp
+        errors: dict[int, str] = {}
+        if score_budget:
+            within_budget = (xp.abs(books).sum(axis=2, dtype=xp.float64)
+                             <= self.allocation.max_gross + self.portfolio_cfg.weight_sum_atol).all(axis=1)
+            invalid_budget = self.to_host(~within_budget).tolist()
+            errors = {i: EXPOSURE for i, invalid in zip(ids, invalid_budget) if invalid}
+            if errors:
+                finite = finite & within_budget
+                books = xp.where(within_budget[:, None, None], books, 0.)
         if report:
             # These books are owned by this batch; match the execution prefix
             # even when cached returns avoid another account simulation.
@@ -266,7 +293,7 @@ class Pipeline:
             good_rows = self.to_host(finite[list(positions)]).tolist()
             for i, stats, good in zip(indices, self.metrics(selected), good_rows):
                 row = rows[i]
-                row.ok, row.error = good, None if good else INVALID
+                row.ok, row.error = good, None if good else errors.get(i, INVALID)
                 row.book, row.returns = stats.book, stats.returns
                 row.metrics, row.valid_returns = stats.metrics, stats.valid_returns
                 row.risk = stats.risk
@@ -277,7 +304,7 @@ class Pipeline:
         risks = self._risk_summaries(result.risk, len(result.books))
         for j, (i, (good, fine)) in enumerate(zip(ids, status)):
             row = rows[i]
-            row.ok, row.error = good, None if good else INVALID
+            row.ok, row.error = good, None if good else errors.get(i, INVALID)
             row.book, row.returns, row.maxdd, row.valid_returns = result.books[j], result.returns[j], result.maxdd[j], fine
             row.risk = risks[j]
         return rows
@@ -314,7 +341,7 @@ class Pipeline:
             computed = self._evaluate_formulas([sources[i].expression for i in formulas], report, delayed, saved)
             for i, row in zip(formulas, computed):
                 rows[i] = row
-        for kind in ('signals', 'target_weights', 'target_exposure'):
+        for kind in ('scores', 'targets'):
             ids = [i for i, source in enumerate(sources) if isinstance(source, ArraySource) and source.kind == kind]
             if not ids:
                 continue
@@ -323,14 +350,15 @@ class Pipeline:
                 # Full-array hashes include later values: using them as a noise
                 # clock would let a future edit change historical delays.
                 values = delay_shift(values, [sources[i].producer + ':' + kind for i in ids],
-                                     self.xp, self.xp.nan if kind == 'signals' else 0.)
-            if kind == 'signals':
+                                     self.xp, self.xp.nan if kind == 'scores' else 0.)
+            if kind == 'scores':
                 finite = self.xp.isfinite(values).any(axis=(1, 2))
-                books = self.signal_to_book(values)
+                books = self.score_to_book(values)
             else:
                 finite = self.xp.ones(len(ids), dtype=bool)
                 books = cap_book(self.xp.where(self.universe, values, 0.), self.allocation, self.xp)
-            self._measure(rows, ids, books, finite, report, saved)
+            self._measure(rows, ids, books, finite, report, saved,
+                          score_budget=kind == 'scores' and self.settings.sizing.rule == 'independent')
         ids = [i for i, source in enumerate(sources) if isinstance(source, EqualWeight)]
         if ids:
             self._measure(rows, ids, self.xp.stack([self.equal_weight()] * len(ids)),
@@ -359,12 +387,15 @@ class Pipeline:
         self.cache.members[MemberKey(row.source, delayed)] = (row.book.copy(), row.returns.copy())
 
     @resource_scope
-    def signal_to_book(self, values: FloatArray) -> FloatArray:
-        return signal_to_book(values, self.universe, self.slots, self.allocation, self.xp)
+    def score_to_book(self, values: FloatArray) -> FloatArray:
+        return score_to_book(values, self.universe, self.slots, self.allocation, self.settings.sizing, self.xp)
 
     @resource_scope
     def equal_weight(self) -> FloatArray:
-        return self.universe / self.slots
+        """Use the equal-slot baseline budget independently of score sizing."""
+        if self.allocation.max_gross >= 1.:
+            return self.universe / self.slots
+        return self.universe * self.allocation.max_gross / self.slots
 
     @resource_scope
     def simulate(self, W: FloatArray) -> SimulationResult:
@@ -440,4 +471,4 @@ class Pipeline:
         self.cache.close()
         self.inputs.close()
         self.fields.clear()
-        del self.spec, self.universe, self.slots, self.years
+        del self.spec, self.universe, self.slots, self.years, self.decision_ns

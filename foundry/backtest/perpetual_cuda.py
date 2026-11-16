@@ -98,7 +98,7 @@ class Executor:
     def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
               spec: DeviceSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
         results = []
-        allocation = Allocation(spec.host.leverage, True)
+        allocation = Allocation(spec.host.gross_limit, True)
         for lo in range(0, len(weights), batch):
             books = U[None] + weights[lo:lo + batch, None, None] * W[owners[lo:lo + batch]]
             books = cap_book(books, allocation, cp)

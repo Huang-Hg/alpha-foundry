@@ -4,7 +4,7 @@ import hashlib
 from foundry.types import Study
 from foundry.types import EqualWeight, Source
 
-PROTOCOL = 'research-v14'
+PROTOCOL = 'research-v15'
 
 
 @dataclass(frozen=True)

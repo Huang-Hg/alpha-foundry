@@ -23,8 +23,8 @@ MAX_REQUEST_BYTES = 1 << 20
 MAX_RESPONSE_BYTES = 1 << 30
 MAX_PENDING = 64
 HEARTBEAT_SECONDS = 10.
-BUNDLE = 'candidate-batch-v2'
-CHECKPOINT_FORMAT = 'candidate-discovery-v3'
+BUNDLE = 'candidate-batch-v3'
+CHECKPOINT_FORMAT = 'candidate-discovery-v4'
 
 REPORT_NOTES = {
     Metrics: {
@@ -85,7 +85,7 @@ def schema_for(kind):
 
 def parameter_values(settings):
     """Expose the resolved public parameter names, rather than internal assembly fields."""
-    return dict(market=settings.market.name, backend=settings.execution.backend,
+    return dict(market=settings.market.name, backend=settings.backend,
                 **{key: value for key, value in asdict(settings.market).items() if key != 'name'},
                 **{name: asdict(getattr(settings, field)) for name, (field, _) in PARAMETER_GROUPS.items()})
 

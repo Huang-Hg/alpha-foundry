@@ -1,6 +1,6 @@
 """Pure value contracts; device arrays remain borrowed on their owning runtime.
 
-Array axes are batch B, decision day T, execution event E and asset S. Host
+Array axes are batch B, decision D, execution event E and asset S. Host
 arrays use NumPy; device arrays expose the CUDA array interface without loading
 a device library. Field documentation defines dtype, units and ownership.
 """
@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
 from contextlib import AbstractContextManager
+from datetime import datetime
 import hashlib
+import re
 from types import ModuleType
 from typing import Callable, Generic, Literal, Mapping, Protocol, Sequence, TypeAlias, TypeVar
 
@@ -38,6 +40,30 @@ HostArray: TypeAlias = NDArray[np.generic]
 FloatArray: TypeAlias = NDArray[np.floating] | DeviceArray
 IntArray: TypeAlias = NDArray[np.integer] | DeviceArray
 BoolArray: TypeAlias = NDArray[np.bool_] | DeviceArray
+
+NO_INFORMATION = -9223372036854775808
+ArrayKind: TypeAlias = Literal['scores', 'targets']
+ArrayUnit: TypeAlias = Literal['score', 'equity_fraction', 'quantity', 'notional']
+
+
+def utc_nanoseconds(value: str) -> int:
+    """Parse an explicit UTC ISO timestamp without timezone-dependent conversion."""
+    if not isinstance(value, str) or not re.fullmatch(
+            r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z', value):
+        raise ValueError('Decision timestamps require ISO UTC seconds and a Z suffix')
+    whole, _, fraction = value[:-1].partition('.')
+    elapsed = datetime.fromisoformat(whole) - datetime(1970, 1, 1)
+    result = ((elapsed.days * 86400 + elapsed.seconds) * 1000000000
+              + int(fraction.ljust(9, '0') or '0'))
+    if not NO_INFORMATION < result <= 9223372036854775807:
+        raise ValueError('Timestamp is outside the supported int64 nanosecond range')
+    return result
+
+
+def utc_timestamps(values: NDArray[np.int64]) -> tuple[str, ...]:
+    """Format UTC nanoseconds as canonical JSON-safe timestamps."""
+    return tuple(np.datetime_as_string(np.datetime64(int(value), 'ns'), unit='ns') + 'Z'
+                 for value in values)
 
 
 class ParsedFormula(Protocol):
@@ -172,9 +198,37 @@ class MarketData:
 
 
 @dataclass(frozen=True)
+class ClockGrid:
+    """Owned read-only decision UTC ns (D,), with calendar and provenance identity."""
+    decision_ns: NDArray[np.int64]
+    timezone: str
+    calendar: str
+    provenance: str
+
+    def __post_init__(self) -> None:
+        values = np.asarray(self.decision_ns)
+        if (values.dtype != np.dtype('int64') or values.ndim != 1 or not values.size
+                or np.any(values == NO_INFORMATION) or np.any(values[1:] <= values[:-1])):
+            raise ValueError('Decision times must be nonempty, strictly increasing int64 UTC ns')
+        owned = np.array(values, copy=True, order='C')
+        owned.flags.writeable = False
+        object.__setattr__(self, 'decision_ns', owned)
+
+    @property
+    def decision_times(self) -> tuple[str, ...]:
+        return utc_timestamps(self.decision_ns)
+
+
+@dataclass(frozen=True)
 class Window:
+    """Daily kernel session labels plus a distinct absolute decision clock."""
     dates: NDArray[np.datetime64]
     start: int
+    clock: ClockGrid
+
+    def __post_init__(self) -> None:
+        if len(self.dates) != len(self.clock.decision_ns) or not 0 <= self.start < len(self.dates):
+            raise ValueError('Research window and decision clock must align')
 
     @property
     def stat_dates(self):
@@ -218,12 +272,13 @@ class Formula:
 @dataclass(frozen=True)
 class ArraySource:
     """Versioned content identity; empty scope is durable, otherwise session-resident."""
-    kind: Literal['signals', 'target_weights', 'target_exposure']
+    kind: ArrayKind
     digest: str
     snapshot: str
     producer: str
     complexity: float = 0.
     scope: str = ''
+    unit: ArrayUnit = 'score'
 
     def normalized_complexity(self, ast_cost: int, max_cost: int) -> float:
         return self.complexity
@@ -244,34 +299,35 @@ Source = Formula | ArraySource | EqualWeight
 class ArrayBatch:
     """Explicit external-input boundary; registration takes an owned copy.
 
-    values: NumPy/CuPy float32/float64 (B,T,S), on the engine's device or host.
-    signals: NaN denotes missing; cash uses clip(0,1)/eligible_count;
-    short-enabled markets use clip(-1,1)/eligible_count (at most 1x gross).
-    target_weights: finite long-only fractions, zero for ineligible assets,
-    each day's sum <= 1 (the balance is cash); excess within the configured
-    portfolio.weight_sum_atol is normalized to 1. No leverage or shorts implied.
-    target_exposure: signed notional/equity ratios, zero for ineligible assets;
-    sum(abs(exposure)) <= the market allocation budget. Cash allocation still
-    forbids shorts. Derivatives require this kind instead of target_weights.
-    observed_through / fit_through: integer (B,T), from -1 through row t.
+    values: NumPy/CuPy float32/float64 (B,D,S), on the engine's device or host.
+    scores use unit score; NaN is missing and the selected Sizing rule defines
+    its treatment. Targets are finite signed values in the declared unit;
+    zero explicitly closes a position. Targets bypass score mapping.
+    update_mask: optional bool (B,D,S); False emits no new target. Omission
+    updates every asset. R1 daily kernels require every entry to be True.
+    observed_at / fit_at: int64 UTC ns (B,D), no later than the decision time;
+    NO_INFORMATION means the producer used no observations or fitting.
     producer: immutable model/program/version identifier supplied by the caller.
-    dates: ISO trading dates; assets: identifiers in the exact study order.
+    decision_times: ISO UTC timestamps; assets: exact study asset order.
+    quantity and notional units require an execution capability beyond R1.
     All arrays are borrowed until register_batch returns; callers may then
     mutate their buffers without changing the registered candidate.
     CUDA inputs must be ready on the runtime's current stream when submitted;
     producers using other streams establish that dependency before calling.
     complexity: optional B normalized costs in [0,1]; omission means zero.
     """
-    kind: Literal['signals', 'target_weights', 'target_exposure']
+    kind: ArrayKind
     ids: tuple[str, ...]
     values: FloatArray
     snapshot: str
     producer: str
-    dates: tuple[str, ...]
+    decision_times: tuple[str, ...]
     assets: tuple[str, ...]
-    observed_through: IntArray
-    fit_through: IntArray
+    observed_at: IntArray
+    fit_at: IntArray
     complexity: tuple[float, ...] | None = None
+    unit: ArrayUnit = 'score'
+    update_mask: BoolArray | None = None
 
 
 class ArrayStore(Protocol):
@@ -483,8 +539,22 @@ class RegisteredBatch:
 class DataGrid:
     """Producer-visible coordinates, bound to one immutable data snapshot."""
     snapshot: str
-    dates: tuple[str, ...]
+    decision_times: tuple[str, ...]
     assets: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        values = tuple(utc_nanoseconds(value) for value in self.decision_times)
+        if not values or any(right <= left for left, right in zip(values, values[1:])):
+            raise ValueError('Decision times must be nonempty and strictly increasing')
+        if not self.assets or len(set(self.assets)) != len(self.assets):
+            raise ValueError('Grid assets must be nonempty and unique')
+        object.__setattr__(self, 'decision_times', utc_timestamps(np.asarray(values, dtype=np.int64)))
+
+    @property
+    def time_ns(self) -> NDArray[np.int64]:
+        values = np.asarray([utc_nanoseconds(value) for value in self.decision_times], dtype=np.int64)
+        values.flags.writeable = False
+        return values
 
 
 @dataclass(frozen=True)
@@ -691,6 +761,8 @@ class PerpetualSpec:
     settlement fraction, and maintenance/fee/liquidation_fee are fractions of
     mark/traded notional. The loader validates a complete, ordered event grid.
     Intrabar first-liquidation timestamps identify the bar, not a known tick.
+    leverage determines isolated collateral; gross_limit separately bounds
+    target notional/equity and can be lower than leverage.
     """
     event_times_ms: HostArray
     day_index: HostArray
@@ -707,6 +779,7 @@ class PerpetualSpec:
     liquidation_fee: HostArray
     leverage: float
     days: int
+    gross_limit: float
 
     def __post_init__(self):
         for name in PERPETUAL_ARRAY_FIELDS:
@@ -1018,23 +1091,23 @@ class CandidateGrid:
 
 @dataclass(frozen=True)
 class Fold:
-    """Fit on [fit_start, fit_through], predict on [predict_start, predict_stop)."""
+    """Half-open fit and prediction intervals, expressed as UTC int64 ns."""
     fit_start: int
-    fit_through: int
+    fit_stop: int
     predict_start: int
     predict_stop: int
 
 
 @dataclass(frozen=True)
 class FoldView:
-    """Owned feature prefix (T,S); host arrays are read-only.
+    """Owned causal feature view (D,S); host arrays are read-only.
 
-    start/stop are absolute study row indices with an exclusive stop. Arrays
+    start/stop are UTC ns interval bounds with an exclusive stop. Arrays
     retain their host/device dtype and cannot expose later rows through a base.
     """
     start: int
     stop: int
-    dates: tuple[str, ...]
+    decision_times: tuple[str, ...]
     assets: tuple[str, ...]
     features: Mapping[str, FloatArray]
     eligibility: BoolArray
@@ -1042,14 +1115,16 @@ class FoldView:
 
 @dataclass(frozen=True)
 class FoldResult:
-    """Realized next-bar net-return signs in [execution_start, execution_stop).
+    """Realized net-return signs in a half-open UTC ns measurement interval.
 
+    Bounds label daily closing measurements, not next-open fills. The terminal
+    stop is one nanosecond after the final measurement when no next row exists.
     Mean returns/signs follow registered candidate order. Invalid returns have
     a missing mean and sign zero; valid zero means also have sign zero.
     """
     fold: Fold
-    execution_start: int
-    execution_stop: int
+    measurement_start: int
+    measurement_stop: int
     mean_returns: tuple[float | None, ...]
     signs: tuple[int, ...]
 

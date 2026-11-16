@@ -1,6 +1,7 @@
 # Research runtime. Native extensions use Linux Python/NumPy headers and g++ via bash build.sh, including WSL2.
 numpy>=2.0
 pandas>=2.0
+exchange_calendars>=4.11,<5  # explicit exchange closes, holidays and DST
 pyarrow>=17
 rich>=13             # terminal dashboard
 paramiko>=3          # cloud evaluation service over SSH

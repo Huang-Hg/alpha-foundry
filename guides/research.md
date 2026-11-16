@@ -131,7 +131,9 @@ The importer acquires public USD-M archives, verifies checksums and retains sour
 
 ## Numerical factors, model signals and target positions
 
-`session.grid` gives ordered dates, assets and snapshot identity. Arrays use shape `(B,T,S)`: candidates, dates, assets. This example registers three zero-signal candidates to demonstrate the interface; replace them with your actual outputs and information cutoffs.
+`session.grid` gives canonical ISO UTC `decision_times`, the equivalent int64 UTC nanoseconds in `time_ns`, ordered assets and snapshot identity. Arrays use shape `(B,D,S)`: candidates, decisions, assets. R1 preserves the four daily market paths; `Clock` currently accepts only daily decisions and statistics. Equity decisions use the exchange session close (including DST and early closes); crypto decisions use the right boundary of each UTC day. This calendar coordinate does not supply missing historical publication timestamps.
+
+This example registers three constant zero-score candidates, which use no observations or fitted model. Replace the values and causal declarations with your actual outputs:
 
 ```python
 import numpy as np
@@ -139,35 +141,38 @@ import foundry
 
 with foundry.open() as session:
     grid = session.grid
-    days, assets = len(grid.dates), len(grid.assets)
+    days, assets = len(grid.decision_times), len(grid.assets)
     values = np.zeros((3, days, assets), dtype=np.float32)
-    unused = np.full((3, days), -1, dtype=np.int64)
+    unused = np.full((3, days), foundry.NO_INFORMATION, dtype=np.int64)
     registered = session.register(
-        values, kind="signals", ids=("model-small", "model-base", "model-large"),
+        values, kind="scores", unit="score", ids=("model-small", "model-base", "model-large"),
         grid=grid, producer="external-program-v1",
-        observed_through=unused, fit_through=unused,
+        observed_at=unused, fit_at=unused,
         complexity=(0.2, 0.5, 0.8),
     )
     report = session.evaluate(registered)
 ```
 
-| Kind | Meaning | Constraints |
+| Kind and unit | Meaning | Constraints |
 | --- | --- | --- |
-| `signals` | Scores converted to positions by Foundry | Floating values; NaN may mark missing signals |
-| `target_weights` | Equity or spot long-only asset weights | Finite, nonnegative, total exposure at most 1, zero outside eligibility |
-| `target_exposure` | Perpetual signed notional/equity targets | Finite, gross exposure within configured leverage, zero outside eligibility |
+| `scores`, `score` | Scores converted by the session's `Sizing` rule | Float32/float64; NaN means missing and maps to zero target |
+| `targets`, `equity_fraction` | Signed notional divided by account equity | Finite; cash accounts require nonnegative values; gross exposure within `Account.gross_limit`; zero outside eligibility |
 
-Signal magnitude directly controls exposure. For each eligible asset, cash markets use `clip(signal, 0, 1) / N`; short-enabled markets use `clip(signal, -1, 1) / N`, where `N` is that day's eligible asset count. Missing and ineligible signals contribute zero. Foundry does not rank these arrays or rescale them to full investment. With 100 eligible assets and a signal of `0.01` on each, cash exposure is 1%, not 100%. Apply your own causal score calibration before registration, or supply `target_weights` / `target_exposure` to specify allocations directly. Any fitted calibration must be included in `fit_through`.
+`Sizing(rule="equal_slots")` preserves the daily preset: cash markets use `clip(score, 0, 1) / N`, short-enabled markets use `clip(score, -1, 1) / N`, with `N` eligible assets. `Sizing(rule="independent", scale=0.1)` uses the clipped score times the explicit scale without dividing by asset count. Adding zero-score assets therefore leaves an existing asset's independent target unchanged. Independent sizing reports an exceeded gross budget as a candidate rejection and continues the batch; it does not automatically normalize to full investment.
 
-An [independent agent integration](integrations/agent-l4-20261116/README.md) exercised this path with custom numerical factors and a GPU-trained ridge model, then adapted them using returned feedback.
+Direct `targets` bypass score mapping and require `unit="equity_fraction"`. Zero means an explicit flat target. R1 accepts an omitted `update_mask` or an all-true boolean `(B,D,S)` mask, which have one canonical identity; false entries require the later account execution capability and are rejected. Scores do not accept an update mask. Quantity and notional targets are not available in R1.
 
-Values must be floating arrays. Observation and fitting cutoffs are integer arrays `(B,T)`, using study row indices no later than decision row `t`; `-1` means no observations or fitting were used. Do not use `-1` for a trained model merely to satisfy validation. Daily close decisions execute no earlier than the next open.
+Use `foundry.Account(margin="isolated", leverage=3., gross_limit=2.)` to separate collateral leverage from the allowed gross target exposure. Default daily presets retain their previous economics: cash 1×, isolated perpetual 5× leverage and gross limit. Any causal score calibration must be included in `fit_at`.
+
+A historical [independent agent integration](integrations/agent-l4-20261116/README.md) exercised the earlier protocol with custom numerical factors and a GPU-trained ridge model, then adapted them using returned feedback.
+
+Values must be float32 or float64 arrays. Observation and fitting declarations are int64 UTC nanoseconds `(B,D)`, each no later than the corresponding `grid.time_ns` value. Use `foundry.NO_INFORMATION` (the minimum int64 value) only when no observation or fit was used. For example, an unfitted score observed at the decision uses `observed_at=np.broadcast_to(grid.time_ns, (B,D))` and `fit_at` filled with `NO_INFORMATION`. A trained model must declare the actual latest information used by its training labels and data. Daily close decisions execute no earlier than the next open.
 
 `producer` identifies your implementation. Optional per-candidate `complexity` lies in `[0,1]` and influences discovery's soft score only; it cannot change hard admission. Registration owns a bounded resident copy and returns content-bound candidates plus a lease. Local CuPy payloads stay on the GPU; only compact content digests return to the host. Remote registration uploads NumPy arrays without server paths.
 
 Call `session.release(registered)` when finished, normally in `finally` in a repeated loop. Session exit releases its remaining leases. Across active batches, the total row count cannot exceed `candidate_batch`; release a batch before registering more. Released resident references cannot be evaluated, even if an internal measurement remains cached.
 
-To keep selected outputs, use `saved = session.retain(registered.candidates[:1])` before release and save `saved.candidates` for future use. Only this explicit request, accepted portfolio members, or discovery checkpoint references write artifacts to `Admission.artifact_dir`. `retain` returns durable references; it does not release the original batch. Commit and discovery handle their own required retention automatically. Portfolio/RPC, array and discovery formats are `research-v14`, `candidate-array-v3` and `candidate-discovery-v3`; old formats require an explicit rerun, with no automatic migration.
+To keep selected outputs, use `saved = session.retain(registered.candidates[:1])` before release and save `saved.candidates` for future use. Only this explicit request, accepted portfolio members, or discovery checkpoint references write artifacts to `Admission.artifact_dir`. `retain` returns durable references; it does not release the original batch. Commit and discovery handle their own required retention automatically. Portfolio/RPC, array and discovery formats are `research-v15`, `candidate-array-v4` and `candidate-discovery-v4` (binary batch transport: `candidate-batch-v3`); old formats require an explicit rerun, with no automatic migration.
 
 ## Strategy discovery
 
@@ -208,7 +213,7 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
 
 `ExternalProposer` accepts finite candidate or registered batches. `foundry.mine(..., session=session, proposers=[proposer])` opens, restores and closes producer resources automatically while leaving the supplied session open. Its optional callback receives one `LearningFeedback`: `feedback.batch` preserves candidate ordering and the research context; `feedback.rewards` is a same-device FP32 vector. CPU programs explicitly call `to_host()`; CUDA programs use `borrow(stream_pointer)` on their own stream and import the borrowed array through zero-copy DLPack. Do not mutate feedback or retain aliases beyond the borrow scope. Feedback owns no market/portfolio buffers, so learning can overlap commit and reweight.
 
-Custom proposers implement an `open(device)` context manager yielding a producer with `propose(request)`, `learn(feedback)`, `release(batch)`, `dump()` and `load()`. `ProposalRequest` contains only count, research context and diagnostic features; model-specific learning settings stay in each constructor. Each producer permits one unreleased batch, and feedback must reference its exact original handle, preserving instance, order and context. The driver joins learning before releasing feedback and trajectories, including on failure. Ordinary and auxiliary evaluations use actual counts; random proposers no longer append implicit GFN probes. Checkpoints use `candidate-discovery-v3` and reject older formats. Additional feedback storage is `O(B)`, with no history/replay cache.
+Custom proposers implement an `open(device)` context manager yielding a producer with `propose(request)`, `learn(feedback)`, `release(batch)`, `dump()` and `load()`. `ProposalRequest` contains only count, research context and diagnostic features; model-specific learning settings stay in each constructor. Each producer permits one unreleased batch, and feedback must reference its exact original handle, preserving instance, order and context. The driver joins learning before releasing feedback and trajectories, including on failure. Ordinary and auxiliary evaluations use actual counts; random proposers no longer append implicit GFN probes. Checkpoints use `candidate-discovery-v4` and reject older formats. Additional feedback storage is `O(B)`, with no history/replay cache.
 
 
 Without a supplied proposer, `foundry.mine(output, ...)` uses the configured built-in GFN or random formula proposer. The default `Search(accept=False)` still evolves an in-memory research portfolio through ordered admission and scheduled reweighting; it prevents persistent library publication. To publish, use `Search(accept=True, seed_portfolio="current")`. A supplied persistent session requires that publication setting; it is rejected with `accept=False`. `Discovery`, mining and walk-forward need an in-process session; their device-resident work is not a remote callback protocol.
@@ -229,9 +234,9 @@ with foundry.open(
     foundry.mine("var/runs/mlp-example", session=session, proposers=[proposer])
 ```
 
-`mode="mlp"` fits a batch of 8→16→1 FP32 networks on historical prefixes every 64 days. The 20-day return labels end strictly before each prediction segment. Predictors emit `target_weights`; a separate GPU reward surrogate learns from resident feedback to guide the next hyperparameter batch. Research feedback never updates a predictor that is then backfilled into past decisions.
+`mode="mlp"` fits a batch of 8→16→1 FP32 networks on historical prefixes every 64 days. The 20-day return labels end strictly before each prediction segment. Predictors emit `targets`; a separate GPU reward surrogate learns from resident feedback to guide the next hyperparameter batch. Research feedback never updates a predictor that is then backfilled into past decisions.
 
-`mode="factor"` uses GPU tensors, feature interactions and cross-sectional sorting to emit `signals`. GPU CEM updates its parameter distribution from the same reward vector. The example also evaluates a nine-point neighborhood and delayed twins through `CandidateGrid`. Both clients share registration, archives, hard admission and ordered commit; model parameters, causal fitting and learning rules remain client-owned.
+`mode="factor"` uses GPU tensors, feature interactions and cross-sectional sorting to emit `scores`. GPU CEM updates its parameter distribution from the same reward vector. The example also evaluates a nine-point neighborhood and delayed twins through `CandidateGrid`. Both clients share registration, archives, hard admission and ordered commit; model parameters, causal fitting and learning rules remain client-owned.
 
 Array registration copies GPU outputs into a bounded resident lease and hashes chunks on the GPU. Only compact digests return to the host; accepted, checkpoint-referenced and explicitly retained candidates transfer their payloads for persistence. Outputs and fitting cutoffs are declared through `session.register`. Causal prediction fitting does not establish unbiased out-of-sample model selection: hyperparameter/factor search uses research-window feedback, and reported returns are in-sample research results.
 
@@ -271,12 +276,13 @@ The seed must appear exactly once in the variants. Coordinates are unique intege
 ```python
 with foundry.open(start="2025-07-01", end="2026-06-30") as session:
     xp = session.resident.xp
-    dates = session.grid.dates
-    first = next(i for i, date in enumerate(dates) if date >= "2025-07-01")
-    middle = (first + len(dates)) // 2
+    times = session.grid.time_ns
+    first = next(i for i, time in enumerate(session.grid.decision_times)
+                 if time >= "2025-07-01T00:00:00Z")
+    middle = (first + len(times)) // 2
     folds = (
-        foundry.Fold(0, first - 1, first, middle),
-        foundry.Fold(0, middle - 1, middle, len(dates)),
+        foundry.Fold(int(times[0]), int(times[first]), int(times[first]), int(times[middle])),
+        foundry.Fold(int(times[0]), int(times[middle]), int(times[middle]), int(times[-1]) + 1),
     )
 
     def fit(view):
@@ -288,17 +294,17 @@ with foundry.open(start="2025-07-01", end="2026-06-30") as session:
 
     result = foundry.walk_forward(
         session, fit, predict, folds=folds, ids=("fold-model",),
-        kind="signals", producer="prefix-model-v1", features=("ma_dist_20",),
+        kind="scores", unit="score", producer="prefix-model-v1", features=("ma_dist_20",),
     )
     report = session.evaluate(result.registered)
     print(result.sign_consistency)
 ```
 
-`Fold(fit_start, fit_through, predict_start, predict_stop)` uses absolute study row indices. Training includes `fit_through`; prediction excludes `predict_stop`. Fit must precede prediction; prediction folds are ordered and nonoverlapping and each must contain an executable decision. Keep `fit_start` fixed for expanding windows or advance it for rolling windows. Retain enough pre-start history for training.
+`Fold(fit_start, fit_stop, predict_start, predict_stop)` uses int UTC nanoseconds and half-open intervals `[start, stop)`. Fitting ends before prediction starts; prediction folds are ordered and nonoverlapping and each contains an executable decision. Keep `fit_start` fixed for expanding windows or advance it for rolling windows. A terminal exclusive bound can be `int(grid.time_ns[-1]) + 1`.
 
-Each prediction returns `(B,S)` in study asset order, using the backend array library. `FoldView` contains `start`, exclusive `stop`, `dates`, `assets`, `features` and `eligibility`. Outputs undergo the same registration checks as external arrays; invalid exposures are rejected rather than silently masked. The executor records observed row `t` and the fold's fit cutoff. It cannot police a callback that separately reads future data or uses a model pre-trained on it.
+Each prediction returns `(B,S)` in study asset order using the backend array library. `FoldView` contains timestamp `start`, exclusive timestamp `stop`, `decision_times`, `assets`, `features` and `eligibility`. Its arrays are owned causal prefixes. Outputs undergo the same registration checks as external arrays. The executor records the current decision in `observed_at` and the final visible fit decision in `fit_at`; include every observation used by training labels inside the fit interval. External callbacks remain responsible for separately loaded data and pre-trained model provenance.
 
-Diagnostics attribute a fold's net returns from its first executable decision until the next model first executes, or study end for the last fold. Exit costs, funding and blocked-position carry during gaps remain attributed to the preceding model. `sign_consistency` is the larger of the positive-fold and negative-fold counts divided by all folds; zero/invalid folds count in neither numerator. A consistently losing model can score 1, so inspect the fold signs and returns as well. The operation registers and evaluates predictions but does not commit them. Release `result.registered` after use, or explicitly retain selected candidates first.
+Diagnostics attribute a fold's net returns from the closing measurement after its first decision in the evaluation interval until the next model's corresponding measurement, or study end for the last fold. `FoldResult.measurement_start` and `measurement_stop` are half-open UTC nanosecond bounds on these closing measurements; they are not next-open fill times. The terminal stop is one nanosecond after the last measurement. Exit costs, funding and blocked-position carry during gaps remain attributed to the preceding model. `sign_consistency` is the larger of the positive-fold and negative-fold counts divided by all folds; zero/invalid folds count in neither numerator. A consistently losing model can score 1, so inspect the fold signs and returns as well. The operation registers and evaluates predictions but does not commit them. Release `result.registered` after use, or explicitly retain selected candidates first.
 
 ## Remote sessions
 
@@ -313,7 +319,7 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 Formula evaluation, registration, family judging, diagnosis, weight trials and portfolio commands use the same public session methods. Fit external models in your own process and register their outputs for remote evaluation. `session.resident` and `evaluate_device` are in-process facilities.
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) derives requests and responses from the typed contracts; [`rpc/codec.py`](../foundry/rpc/codec.py) handles encoding, with [`rpc/server.py`](../foundry/rpc/server.py) and [`rpc/client.py`](../foundry/rpc/client.py) owning transport. Array uploads use a binary bundle with 1 GiB encoded and decoded limits and no pickle. Portfolio/RPC protocol `research-v14` rejects old formats explicitly. Commands run through one bounded worker queue; disconnecting a client does not cancel an accepted command.
+[`rpc/schema.py`](../foundry/rpc/schema.py) derives requests and responses from the typed contracts; [`rpc/codec.py`](../foundry/rpc/codec.py) handles encoding, with [`rpc/server.py`](../foundry/rpc/server.py) and [`rpc/client.py`](../foundry/rpc/client.py) owning transport. Array uploads use a binary bundle with 1 GiB encoded and decoded limits and no pickle. Portfolio/RPC protocol `research-v15` rejects old formats explicitly. Commands run through one bounded worker queue; disconnecting a client does not cancel an accepted command.
 
 Input-contract errors raise `ValueError` or `TypeError`; stale contexts raise `ContextConflict`; resource/implementation failures propagate. Candidate business rejection remains a structured report. Consult `foundry.schema()` rather than constructing undocumented wire messages.
 
@@ -321,7 +327,7 @@ Input-contract errors raise `ValueError` or `TypeError`; stale contexts raise `C
 
 Spot uses UTC daily bars and 365-day annualization. Eligibility and quotes remain separate; missing trade prices can block execution and leave an existing position carried. Configured fees apply to executed changes.
 
-Perpetuals model USDT linear contracts with isolated collateral. Daily targets are signed notional/account equity; gross exposure is bounded by configured leverage. Signals do not automatically allocate maximum leverage. Hourly events process mark gaps, existing-position funding, a daily rebalance, adverse high/low liquidation checks and closing marks. Funding follows actual event timestamps mapped to the hourly grid. If the public funding archive lacks settlement mark prices, the importer explicitly records its mark-open proxy.
+Perpetuals model USDT linear contracts with isolated collateral. Daily targets are signed notional/account equity; gross exposure is bounded by `Account.gross_limit`. Signals do not automatically allocate maximum leverage. Hourly events process mark gaps, existing-position funding, a daily rebalance, adverse high/low liquidation checks and closing marks. Funding follows actual event timestamps mapped to the hourly grid. If the public funding archive lacks settlement mark prices, the importer explicitly records its mark-open proxy.
 
 The current model uses fixed maintenance/fee parameters. It does not reproduce historical tier schedules, VIP fees, ADL, an order book or tick-by-tick intrabar fills. `risk` reports funding, trading fees, liquidation fees, liquidation counts, bankruptcy and account equity with units documented by the schema.
 

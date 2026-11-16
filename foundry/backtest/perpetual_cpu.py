@@ -50,7 +50,7 @@ class Executor:
 
     def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
               spec: HostSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
-        allocation = Allocation(spec.host.leverage, True)
+        allocation = Allocation(spec.host.gross_limit, True)
         inputs = tuple(getattr(spec.host, name) for name in PERPETUAL_ARRAY_FIELDS)
         def trial(i: int) -> SimulationResult:
             books = U[None] + weights[i] * W[owners[i]][None]

@@ -35,8 +35,12 @@ class ResidentInputs:
             module = np if isinstance(values, np.ndarray) else self.xp
             return module.array(values, copy=True, order='C')
         owned = replace(batch, values=self.xp.array(batch.values, copy=True, order='C'),
-                        observed_through=own(batch.observed_through), fit_through=own(batch.fit_through))
-        arrays = (owned.values, owned.observed_through, owned.fit_through)
+                        observed_at=own(batch.observed_at), fit_at=own(batch.fit_at),
+                        update_mask=None if batch.update_mask is None or bool(self.xp.asarray(batch.update_mask).all())
+                        else self.xp.array(batch.update_mask, copy=True, order='C'))
+        arrays = (owned.values, owned.observed_at, owned.fit_at)
+        if owned.update_mask is not None:
+            arrays += (owned.update_mask,)
         leaves = tuple(self.leaves(values) for values in arrays)
         sources = tuple(source_for(metadata_for(owned, i),
             digest_for(metadata_for(owned, i), tuple(values[i] for values in arrays),
@@ -53,7 +57,8 @@ class ResidentInputs:
         token, index = self.rows[source]
         batch = self.leases[token].batch
         return replace(batch, ids=(batch.ids[index],), values=batch.values[index:index+1],
-                       observed_through=batch.observed_through[index:index+1], fit_through=batch.fit_through[index:index+1],
+                       observed_at=batch.observed_at[index:index+1], fit_at=batch.fit_at[index:index+1],
+                       update_mask=None if batch.update_mask is None else batch.update_mask[index:index+1],
                        complexity=None if batch.complexity is None else batch.complexity[index:index+1])
 
     def select(self, sources: Sequence[ArraySource]) -> Iterator[tuple[tuple[ArraySource, ...], ArrayBatch]]:
@@ -69,7 +74,8 @@ class ResidentInputs:
             selection = slice(indices[0], indices[0] + len(indices)) if contiguous else indices
             yield tuple(source for source, _ in rows), replace(batch,
                 ids=tuple(batch.ids[i] for i in indices), values=batch.values[selection],
-                observed_through=batch.observed_through[selection], fit_through=batch.fit_through[selection],
+                observed_at=batch.observed_at[selection], fit_at=batch.fit_at[selection],
+                update_mask=None if batch.update_mask is None else batch.update_mask[selection],
                 complexity=None if batch.complexity is None else tuple(batch.complexity[i] for i in indices))
 
     def release(self, token: str) -> tuple[ArraySource, ...]:

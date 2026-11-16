@@ -15,8 +15,56 @@ def path(value: str) -> Path:
 
 
 @dataclass(frozen=True)
-class ExecutionConfig:
-    backend: str = 'cuda'
+class Clock:
+    """Decision and statistics frequencies supported by the daily execution plan."""
+    decision: Literal['1D'] = '1D'
+    statistics: Literal['1D'] = '1D'
+
+    def __post_init__(self) -> None:
+        if self.decision != '1D' or self.statistics != '1D':
+            raise ValueError('The R1 execution plan supports only 1D decision and statistics clocks')
+
+
+@dataclass(frozen=True)
+class Sizing:
+    """Score mapping; independent targets use scale without asset-count dilution."""
+    rule: Literal['equal_slots', 'independent'] = 'equal_slots'
+    scale: float = 1.
+
+    def __post_init__(self) -> None:
+        if self.rule not in ('equal_slots', 'independent'):
+            raise ValueError('Sizing rule must be equal_slots or independent')
+        if not math.isfinite(self.scale) or self.scale <= 0:
+            raise ValueError('Sizing scale must be positive and finite')
+        if self.rule == 'equal_slots' and self.scale != 1.:
+            raise ValueError('equal_slots requires scale=1; choose independent for explicit scaling')
+
+
+@dataclass(frozen=True)
+class Account:
+    """Collateral leverage and allowed gross notional/equity are separate limits."""
+    margin: Literal['cash', 'isolated'] = 'cash'
+    leverage: float = 1.
+    gross_limit: float = 1.
+
+    def __post_init__(self) -> None:
+        if self.margin not in ('cash', 'isolated'):
+            raise ValueError('Account margin must be cash or isolated')
+        if not (math.isfinite(self.leverage) and self.leverage >= 1
+                and math.isfinite(self.gross_limit) and 0 < self.gross_limit <= self.leverage):
+            raise ValueError('Account requires finite leverage >= 1 and 0 < gross_limit <= leverage')
+        if self.margin == 'cash' and self.leverage != 1:
+            raise ValueError('Cash accounts require leverage=1')
+
+
+@dataclass(frozen=True)
+class Execution:
+    """Bar fill rule; next_open means the next base bar after the decision."""
+    fill: Literal['next_open'] = 'next_open'
+
+    def __post_init__(self) -> None:
+        if self.fill != 'next_open':
+            raise ValueError('The R1 execution plan supports only next_open fills')
 
 
 @dataclass(frozen=True)
@@ -57,15 +105,13 @@ class CryptoPerpetualConfig:
     start: str = '2025-07-01'
     end: str = '2025-12-31'
     symbols: str = 'BTCUSDT ETHUSDT SOLUSDT'
-    leverage: float = 5.0
     cost_rate: float = 0.0004
     maintenance_rate: float = 0.005
     liquidation_fee: float = 0.0005
 
     def __post_init__(self):
-        if not (math.isfinite(self.leverage) and self.leverage >= 1
-                and 0 <= self.cost_rate < 1 / self.leverage
-                and 0 < self.maintenance_rate < 1 / self.leverage
+        if not (0 <= self.cost_rate < 1
+                and 0 < self.maintenance_rate < 1
                 and 0 <= self.liquidation_fee < self.maintenance_rate):
             raise ValueError('Invalid isolated-perpetual margin or fee parameters')
 
@@ -210,7 +256,11 @@ MarketConfig = UsEquityConfig | AShareConfig | CryptoSpotConfig | CryptoPerpetua
 @dataclass(frozen=True)
 class Settings:
     market: MarketConfig = field(default_factory=UsEquityConfig)
-    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    backend: Literal['cpu', 'cuda', 'portable'] = 'cuda'
+    clock: Clock = field(default_factory=Clock)
+    sizing: Sizing = field(default_factory=Sizing)
+    account: Account = field(default_factory=Account)
+    execution: Execution = field(default_factory=Execution)
     expr: ExprConfig = field(default_factory=ExprConfig)
     cuda: CudaConfig = field(default_factory=CudaConfig)
     cpu: CpuConfig = field(default_factory=CpuConfig)
@@ -234,9 +284,12 @@ class Parameters(TypedDict, total=False):
     transfer_fee: float
     history_start: str
     symbols: str
-    leverage: float
     maintenance_rate: float
     liquidation_fee: float
+    clock: Clock
+    sizing: Sizing
+    account: Account
+    execution: Execution
     cuda: CudaConfig
     cpu: CpuConfig
     admission: PortfolioConfig
@@ -246,7 +299,9 @@ class Parameters(TypedDict, total=False):
     monitor: MonitorConfig
 
 
-PARAMETER_GROUPS = dict(cuda=('cuda', CudaConfig), cpu=('cpu', CpuConfig), admission=('portfolio', PortfolioConfig),
+PARAMETER_GROUPS = dict(clock=('clock', Clock), sizing=('sizing', Sizing), account=('account', Account),
+                        execution=('execution', Execution),
+                        cuda=('cuda', CudaConfig), cpu=('cpu', CpuConfig), admission=('portfolio', PortfolioConfig),
                         operators=('expr', ExprConfig), search=('search', SearchConfig),
                         single=('single', SingleConfig), monitor=('monitor', MonitorConfig))
 
@@ -259,16 +314,25 @@ def configure(**parameters: Unpack[Parameters]) -> Settings:
                  'crypto_spot': CryptoSpotConfig, 'crypto_perpetual': CryptoPerpetualConfig}
     if name not in factories:
         raise ValueError(f'Unknown market: {name}')
-    backend = parameters.pop('backend', settings.execution.backend)
+    backend = parameters.pop('backend', settings.backend)
     if backend not in ('cpu', 'cuda', 'portable'):
         raise ValueError(f'Unknown execution backend: {backend}')
+    account = Account('isolated', 5., 5.) if name == 'crypto_perpetual' else Account()
+    settings = replace(settings, account=account)
     groups = {field_name: parameters.pop(public_name, getattr(settings, field_name))
               for public_name, (field_name, _) in PARAMETER_GROUPS.items()}
     for public_name, (field_name, kind) in PARAMETER_GROUPS.items():
         if not isinstance(groups[field_name], kind):
             raise TypeError(f'{public_name} requires {kind.__name__}')
     selected = factories[name](**parameters)
-    return replace(settings, market=selected, execution=ExecutionConfig(backend), **groups)
+    account = groups['account']
+    if (name == 'crypto_perpetual') != (account.margin == 'isolated'):
+        raise ValueError('Isolated accounts require crypto_perpetual; other markets require cash accounts')
+    if isinstance(selected, CryptoPerpetualConfig) and not (
+            selected.cost_rate < 1 / account.leverage
+            and selected.maintenance_rate < 1 / account.leverage):
+        raise ValueError('Perpetual trading and maintenance rates must be below isolated collateral fraction')
+    return replace(settings, market=selected, backend=backend, **groups)
 
 
 

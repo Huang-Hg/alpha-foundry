@@ -17,6 +17,7 @@ from foundry.config import CryptoPerpetualConfig
 from foundry.types import Allocation, Backend, BoolArray, DataContract, LoadedStudy, MarketData, PerpetualSpec, Study, Window
 from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
+from foundry.market.clock import daily_clock
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -387,12 +388,16 @@ class CryptoPerpetual(Market[PerpetualData, PerpetualSpec]):
     categories = {'pricevolume': 'completed UTC daily trade-price/volume primitives',
                   'trend': 'daily trend; execution-only funding and mark risk stay outside features'}
 
-    def __init__(self, leverage: float, cost_rate: float, maintenance_rate: float, liquidation_fee: float):
-        self.allocation = Allocation(leverage, True)
+    def __init__(self, leverage: float, cost_rate: float, maintenance_rate: float, liquidation_fee: float,
+                 gross_limit: float):
+        self.leverage = leverage
+        self.allocation = Allocation(gross_limit, True)
         self.cost_rate, self.maintenance_rate, self.liquidation_fee = cost_rate, maintenance_rate, liquidation_fee
 
     def compile(self, data: PerpetualData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
         daily = data.daily
+        clock = daily_clock(daily.dates, self.name)
+        window = Window(daily.dates, int(np.searchsorted(daily.dates, np.datetime64(study.start))), clock)
         src = dict(daily.values, member=daily.members)
         fields = [Field(k, 'price', formula=False) for k in src] + ohlcv_fields() + trend_fields()
         shape = data.trade_open.shape
@@ -401,10 +406,9 @@ class CryptoPerpetual(Market[PerpetualData, PerpetualSpec]):
             data.mark_open, data.mark_high, data.mark_low, data.mark_close,
             data.funding_rate, data.funding_mark, np.full(shape, self.maintenance_rate),
             np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee),
-            self.allocation.max_gross, len(daily.dates))
+            self.leverage, len(daily.dates), self.allocation.max_gross)
         panel = Panel(daily.dates, daily.assets, fields, src, backend)
-        return LoadedStudy(study, self, panel, spec,
-                           Window(daily.dates, int(np.searchsorted(daily.dates, np.datetime64(study.start)))), daily.contract)
+        return LoadedStudy(study, self, panel, spec, window, daily.contract)
 
     def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel.backend.xp.isfinite(panel['close'])

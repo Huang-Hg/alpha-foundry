@@ -89,19 +89,21 @@ def describe(research):
                      description=engine.panel.fields[name].doc) for name in engine.vocabulary],
         operators=[dict(name=op.name, kind=op.kind, arity=ARITY[op.kind], cost=COST[op.kind], description=op.doc)
                    for op in OPS.values()], window=dict(min=MIN_WINDOW, max=MAX_WINDOW), batch_size=engine.candidate_batch,
-        axes=dict(snapshot=engine.context.id, dates=[str(day) for day in engine.dates], assets=list(engine.panel.assets)),
-        external_batch=dict(kinds=['signals', 'target_exposure'] if engine.allocation.allow_short else ['signals', 'target_weights', 'target_exposure'],
+        axes=dict(snapshot=engine.context.id, decision_times=engine.decision_times, assets=list(engine.panel.assets)),
+        clock=dict(calendar=engine.clock.calendar, timezone=engine.clock.timezone,
+                   provenance=engine.clock.provenance),
+        external_batch=dict(kinds=['scores', 'targets'],
+            units=dict(scores=['score'], targets=['equity_fraction']),
             active_candidates=engine.inputs.count, resident_capacity=engine.inputs.capacity,
-            values='(B,T,S) float32 or float64; exact published axes',
+            values='(B,D,S) floating arrays; exact published decision and asset axes',
             ids='B unique candidate IDs', snapshot='context.snapshot.id', producer='nonempty producer identity',
-            signals=('NaN is missing; clip(-1,1)/eligible_count gives signed exposure at at most 1x gross.'
-                     if engine.allocation.allow_short else 'NaN is missing; clip(0,1)/eligible_count.'),
-            target_weights='Cash markets only: finite nonnegative fractions, zero for ineligible assets, daily sum <= 1.',
-            target_exposure='Notional/equity ratios: signed only when allocation.allow_short, abs-sum <= allocation.max_gross; zero for ineligible assets.',
+            scores='Explicit Sizing maps scores to targets; NaN is missing. independent does not divide by asset count.',
+            targets='Finite equity fractions, signed only when allocation.allow_short; gross within allocation.max_gross; zero for ineligible assets.',
+            update_mask='Targets only. Omitted or all-true means update all; partial updates require an event execution plan.',
             weight_sum_atol=engine.portfolio_cfg.weight_sum_atol,
-            rounding='Gross exposure above allocation.max_gross within weight_sum_atol is normalized to the budget; larger excess is rejected.',
-            observed_through='(B,T) int64; last source row known to the producer, -1 <= value <= decision row',
-            fit_through='(B,T) int64; last fit row used by the producer, -1 <= value <= decision row',
+            rounding='Gross excess within weight_sum_atol is normalized to the budget; larger direct-target excess is rejected.',
+            observed_at='(B,D) int64 UTC nanoseconds; latest observed information, no later than the decision; NO_INFORMATION denotes none.',
+            fit_at='(B,D) int64 UTC nanoseconds; latest fitted information, no later than the decision; NO_INFORMATION denotes no fitting.',
             pit='Producer-declared cutoffs are checked for forward references; the engine cannot prove the provenance of externally computed values.',
             persistence='register_batch creates a bounded resident lease; release_batch frees it. retain returns durable references; commit persists admitted arrays before atomic publication. Queries never persist.',
             capacity='All active leases together fit batch_size candidates. Split larger arrays and release completed batches; no spill or automatic persistence.'),
@@ -150,11 +152,13 @@ def telemetry_bytes(record: MiningStatus | MiningEpoch) -> bytes:
 
 
 def encode_bundle(batch: ArrayBatch) -> bytes:
-    if sum(array.nbytes for array in (batch.values, batch.observed_through, batch.fit_through)) > MAX_ARRAY_BYTES:
+    arrays = (batch.values, batch.observed_at, batch.fit_at) + (() if batch.update_mask is None else (batch.update_mask,))
+    if sum(array.nbytes for array in arrays) > MAX_ARRAY_BYTES:
         raise ValueError('decoded array bundle exceeds the 1GiB limit')
     metadata = dict(format=BUNDLE, kind=batch.kind, ids=batch.ids, snapshot=batch.snapshot,
-                    producer=batch.producer, dates=batch.dates, assets=batch.assets, complexity=batch.complexity)
-    payload = encode_archive(metadata, batch.values, batch.observed_through, batch.fit_through)
+                    producer=batch.producer, decision_times=batch.decision_times, assets=batch.assets,
+                    complexity=batch.complexity, unit=batch.unit)
+    payload = encode_archive(metadata, *arrays)
     validate_bundle_size(payload)
     return payload
 
@@ -166,7 +170,7 @@ def validate_bundle_size(payload: bytes) -> None:
     try:
         with ZipFile(BytesIO(payload)) as archive:
             entries = archive.infolist()
-            expected = {'metadata.npy', 'values.npy', 'observed_through.npy', 'fit_through.npy'}
+            expected = {'metadata.npy', 'values.npy', 'observed_at.npy', 'fit_at.npy', 'update_mask.npy'}
             if len(entries) != len(expected) or {entry.filename for entry in entries} != expected:
                 raise ValueError('array bundle fields differ from the declared format')
             if sum(entry.file_size for entry in entries) > MAX_ARRAY_BYTES:
@@ -191,15 +195,16 @@ def validate_bundle_size(payload: bytes) -> None:
 
 def decode_bundle(payload: bytes) -> ArrayBatch:
     validate_bundle_size(payload)
-    metadata, values, observed, fitted = decode_archive(payload)
-    if metadata['format'] != BUNDLE:
-        raise ValueError('batch protocol differs; export a current bundle')
-    expected = {'format', 'kind', 'ids', 'snapshot', 'producer', 'dates', 'assets', 'complexity'}
+    metadata, values, observed, fitted, mask = decode_archive(payload)
+    expected = {'format', 'kind', 'ids', 'snapshot', 'producer', 'decision_times', 'assets', 'complexity', 'unit'}
     if set(metadata) != expected:
         raise ValueError('batch metadata fields differ from the declared format')
+    if metadata['format'] != BUNDLE:
+        raise ValueError('batch protocol differs; export a current bundle')
     return ArrayBatch(metadata['kind'], tuple(metadata['ids']), values, metadata['snapshot'],
-                      metadata['producer'], tuple(metadata['dates']), tuple(metadata['assets']),
-                      observed, fitted, None if metadata['complexity'] is None else tuple(metadata['complexity']))
+                      metadata['producer'], tuple(metadata['decision_times']), tuple(metadata['assets']),
+                      observed, fitted, None if metadata['complexity'] is None else tuple(metadata['complexity']),
+                      metadata['unit'], mask)
 
 
 def write_bundle(path: Path, batch: ArrayBatch) -> None:

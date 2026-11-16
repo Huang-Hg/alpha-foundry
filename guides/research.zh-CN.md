@@ -131,7 +131,9 @@ foundry.import_perpetual(
 
 ## 数值因子、模型信号与目标持仓
 
-`session.grid` 提供日期、资产顺序和快照身份。数组形状为 `(B,T,S)`，分别表示候选、日期、资产。下面注册三个零信号候选以演示接口；实际接入时替换为模型输出和真实信息截止点。
+`session.grid` 提供规范 ISO UTC `decision_times`、等价的 int64 UTC 纳秒 `time_ns`、有序资产和快照身份。数组维度为 `(B,D,S)`：候选、决策、资产。R1 保留四市场日线流程，`Clock` 当前只接受日线决策与统计；股票决策为交易所时段收盘（包含夏令时和提前收盘），crypto 为 UTC 日线右端点。日历坐标不补造缺失的历史发布时间。
+
+以下示例注册三个常量零评分候选，没有使用观测或拟合。接入实际策略时替换数值和因果声明：
 
 ```python
 import numpy as np
@@ -139,35 +141,40 @@ import foundry
 
 with foundry.open() as session:
     grid = session.grid
-    days, assets = len(grid.dates), len(grid.assets)
+    days, assets = len(grid.decision_times), len(grid.assets)
     values = np.zeros((3, days, assets), dtype=np.float32)
-    unused = np.full((3, days), -1, dtype=np.int64)
+    unused = np.full((3, days), foundry.NO_INFORMATION, dtype=np.int64)
     registered = session.register(
-        values, kind="signals", ids=("model-small", "model-base", "model-large"),
+        values, kind="scores", unit="score", ids=("model-small", "model-base", "model-large"),
         grid=grid, producer="external-program-v1",
-        observed_through=unused, fit_through=unused,
+        observed_at=unused, fit_at=unused,
         complexity=(0.2, 0.5, 0.8),
     )
     report = session.evaluate(registered)
 ```
 
-| 类型 | 含义 | 约束 |
+| 类型与单位 | 含义 | 约束 |
 | --- | --- | --- |
-| `signals` | 由 Foundry 转换为持仓的评分 | 浮点值；允许 NaN 表示缺失信号 |
-| `target_weights` | 股票或现货的多头资产权重 | 有限、非负、总敞口不超过 1，不具资格资产为零 |
-| `target_exposure` | 永续有符号名义金额/权益比例 | 有限、总绝对敞口不超过配置杠杆，不具资格资产为零 |
+| `scores`, `score` | 由会话 `Sizing` 规则转换的评分 | Float32/float64；NaN 为缺失，映射成零目标 |
+| `targets`, `equity_fraction` | 带符号名义金额/账户权益比例 | 有限；现金账户非负；总绝对敞口不超过 `Account.gross_limit`；不具资格资产为零 |
 
-信号幅度直接影响敞口。对每个具资格资产，现金市场使用 `clip(signal, 0, 1) / N`，允许做空的市场使用 `clip(signal, -1, 1) / N`；`N` 是当日具资格资产数量。缺失或不具资格的信号贡献为零。Foundry 不会自动对这些数组排名或归一化到满仓。若有 100 个具资格资产，每个信号都是 `0.01`，现金市场总敞口就是 1%，不是 100%。可在注册前自行进行因果评分校准，或使用 `target_weights` / `target_exposure` 直接指定持仓；校准过程若有拟合，必须计入 `fit_through`。
+`Sizing(rule="equal_slots")` 保留日线预设：现金市场使用 `clip(score, 0, 1) / N`，可做空市场使用 `clip(score, -1, 1) / N`，`N` 为当日具资格资产数量。`Sizing(rule="independent", scale=0.1)` 使用截断评分乘显式尺度，不除以资产数量；增加零评分资产不会稀释已有资产目标。独立规则超总敞口预算时返回候选拒绝并继续批次，不自动归一化到满仓。
 
-[独立 Agent 接入记录](integrations/agent-l4-20261116/README.zh-CN.md) 使用真实数值因子和 GPU 岭回归模型跑通了这条路径，并根据返回的反馈调整候选。
+直接 `targets` 跳过评分映射，必须传入 `unit="equity_fraction"`；零表示明确清仓。R1 接受省略 `update_mask` 或全真的布尔 `(B,D,S)` 掩码，两者具有相同规范身份。含 false 的掩码需要后续账户执行能力，当前明确拒绝；评分不接受掩码。R1 尚不支持数量或名义金额目标。
 
-数值必须是浮点数组。观测和拟合截止点为 `(B,T)` 整数数组，使用研究网格行号且不晚于决策行 `t`；`-1` 表示未使用观测或拟合。已训练模型不能为了通过检查而伪报 `-1`。日线收盘决策最早在下一开盘执行。
+`foundry.Account(margin="isolated", leverage=3., gross_limit=2.)` 将逐仓抵押杠杆与允许的总目标敞口分开。默认日线经济口径保留：现金 1 倍，逐仓永续杠杆与敞口上限均为 5 倍。评分校准若有拟合，必须计入 `fit_at`。
+
+
+
+历史[独立 Agent 接入记录](integrations/agent-l4-20261116/README.zh-CN.md) 使用迁移前协议和真实数值因子和 GPU 岭回归模型跑通了这条路径，并根据返回的反馈调整候选。
+
+数值必须为 float32 或 float64。观测和拟合声明为 `(B,D)` int64 UTC 纳秒数组，每项不得晚于对应的 `grid.time_ns`。只有未使用观测或拟合时才能使用 `foundry.NO_INFORMATION`（int64 最小值）。例如未拟合、决策时观测的评分使用 `observed_at=np.broadcast_to(grid.time_ns, (B,D))`，`fit_at` 填 `NO_INFORMATION`。训练模型必须如实声明训练数据和标签使用的最晚信息时点。日线收盘决策最早于下一开盘执行。
 
 `producer` 标识生成程序。可选的逐候选 `complexity` 范围为 `[0,1]`，仅影响发现流程的软评分，不改变硬准入。注册创建有界驻留副本，返回绑定内容身份的候选与租约。本地 CuPy 数据留在 GPU，只传回紧凑摘要；远程注册自动上传 NumPy 数组，无需服务器路径。
 
 用完调用 `session.release(registered)`；循环中通常放在 `finally` 内。退出会话也会释放其剩余租约。所有活动批次的总行数不得超过 `candidate_batch`，满额后须先释放再注册。释放后的驻留引用失效，即使内部仍有该候选的紧凑测量缓存也不能继续使用。
 
-需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v14`、`candidate-array-v3`、`candidate-discovery-v3`，旧格式须显式重跑，不自动迁移。
+需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v15`、`candidate-array-v4`、`candidate-discovery-v4`（二进制批次传输为 `candidate-batch-v3`），旧格式须显式重跑，不自动迁移。
 
 ## 策略发现
 
@@ -208,7 +215,7 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
 
 `ExternalProposer` 接受有限的候选或已注册批次。`foundry.mine(..., session=session, proposers=[proposer])` 自动打开、恢复和关闭提案器资源，不关闭调用者传入的会话。可选回调接收一个 `LearningFeedback`：`feedback.batch` 保留候选顺序及研究快照，`feedback.rewards` 是同设备的 FP32 向量。CPU 程序可显式调用 `to_host()`；CUDA 程序在自己的流上使用 `borrow(stream_pointer)`，再用 DLPack 零拷贝接入 PyTorch。借用范围内不得修改反馈或向外保留别名。反馈不借用行情/组合缓冲区，因此可与提交和重配重叠。
 
-自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v3`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
+自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v4`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
 
 
 不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
@@ -229,9 +236,9 @@ with foundry.open(
     foundry.mine("var/runs/mlp-example", session=session, proposers=[proposer])
 ```
 
-`mode="mlp"` 每 64 日用历史前缀拟合一批 8→16→1 的 FP32 网络，训练标签为 20 日收益，标签终点严格早于预测段。网络生成 `target_weights`；另一个 GPU 奖励代理网络从驻留反馈学习，指导下一批超参选择。它不会把研究期反馈更新后的预测器回填到过去。
+`mode="mlp"` 每 64 日用历史前缀拟合一批 8→16→1 的 FP32 网络，训练标签为 20 日收益，标签终点严格早于预测段。网络生成 `targets`；另一个 GPU 奖励代理网络从驻留反馈学习，指导下一批超参选择。它不会把研究期反馈更新后的预测器回填到过去。
 
-`mode="factor"` 用 GPU 张量、交互特征和横截面排序生成 `signals`，GPU CEM 根据同一奖励向量更新参数分布。示例还通过 `CandidateGrid` 执行九点邻域和延迟双生子检查。两者共用注册、归档、硬准入和有序提交接口；模型参数、拟合过程和学习规则由客户端持有。
+`mode="factor"` 用 GPU 张量、交互特征和横截面排序生成 `scores`，GPU CEM 根据同一奖励向量更新参数分布。示例还通过 `CandidateGrid` 执行九点邻域和延迟双生子检查。两者共用注册、归档、硬准入和有序提交接口；模型参数、拟合过程和学习规则由客户端持有。
 
 数组注册把 GPU 输出复制到有界驻留租约，并在 GPU 上计算分块摘要，仅将紧凑摘要传回主机。入选、检查点引用及明确保留的候选才传输完整数据并落盘。输出及拟合截止点通过 `session.register` 显式声明。因果预测拟合不等于独立样本外选模：超参和因子搜索使用研究窗口反馈，报告中的收益仅供样本内研究。
 
@@ -271,12 +278,13 @@ result = session.judge_family(family)
 ```python
 with foundry.open(start="2025-07-01", end="2026-06-30") as session:
     xp = session.resident.xp
-    dates = session.grid.dates
-    first = next(i for i, date in enumerate(dates) if date >= "2025-07-01")
-    middle = (first + len(dates)) // 2
+    times = session.grid.time_ns
+    first = next(i for i, time in enumerate(session.grid.decision_times)
+                 if time >= "2025-07-01T00:00:00Z")
+    middle = (first + len(times)) // 2
     folds = (
-        foundry.Fold(0, first - 1, first, middle),
-        foundry.Fold(0, middle - 1, middle, len(dates)),
+        foundry.Fold(int(times[0]), int(times[first]), int(times[first]), int(times[middle])),
+        foundry.Fold(int(times[0]), int(times[middle]), int(times[middle]), int(times[-1]) + 1),
     )
 
     def fit(view):
@@ -288,21 +296,21 @@ with foundry.open(start="2025-07-01", end="2026-06-30") as session:
 
     result = foundry.walk_forward(
         session, fit, predict, folds=folds, ids=("fold-model",),
-        kind="signals", producer="prefix-model-v1", features=("ma_dist_20",),
+        kind="scores", unit="score", producer="prefix-model-v1", features=("ma_dist_20",),
     )
     report = session.evaluate(result.registered)
     print(result.sign_consistency)
 ```
 
-`Fold(fit_start, fit_through, predict_start, predict_stop)` 使用研究网格绝对行号；训练包含 `fit_through`，预测不包含 `predict_stop`。拟合必须早于预测，预测折按顺序排列且不得重叠，每折至少包含一次可执行决策。扩展窗口保持 `fit_start` 不变，滚动窗口则显式推进起点；研究起点前需有足够训练历史。
+`Fold(fit_start, fit_stop, predict_start, predict_stop)` 使用 int UTC 纳秒与左闭右开区间 `[start, stop)`。拟合结束后才能开始预测；预测折按序、互不重叠，且每折包含一次可执行决策。扩展窗口保持拟合起点，滚动窗口显式推进起点；最后一个排他边界可用 `int(grid.time_ns[-1]) + 1`。
 
-每次预测用当前后端的数组库返回 `(B,S)`，资产顺序与研究一致。`FoldView` 提供 `start`、不包含的 `stop`、`dates`、`assets`、`features` 和 `eligibility`。输出执行与外部数组相同的注册检查，非法敞口直接拒绝，不自动遮盖。执行器记录观测行 `t` 和该折拟合截止点；无法约束回调私自读取未来数据，或使用已在未来数据上训练的模型。
+预测每次返回研究资产顺序下的 `(B,S)` 后端数组。`FoldView` 包含时间戳 `start`、排他时间戳 `stop`、`decision_times`、`assets`、`features` 和 `eligibility`；数组为独立拥有的因果前缀。输出通过同样的注册检查。执行器将当前决策写入 `observed_at`，将最后可见拟合决策写入 `fit_at`；拟合区间需包含训练标签使用的全部观测。外部回调仍须对独立读取的数据及预训练模型来源负责。
 
-每折净收益从首个可执行决策归属到下一模型开始执行；最后一折归属到研究结束。空档期的退出成本、资金费和无法退出的持仓延续计入前一模型。`sign_consistency` 是正收益折数与负收益折数中较大者除以总折数；零收益或无效折不计入分子。持续亏损模型也可能得到 1，因此要同时看各折符号和收益。该操作注册并评价预测，不提交候选。用完释放 `result.registered`；需要保存时先显式调用 `retain`。
+折诊断从该模型在评价区间内首次决策后的收盘测量开始归属净收益，直到下一模型对应的收盘测量；最后一折截至研究结束。`FoldResult.measurement_start` 和 `measurement_stop` 是这些收盘测量的 UTC 纳秒左闭右开边界，不是次开盘成交时间；最终排他边界为最后测量时间加一纳秒。间隙中的退出费用、资金费和无法平仓的持仓继续归属前一模型。`sign_consistency` 为正折数与负折数的较大值除以总折数；零收益或无效折不进入分子。持续亏损模型也可能为 1，应同时检查符号和收益。操作仅注册并评价预测，不提交组合；使用后释放 `result.registered`，需要保留时先显式 retain。
 
 ## 远程会话
 
-在 Linux/WSL2 计算主机运行 `python -m foundry serve`，用 `python -m foundry status` 查看地址。Windows 原生 Python 或 Linux 客户端连接服务地址，或隧道转发到本地的端口：
+在 Linux/WSL2 计算主机运行 `python -m foundry serve`，用 `python -m foundry status` 查看地址。Windows 原生或 Linux Python 均可连接服务地址或隧道本地端口：
 
 ```python
 with foundry.connect(("127.0.0.1", port)) as session:
@@ -311,9 +319,9 @@ with foundry.connect(("127.0.0.1", port)) as session:
     family = session.judge_family("gt(ma_dist_20,0)")
 ```
 
-公式评价、数组注册、家族检验、诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
+诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v14`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
+[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v15`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
 
 输入契约错误抛出 `ValueError` 或 `TypeError`，旧上下文抛出 `ContextConflict`，资源或实现失败直接传播；候选业务拒绝保留为结构化结果。机器调用请读取 `foundry.schema()`，不要拼接未公开的协议字段。
 
@@ -321,7 +329,7 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 现货使用 UTC 日线和 365 日年化。资格与报价分离；交易价格缺失可能阻止成交，使已有持仓继续保留。配置费用作用于实际执行的变化。
 
-永续模拟 USDT 线性合约和逐仓抵押。日线目标是有符号名义金额/账户权益，总绝对敞口受配置杠杆限制；信号不会自动使用最大杠杆。小时事件依次处理标记价跳空、已有持仓资金费、日线再平衡、不利高低价强平检查和收盘标记。资金费按实际事件时间映射到小时网格；公开归档缺少结算标记价时，导入器会明确记录标记开盘价代理。
+永续模拟 USDT 线性合约和逐仓抵押。日线目标是有符号名义金额/账户权益，总绝对敞口受 `Account.gross_limit` 限制；信号不会自动使用最大杠杆。小时事件依次处理标记价跳空、已有持仓资金费、日线再平衡、不利高低价强平检查和收盘标记。资金费按实际事件时间映射到小时网格；公开归档缺少结算标记价时，导入器会明确记录标记开盘价代理。
 
 当前使用固定维持保证金和费率，不还原历史档位、VIP 费用、ADL、订单簿或逐 tick 日内成交路径。`risk` 报告资金费、交易费用、强平费用、强平次数、破产状态和账户权益，单位以 schema 描述为准。
 
