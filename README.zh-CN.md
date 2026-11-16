@@ -78,12 +78,23 @@ with foundry.open(
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group runtime
 bash build.sh
 python -m foundry --help
 ```
 
-CUDA 需要合适的 NVIDIA 驱动，以及匹配计算主机 CUDA 主版本的 CuPy 发行包。GPU GFlowNet 挖掘还使用支持 CUDA 的 PyTorch。CPU 计算在打开会话时选择 `backend="cpu"`。
+所有依赖统一声明在 [pyproject.toml](pyproject.toml)，使用 [pip 依赖组](https://pip.pypa.io/en/stable/user_guide/#dependency-groups)（pip 25.1+），按需安装：
+
+| 环境 | 在仓库根目录执行 |
+| --- | --- |
+| CPU 研究或远程客户端 | `python -m pip install --group runtime` |
+| CUDA 研究 | `python -m pip install --group runtime --group cuda13` |
+| CUDA GFlowNet 挖掘 | `python -m pip install --group mining --group cuda13` |
+| 云端回归与基准 | `python -m pip install --group benchmark --group cuda13` |
+| 静态开发工具 | `python -m pip install --group dev` |
+
+CUDA 需要合适的 NVIDIA 驱动。按计算主机的 CUDA 主版本选择 `cuda12` 或 `cuda13`，只安装一组 CuPy。GPU GFlowNet 挖掘需要支持 CUDA 的 PyTorch wheel。`mining` 和 `benchmark` 已包含运行依赖，普通研究不必安装 PyTorch。CPU 计算在打开会话时选择 `backend="cpu"`。
 
 原生 Windows Python 可直接作为客户端，不必编译数值扩展。计算主机上使用明确的组合路径启动服务：
 

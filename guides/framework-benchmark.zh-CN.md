@@ -60,22 +60,20 @@ NVML 在测量轮内每 20 毫秒采样该 worker 的 GPU 驻留内存。峰值�
 
 ## 在授权云端环境复现
 
-使用具备兼容 NVIDIA 驱动和原生构建工具的 Linux 或 WSL2。当前 Spectre 要求 Python 3.14，因此使用独立环境。依赖文件固定了环境准备时验证的直接依赖版本；运行元数据保存实际安装的完整发行包版本。它们不是完整的传递依赖锁文件。
+使用具备兼容 NVIDIA 驱动和原生构建工具的 Linux 或 WSL2。固定版本的 Spectre 要求 Python 3.14，因此使用独立环境。[pyproject.toml](../pyproject.toml) 中的 `frameworks` 和 `spectre` 依赖组保留了环境准备时验证的直接依赖版本；运行元数据保存实际安装的完整发行包版本。依赖组不是完整的传递依赖锁文件。以下命令在仓库根目录执行，两套环境保持独立。
 
 ```bash
-python -m pip install uv
+python -m pip install --upgrade "pip>=25.1" uv
 python -m uv python install 3.13.16 3.14.10
 python -m uv venv --python 3.13.16 /content/framework-main
-python -m uv pip install --python /content/framework-main/bin/python \
-  -r validation/benchmarks/competition/requirements-main.txt
+python -m pip --python /content/framework-main/bin/python install --group frameworks
 python -m uv venv --python 3.14.10 /content/framework-spectre
-python -m uv pip install --python /content/framework-spectre/bin/python \
-  -r validation/benchmarks/competition/requirements-spectre.txt
+python -m pip --python /content/framework-spectre/bin/python install --group spectre
 source /content/framework-main/bin/activate
 bash build.sh
 ```
 
-[主环境](../validation/benchmarks/competition/requirements-main.txt) 固定 vectorbt/vectorbt-rust 1.2.1 和 Freqtrade 2026.10。[Spectre 环境](../validation/benchmarks/competition/requirements-spectre.txt) 固定上游提交 `c059665ba33b3d98f523ee55fdecf5105af146f6`。已验证的 Linux Torch 运行时报告 `2.15.0+cu132`，发行包元数据报告 `2.15.0`。PyPI 上名为 `spectre` 的包与该项目无关，必须使用固定 Git URL，不绕过上游依赖要求。
+[主环境](../pyproject.toml) 固定 vectorbt/vectorbt-rust 1.2.1 和 Freqtrade 2026.10。[Spectre 环境](../pyproject.toml) 固定上游提交 `c059665ba33b3d98f523ee55fdecf5105af146f6`。已验证的 Linux Torch 运行时报告 `2.15.0+cu132`，发行包元数据报告 `2.15.0`。PyPI 上名为 `spectre` 的包与该项目无关，必须使用固定 Git URL，不绕过上游依赖要求。
 
 先在全新输出目录运行小规模 smoke：
 

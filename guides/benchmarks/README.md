@@ -23,10 +23,13 @@ The [architecture-refactor run](arch-v2-pro6000-20261115/README.md) measured sou
 Run the shared entry on the assigned runtime:
 
 ```bash
-python -m pip install -r requirements-benchmark.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group benchmark
 bash build.sh
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m foundry benchmark var/runs/benchmark-new --backends cpu
 ```
+
+Dependency groups live in [pyproject.toml](../../pyproject.toml). Add `--group cuda12` or `--group cuda13` to the install command for the selected GPU runtime. Historical reports and captured job files retain the commands used by their recorded source revision; use the current installation commands above for a new run.
 
 This example uses the eight-vCPU CPU runtime. Match `cpu.workers` to actual CPU affinity and quota; keep inner OpenMP and BLAS teams at one. `--backends cpu` needs neither CuPy nor a GPU and runs benchmark contracts plus measurements. Use `--backends cuda` on the assigned GPU with matching CuPy installed. CPU speed comparisons use the fixed CPU-only runtime; GPU-host CPU correctness replays are not performance baselines. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.
 

@@ -18,7 +18,8 @@ The Actions summary contains timings, errors, decisions and links to the checked
 ## Local static checks
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group dev
 python -m pre_commit run --all-files --show-diff-on-failure
 ```
 

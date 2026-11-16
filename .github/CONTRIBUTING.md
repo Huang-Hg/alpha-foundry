@@ -7,7 +7,8 @@ Use public Foundry parameters rather than adding a configuration file or another
 Run static checks locally:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group dev
 python -m pre_commit run --all-files
 ```
 

@@ -23,10 +23,13 @@ A100/L4 的对比统一使用[固定 Colab CPU 基线](parallel-cpu-20261116/REA
 在指定运行时使用统一入口：
 
 ```bash
-python -m pip install -r requirements-benchmark.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group benchmark
 bash build.sh
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m foundry benchmark var/runs/benchmark-new --backends cpu
 ```
+
+依赖组统一位于 [pyproject.toml](../../pyproject.toml)。GPU 环境按 CUDA 主版本在安装命令中增加 `--group cuda12` 或 `--group cuda13`。历史报告与捕获的任务文件保留其记录版本实际使用的命令；新运行使用上面的当前安装入口。
 
 示例使用 8 vCPU 的 CPU 类型运行时，`cpu.workers` 应匹配实际 CPU affinity 与配额，OpenMP/BLAS 内层线程设为 1。`--backends cpu` 不需要 CuPy 或显卡，只运行基准契约检查与测量；指定 GPU 使用 `--backends cuda` 和匹配版本的 CuPy。CPU 速度对照固定使用独立 CPU 类型运行时，GPU 主机上的 CPU 正确性重放不作为性能基线。计算在选定的云端实例执行；GitHub Actions 只展示和归档已测结果。
 

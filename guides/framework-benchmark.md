@@ -60,22 +60,20 @@ Absolute and scaled errors are both retained. Scaled error means `abs(actual-ref
 
 ## Reproduce on the authorized cloud runtime
 
-Use Linux or WSL2 with compatible NVIDIA drivers and native build tools. This comparison was prepared with separate Python environments because current Spectre requires Python 3.14. The dependency files pin the direct packages verified during setup; run metadata records the complete observed installed distribution versions. They are not a full transitive lockfile.
+Use Linux or WSL2 with compatible NVIDIA drivers and native build tools. This comparison was prepared with separate Python environments because the pinned Spectre revision requires Python 3.14. The `frameworks` and `spectre` dependency groups in [pyproject.toml](../pyproject.toml) preserve the direct packages verified during setup; run metadata records the complete observed installed distribution versions. These groups are not a full transitive lockfile. Run the following commands from the repository root and keep the two environments separate.
 
 ```bash
-python -m pip install uv
+python -m pip install --upgrade "pip>=25.1" uv
 python -m uv python install 3.13.16 3.14.10
 python -m uv venv --python 3.13.16 /content/framework-main
-python -m uv pip install --python /content/framework-main/bin/python \
-  -r validation/benchmarks/competition/requirements-main.txt
+python -m pip --python /content/framework-main/bin/python install --group frameworks
 python -m uv venv --python 3.14.10 /content/framework-spectre
-python -m uv pip install --python /content/framework-spectre/bin/python \
-  -r validation/benchmarks/competition/requirements-spectre.txt
+python -m pip --python /content/framework-spectre/bin/python install --group spectre
 source /content/framework-main/bin/activate
 bash build.sh
 ```
 
-The [main environment](../validation/benchmarks/competition/requirements-main.txt) pins vectorbt/vectorbt-rust 1.2.1 and Freqtrade 2026.10. The [Spectre environment](../validation/benchmarks/competition/requirements-spectre.txt) pins upstream commit `c059665ba33b3d98f523ee55fdecf5105af146f6`. Its verified Linux Torch installation reports `2.15.0+cu132`; package metadata reports `2.15.0`. The PyPI package named `spectre` is unrelated: use the pinned Git URL. Dependencies are installed without bypassing the upstream requirements.
+The [main environment](../pyproject.toml) pins vectorbt/vectorbt-rust 1.2.1 and Freqtrade 2026.10. The [Spectre environment](../pyproject.toml) pins upstream commit `c059665ba33b3d98f523ee55fdecf5105af146f6`. Its verified Linux Torch installation reports `2.15.0+cu132`; package metadata reports `2.15.0`. The PyPI package named `spectre` is unrelated: use the pinned Git URL. Dependencies are installed without bypassing the upstream requirements.
 
 Start with a small smoke on a fresh output directory:
 

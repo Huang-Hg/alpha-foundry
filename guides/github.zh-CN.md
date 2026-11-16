@@ -18,7 +18,8 @@ Actions 摘要展示耗时、误差、决策结果及报告链接。成功的证
 ## 本地静态检查
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group dev
 python -m pre_commit run --all-files --show-diff-on-failure
 ```
 

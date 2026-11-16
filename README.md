@@ -78,12 +78,23 @@ Compute runs on Linux, including WSL2 on Windows. Install Python 3.12 or 3.13, i
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade "pip>=25.1"
+python -m pip install --group runtime
 bash build.sh
 python -m foundry --help
 ```
 
-For CUDA, install the CuPy distribution matching the compute host's CUDA major version and an appropriate NVIDIA driver. GPU GFlowNet mining also uses CUDA-enabled PyTorch. Use `backend="cpu"` when opening a CPU session.
+All dependencies are declared once in [pyproject.toml](pyproject.toml), using [pip dependency groups](https://pip.pypa.io/en/stable/user_guide/#dependency-groups) (pip 25.1+). Select only the capabilities you need:
+
+| Environment | Install from the repository root |
+| --- | --- |
+| CPU research or a remote client | `python -m pip install --group runtime` |
+| CUDA research | `python -m pip install --group runtime --group cuda13` |
+| GFlowNet mining on CUDA | `python -m pip install --group mining --group cuda13` |
+| Cloud regression and benchmarks | `python -m pip install --group benchmark --group cuda13` |
+| Static development tools | `python -m pip install --group dev` |
+
+CUDA requires an appropriate NVIDIA driver. Choose `cuda12` or `cuda13` to match the compute host's CUDA major; install only one CuPy group. GPU GFlowNet mining needs a CUDA-enabled PyTorch wheel. The `mining` and `benchmark` groups include runtime dependencies; ordinary research does not require PyTorch. Use `backend="cpu"` when opening a CPU session.
 
 Native Windows Python can be the client without compiling the numerical extensions. On the compute host, start a service with an explicit portfolio path:
 
