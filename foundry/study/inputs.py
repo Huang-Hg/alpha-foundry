@@ -1,5 +1,5 @@
 """Bounded, explicitly released candidate leases on the study's device."""
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from types import ModuleType
 from uuid import uuid4
@@ -55,6 +55,22 @@ class ResidentInputs:
         return replace(batch, ids=(batch.ids[index],), values=batch.values[index:index+1],
                        observed_through=batch.observed_through[index:index+1], fit_through=batch.fit_through[index:index+1],
                        complexity=None if batch.complexity is None else batch.complexity[index:index+1])
+
+    def select(self, sources: Sequence[ArraySource]) -> Iterator[tuple[tuple[ArraySource, ...], ArrayBatch]]:
+        """Group validated live rows by allocation; contiguous selections borrow it."""
+        groups: dict[str, list[tuple[ArraySource, int]]] = {}
+        for source in sources:
+            token, index = self.rows[source]
+            groups.setdefault(token, []).append((source, index))
+        for token, rows in groups.items():
+            batch = self.leases[token].batch
+            indices = [index for _, index in rows]
+            contiguous = indices == list(range(indices[0], indices[0] + len(indices)))
+            selection = slice(indices[0], indices[0] + len(indices)) if contiguous else indices
+            yield tuple(source for source, _ in rows), replace(batch,
+                ids=tuple(batch.ids[i] for i in indices), values=batch.values[selection],
+                observed_through=batch.observed_through[selection], fit_through=batch.fit_through[selection],
+                complexity=None if batch.complexity is None else tuple(batch.complexity[i] for i in indices))
 
     def release(self, token: str) -> tuple[ArraySource, ...]:
         if token not in self.leases:

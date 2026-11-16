@@ -275,8 +275,12 @@ class ArrayBatch:
 
 
 class ArrayStore(Protocol):
-    """Immutable durable artifacts; writes only on explicit retention."""
-    def put(self, batch: ArrayBatch) -> tuple[ArraySource, ...]: ...
+    """Persist validated host batches under their registration-computed identities.
+
+    Sources follow batch row order and have empty scopes. The caller owns the
+    immutable host buffers until put returns. Reads verify stored integrity.
+    """
+    def put(self, batch: ArrayBatch, sources: tuple[ArraySource, ...]) -> None: ...
     def read(self, source: ArraySource) -> ArrayBatch: ...
 
 @dataclass(frozen=True)

@@ -55,13 +55,10 @@ def decode_archive(payload):
                 archive['observed_through'], archive['fit_through'])
 
 
-def _record(batch: ArrayBatch, index: int):
+def _payload(batch: ArrayBatch, index: int):
     metadata = metadata_for(batch, index)
-    arrays = (np.ascontiguousarray(batch.values[index]),
-              np.ascontiguousarray(batch.observed_through[index], dtype=np.int64),
-              np.ascontiguousarray(batch.fit_through[index], dtype=np.int64))
-    source = source_for(metadata, digest_for(metadata, arrays, tuple(host_leaves(a[None])[0] for a in arrays)))
-    return source, metadata, arrays
+    arrays = (batch.values[index], batch.observed_through[index], batch.fit_through[index])
+    return metadata, arrays
 
 
 def publish_archive(path: Path, metadata: dict, arrays: tuple[np.ndarray, ...]) -> None:
@@ -103,22 +100,24 @@ class FileArrayStore:
             raise ValueError('array digest must be a SHA-256 hex value')
         return self.root / (source.digest + '.npz')
 
-    def put(self, batch: ArrayBatch):
+    def put(self, batch: ArrayBatch, sources: tuple[ArraySource, ...]) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
-        def write(index: int) -> ArraySource:
-            source, metadata, arrays = _record(batch, index)
+        def write(index: int) -> None:
+            source = sources[index]
             path = self.path_for(source)
             if path.exists():
                 self.read(source)
             else:
+                metadata, arrays = _payload(batch, index)
                 publish_archive(path, metadata, arrays)
-            return source
 
-        if len(batch.ids) == 1:
-            return (write(0),)
-        # Four IO/hash workers share the bounded host batch; map preserves IDs.
-        with ThreadPoolExecutor(max_workers=min(4, len(batch.ids))) as workers:
-            return tuple(workers.map(write, range(len(batch.ids))))
+        if len(sources) == 1:
+            write(0)
+        else:
+            # IO workers share the bounded immutable host batch.
+            with ThreadPoolExecutor(max_workers=min(4, len(sources))) as workers:
+                for _ in workers.map(write, range(len(sources))):
+                    pass
 
     def read(self, source: ArraySource):
         return _read(self.path_for(source).read_bytes(), source)
@@ -128,13 +127,10 @@ class MemoryArrayStore:
     def __init__(self):
         self.artifacts = {}
 
-    def put(self, batch: ArrayBatch):
-        sources = []
-        for index in range(len(batch.ids)):
-            source, metadata, arrays = _record(batch, index)
+    def put(self, batch: ArrayBatch, sources: tuple[ArraySource, ...]) -> None:
+        for index, source in enumerate(sources):
+            metadata, arrays = _payload(batch, index)
             self.artifacts[source.digest] = encode_archive(metadata, *arrays)
-            sources.append(source)
-        return tuple(sources)
 
     def read(self, source: ArraySource):
         return _read(self.artifacts[source.digest], source)

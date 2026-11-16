@@ -128,24 +128,14 @@ class Ledger:
             for source in live:
                 pipeline.inputs.read(source)
             pending = [source for source in live if source not in pipeline.inputs.retained]
-            groups = {}
-            for source in pending:
-                groups.setdefault((source.kind, source.producer), []).append(source)
-            for group in groups.values():
-                for part in pipeline.batches(group):
-                    batches = [pipeline.inputs.read(source) for source in part]
-                    values = pipeline.xp.concatenate([batch.values for batch in batches])
-                    observed = pipeline.xp.concatenate([pipeline.xp.asarray(batch.observed_through) for batch in batches])
-                    fitted = pipeline.xp.concatenate([pipeline.xp.asarray(batch.fit_through) for batch in batches])
-                    host = replace(batches[0], ids=tuple(source.digest for source in part),
-                        values=pipeline.resources.stage_host(values),
-                        observed_through=pipeline.resources.stage_host(observed),
-                        fit_through=pipeline.resources.stage_host(fitted), complexity=tuple(source.complexity for source in part))
-                    pipeline.resources.synchronize()
-                    saved = self.arrays.put(host)
-                    if saved != tuple(replace(source, scope='') for source in part):
-                        raise RuntimeError('device and durable array identities disagree')
-                    pipeline.inputs.retained.update(zip(part, saved))
+            for part, batch in pipeline.inputs.select(pending):
+                host = replace(batch, values=pipeline.resources.stage_host(batch.values),
+                    observed_through=pipeline.resources.stage_host(batch.observed_through),
+                    fit_through=pipeline.resources.stage_host(batch.fit_through))
+                pipeline.resources.synchronize()
+                saved = tuple(replace(source, scope='') for source in part)
+                self.arrays.put(host, saved)
+                pipeline.inputs.retained.update(zip(part, saved))
             return RegisteredBatch(self.context, tuple(Candidate(c.id, pipeline.inputs.retained[c.source])
                 if isinstance(c.source, ArraySource) and c.source.scope else c for c in candidates), '')
 
