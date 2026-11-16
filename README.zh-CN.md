@@ -37,7 +37,7 @@ with foundry.open(backend="cuda") as session:
 | 加密货币现货 | 连续 UTC 日历、独立 Bar 时钟、交易资格与手续费 |
 | USDT 线性永续 | 多空敞口、逐仓保证金、基础 Bar 资金费事件与强平 |
 
-Crypto 支持显式基础 Bar 与独立决策、统计频率，例如 5 分钟执行、15 分钟决策和日统计；已有日线预设与小时永续数据保留原有口径。有状态策略回调和订单属于后续交付阶段。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
+Crypto 支持显式基础 Bar 与独立决策、统计频率，例如 5 分钟执行、15 分钟决策和日统计；已有日线预设与小时永续数据保留原有口径。有状态程序可通过 [`plan_program` 与 `simulate`](guides/research.zh-CN.md#有状态程序与订单审计) 读取实际账户和成交；这类程序的组合准入仍须后续重放集成。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
 
 ## 接入自己的数据
 
@@ -123,7 +123,8 @@ with foundry.open(
     market="crypto_perpetual",
     account=foundry.Account(margin="isolated", leverage=3.0, gross_limit=3.0),
     cost_rate=0.0004,
-    cuda=foundry.CUDA(candidate_batch=64, precision="paired"),
+    cuda=foundry.CUDA(candidate_batch=64),
+    execution=foundry.Execution(precision="paired"),
     admission=foundry.Admission(min_sharpe_gain=0.02),
 ) as session:
     report = session.evaluate("gt(ma_dist_20,0)")

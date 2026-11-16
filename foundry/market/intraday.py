@@ -35,6 +35,7 @@ class IntradayData:
     panel: MarketData
     clock: ClockGrid
     schedule: ExecutionSchedule
+    event_close_ns: NDArray[np.int64]
     measurement_times: NDArray[np.datetime64]
     execution: Mapping[str, HostArray]
     periods_per_year: float
@@ -189,5 +190,5 @@ def load_intraday(directory: Path, study: Study, clock: Clock) -> IntradayData:
     measurement = np.arange(lower, upper, statistics, dtype=np.int64)
     schedule = ExecutionSchedule(events, target, (events - lower) // statistics,
                                  len(decision_ns), len(measurement))
-    return IntradayData(panel, grid, schedule, measurement.view('datetime64[ns]'), execution,
+    return IntradayData(panel, grid, schedule, events + base, measurement.view('datetime64[ns]'), execution,
                         365. * 86_400_000_000_000 / statistics)

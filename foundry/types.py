@@ -12,7 +12,9 @@ from datetime import datetime
 import hashlib
 import re
 from types import ModuleType
-from typing import Callable, Generic, Literal, Mapping, Protocol, Sequence, TypeAlias, TypeVar
+from typing import Callable, Generic, Literal, Mapping, Protocol, Sequence, TypeAlias, TypeVar, runtime_checkable
+from enum import IntEnum
+from functools import cached_property
 
 import numpy as np
 from numpy.typing import NDArray
@@ -250,6 +252,7 @@ class LoadedStudy(Generic[MarketValue, PanelValue, SpecValue]):
     host_spec: SpecValue
     window: Window
     data_contract: DataContract
+    program_spec: BarExecution | None = None
 
 
 @dataclass(frozen=True)
@@ -696,6 +699,8 @@ class SessionBackend(Protocol[ResidentValue]):
     def refresh(self) -> ResearchContext: ...
     def grid(self) -> DataGrid: ...
     def describe(self) -> dict: ...
+    def plan_program(self, program: StrategyProgram, context: str) -> ProgramPlan: ...
+    def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation: ...
     def evaluate(self, candidates: tuple[Candidate, ...], context: str) -> EvaluationReport: ...
     def evaluate_device(self, candidates: tuple[Candidate, ...], context: str) -> DeviceBatch: ...
     def commit(self, candidates: tuple[Candidate, ...], context: str) -> CommitReport: ...
@@ -1217,3 +1222,394 @@ class WalkForwardResult:
 class ResourceStatus:
     device: str
     used_mib: int
+
+
+class OrderAction(IntEnum):
+    NONE = 0
+    NEW = 1
+    CANCEL = 2
+    AMEND = 3
+
+
+class OrderType(IntEnum):
+    MARKET = 1
+    LIMIT = 2
+    STOP = 3
+
+
+class OrderStatus(IntEnum):
+    NONE = 0
+    ACCEPTED = 1
+    PARTIAL = 2
+    FILLED = 3
+    CANCELLED = 4
+    REJECTED = 5
+    EXPIRED = 6
+    LIQUIDATED = 7
+
+
+class OrderReason(IntEnum):
+    NONE = 0
+    CAPACITY = 1
+    INSUFFICIENT_FUNDS = 2
+    NOT_TRADABLE = 3
+    UNKNOWN_ORDER = 4
+    INVALID_ORDER = 5
+    GROSS_LIMIT = 6
+    REDUCE_ONLY = 7
+    EXPIRED = 8
+    LIQUIDATION = 9
+
+
+class OrderStage(IntEnum):
+    COMMAND = 1
+    OPEN = 2
+    PATH_FIRST = 3
+    PATH_SECOND = 4
+    CLOSE = 5
+    FUNDING = 6
+    LIQUIDATION = 7
+
+
+@dataclass(frozen=True)
+class OrderCommands:
+    """Owned command columns (B,K), resident on the selected execution device.
+
+    Action zero pads unused slots. New IDs increase strictly within each
+    account, and (owner,id) identifies an order. Amend replaces its remaining
+    quantity and conditions and resets priority. Prices are quote currency per
+    asset unit; reservation_price values funding requirements, not a fill cap.
+    valid_until is inclusive UTC ns aligned to a compiled base-bar open, or
+    -1 for good until cancelled. Expiry between base opens is unsupported.
+    """
+    action: IntArray
+    owner: IntArray
+    id: IntArray
+    asset: IntArray
+    side: IntArray
+    quantity: FloatArray
+    type: IntArray
+    price: FloatArray
+    reservation_price: FloatArray
+    valid_until: IntArray
+    reduce_only: BoolArray
+
+
+@dataclass(frozen=True)
+class OrderSnapshot:
+    """Detached active-order columns (B,Q); action zero denotes an empty slot."""
+    action: IntArray
+    owner: IntArray
+    id: IntArray
+    asset: IntArray
+    side: IntArray
+    quantity: FloatArray
+    type: IntArray
+    price: FloatArray
+    reservation_price: FloatArray
+    valid_until: IntArray
+    reduce_only: BoolArray
+    remaining: FloatArray
+    reserved: FloatArray
+    status: IntArray
+
+
+@dataclass(frozen=True)
+class AccountSnapshot:
+    """Detached actual ledger: quote cash/equity (B,), asset quantities (B,S).
+
+    reserved_cash (B,) and isolated margin (B,S) use quote currency;
+    entry_price (B,S) uses quote currency per unit. Mutating a device snapshot
+    cannot alter the execution ledger. CPU snapshots are also read-only.
+    """
+    cash: FloatArray
+    equity: FloatArray
+    reserved_cash: FloatArray
+    quantity: FloatArray
+    margin: FloatArray
+    entry_price: FloatArray
+    orders: OrderSnapshot
+
+
+@dataclass(frozen=True)
+class ExecutionFeedback:
+    """Detached bounded audit columns (B,F), valid entries counted by (B,).
+
+    Each base event is delivered once. F is K + 4*Q + S, independent of
+    history length. Sequence is stable within each account; quantities are
+    unsigned fills, prices are quote/unit, fees are quote currency. Account
+    reflects all event stages, including its final close valuation.
+    """
+    account: AccountSnapshot
+    count: IntArray
+    status: IntArray
+    reason: IntArray
+    stage: IntArray
+    sequence: IntArray
+    owner: IntArray
+    id: IntArray
+    asset: IntArray
+    time: IntArray
+    quantity: FloatArray
+    price: FloatArray
+    fee: FloatArray
+    remaining: FloatArray
+    event_ns: int
+    available_ns: int
+
+
+@dataclass(frozen=True)
+class BarExecution:
+    """Owned host Bar execution inputs; numeric/bool panels have shape (E,S).
+
+    Fees, funding and margin rates are notional fractions. Volume and qty_step
+    use asset units; zero step/tick explicitly declares continuous quantities
+    or prices. event_close_ns (E,) declares when the complete Bar is visible.
+    Crypto cash and isolated USDT are supported; equity corporate actions and
+    settlement require their own compiled capabilities before program use.
+    """
+    schedule: ExecutionSchedule
+    event_close_ns: NDArray[np.int64]
+    trade_open: HostArray
+    trade_high: HostArray
+    trade_low: HostArray
+    trade_close: HostArray
+    volume: HostArray
+    mark_open: HostArray
+    mark_high: HostArray
+    mark_low: HostArray
+    mark_close: HostArray
+    fee_buy: HostArray
+    fee_sell: HostArray
+    funding_rate: HostArray
+    funding_mark: HostArray
+    maintenance_rate: HostArray
+    liquidation_fee: HostArray
+    buy_allowed: HostArray
+    sell_allowed: HostArray
+    quote_valid: HostArray
+    qty_step: HostArray
+    price_tick: HostArray
+    market: str
+
+    def __post_init__(self) -> None:
+        shape = np.asarray(self.trade_open).shape
+        if len(shape) != 2 or shape[0] != len(self.schedule.event_ns) or shape[1] < 1:
+            raise ValueError('Bar execution panels must align with the execution event and asset axes')
+        close = np.asarray(self.event_close_ns)
+        if (close.dtype != np.dtype('int64') or close.shape != self.schedule.event_ns.shape
+                or np.any(close <= self.schedule.event_ns)
+                or np.any(close[:-1] > self.schedule.event_ns[1:])):
+            raise ValueError('Bar close timestamps must follow their opens and cannot overlap later bars')
+        if self.market not in ('crypto_spot', 'crypto_perpetual', 'us_equity', 'a_share'):
+            raise ValueError('Unknown Bar execution market')
+        close = np.array(close, copy=True, order='C')
+        close.flags.writeable = False
+        object.__setattr__(self, 'event_close_ns', close)
+        boolean = {'buy_allowed', 'sell_allowed', 'quote_valid'}
+        for item in fields(self):
+            if item.name in ('schedule', 'event_close_ns', 'market'):
+                continue
+            value = np.asarray(getattr(self, item.name))
+            if value.shape != shape:
+                raise ValueError('Bar execution panels must share the event and asset axes')
+            if item.name in boolean:
+                if value.dtype != np.dtype('bool'):
+                    raise TypeError('Bar execution eligibility columns require bool dtype')
+                owned = np.array(value, dtype=np.bool_, copy=True, order='C')
+            else:
+                owned = np.array(value, dtype=np.float64, copy=True, order='C')
+            owned.flags.writeable = False
+            object.__setattr__(self, item.name, owned)
+        if (np.any(~np.isfinite(self.volume)) or np.any(self.volume < 0)
+                or np.any(~np.isfinite(self.qty_step)) or np.any(self.qty_step < 0)
+                or np.any(~np.isfinite(self.price_tick)) or np.any(self.price_tick < 0)):
+            raise ValueError('Bar volume and quantity/price steps must be finite and nonnegative')
+        if np.any((self.buy_allowed | self.sell_allowed) & ~self.quote_valid):
+            raise ValueError('Executable Bar directions require valid quotes')
+        for prefix in ('trade', 'mark'):
+            o, h, l, c = (getattr(self, prefix + '_' + suffix)
+                          for suffix in ('open', 'high', 'low', 'close'))
+            prices = np.stack((o, h, l, c))
+            if (np.any(self.quote_valid & (~np.isfinite(prices).all(0) | (prices <= 0).any(0)))
+                    or np.any(self.quote_valid & ((h < np.maximum(o, c))
+                                                 | (l > np.minimum(o, c)) | (h < l)))):
+                raise ValueError('Valid Bar quotes require positive finite and consistent OHLC prices')
+            if prefix == 'mark':
+                if (np.any(~np.isfinite(prices)) or np.any(prices < 0)
+                        or np.any((h < np.maximum(o, c)) | (l > np.minimum(o, c)) | (h < l))):
+                    raise ValueError('Valuation marks must be finite nonnegative OHLC, including unquoted assets')
+                known = np.maximum.accumulate(self.quote_valid, axis=0)
+                if np.any(known & (prices <= 0).any(0)):
+                    raise ValueError('Valuation marks must stay positive after an asset first has a valid quote')
+        for name in ('fee_buy', 'fee_sell', 'maintenance_rate', 'liquidation_fee'):
+            value = getattr(self, name)
+            if np.any(~np.isfinite(value)) or np.any((value < 0) | (value >= 1)):
+                raise ValueError('Bar fee and maintenance rates require finite fractions in [0,1)')
+        if (np.any(~np.isfinite(self.funding_rate))
+                or np.any(~np.isfinite(self.funding_mark)) or np.any(self.funding_mark < 0)
+                or np.any((self.funding_rate != 0)
+                          & (~np.isfinite(self.funding_mark) | (self.funding_mark <= 0)))):
+            raise ValueError('Funding requires finite rates and positive settlement marks')
+
+    @cached_property
+    def snapshot(self) -> str:
+        digest = hashlib.sha256((self.schedule.snapshot + self.market).encode())
+        for item in fields(self):
+            if item.name in ('schedule', 'market'):
+                continue
+            value = getattr(self, item.name)
+            digest.update(item.name.encode())
+            digest.update(str((value.shape, value.dtype.str)).encode())
+            digest.update(value.tobytes())
+        return digest.hexdigest()
+
+
+@dataclass(frozen=True)
+class TensorState:
+    """Declared private tensor name, dtype and shape, excluding the batch axis."""
+    name: str
+    dtype: Literal['float32', 'float64', 'int32', 'int64', 'bool']
+    shape: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.name, str) or not self.name
+                or self.dtype not in ('float32', 'float64', 'int32', 'int64', 'bool')):
+            raise ValueError('Tensor state requires a name and a supported explicit dtype')
+        if not isinstance(self.shape, tuple) or any(type(size) is not int or size < 1 for size in self.shape):
+            raise ValueError('Tensor state dimensions must be positive integers')
+
+
+@dataclass(frozen=True)
+class ProgramDescriptor:
+    """Immutable deployed identity and declared bounded program capabilities.
+
+    artifact_digest and parameter_digest are SHA256 identities, not source or
+    pickle payloads. Programs create fresh private state at every open; shared
+    model parameters remain immutable. Arbitrary Python callbacks are not
+    automatically compiled for a device or certified as market independent.
+    """
+    id: str
+    artifact_digest: str
+    parameter_digest: str
+    state_schema: tuple[TensorState, ...] = ()
+    features: tuple[str, ...] = ()
+    history: int = 1
+    batch_size: int = 1
+    devices: tuple[Literal['cpu', 'cuda'], ...] = ('cpu',)
+    seed: int = 0
+    fit_at: int = NO_INFORMATION
+    protocol: int = 1
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError('Programs require a nonempty stable ID')
+        if any(not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None
+               for value in (self.artifact_digest, self.parameter_digest)):
+            raise ValueError('Program artifacts and parameters require lowercase SHA256 digests')
+        if self.protocol != 1:
+            raise ValueError('Unsupported program protocol')
+        if any(not isinstance(value, tuple) for value in (self.state_schema, self.features, self.devices)):
+            raise TypeError('Program schemas, features and devices require immutable tuples')
+        if any(type(value) is not int or value < 1 for value in (self.history, self.batch_size)):
+            raise ValueError('Program history and batch_size must be positive integers')
+        if type(self.seed) is not int or self.seed < 0 or type(self.fit_at) is not int:
+            raise ValueError('Program seed must be nonnegative and fit_at must be integer UTC ns')
+        if (not self.devices or len(set(self.devices)) != len(self.devices)
+                or any(device not in ('cpu', 'cuda') for device in self.devices)):
+            raise ValueError('Programs must declare unique supported devices')
+        if len(set(self.features)) != len(self.features) or any(not isinstance(name, str) or not name for name in self.features):
+            raise ValueError('Program features must be unique nonempty field names')
+        if (any(not isinstance(item, TensorState) for item in self.state_schema)
+                or len({item.name for item in self.state_schema}) != len(self.state_schema)):
+            raise ValueError('Program state schema requires unique typed tensor names')
+
+
+@dataclass(frozen=True)
+class ProgramPlan:
+    """Declared simulation capabilities before opening private program state."""
+    device: ComputeDevice
+    reason: str
+    precision: Literal['mixed', 'paired']
+    market: str
+    model: str
+    bar_path: str
+    participation: float
+    batch_size: int
+    history: int
+    order_capacity: int
+    command_capacity: int
+    state_bytes: int
+    feature_window_bytes: int
+    feedback_capacity: int
+    order_types: tuple[str, ...]
+    decision_latency: str
+    quote_policy: str
+    snapshot: str
+
+
+@dataclass(frozen=True)
+class ProgramContext:
+    """Run initialization metadata; no future timeline, panel or ledger handle.
+
+    CUDA callbacks must order their work on stream, including framework
+    interop such as a PyTorch ExternalStream. Private state stays on device.
+    """
+    descriptor: ProgramDescriptor
+    assets: tuple[str, ...]
+    plan: ProgramPlan
+    xp: ModuleType
+    stream: int | None
+    initial_cash: float
+
+
+@dataclass(frozen=True)
+class ProgramEvent:
+    """One decision with copied causal (H_visible,S) fields and actual account.
+
+    history_times is host int64 UTC ns and contains no future coordinates.
+    Feature windows own their buffers so array bases cannot expose later
+    observations. eligibility has the same bounded history and asset axes.
+    """
+    decision_ns: int
+    history_times: NDArray[np.int64]
+    features: Mapping[str, FloatArray]
+    eligibility: BoolArray
+    account: AccountSnapshot
+
+
+@runtime_checkable
+class ProgramRun(Protocol):
+    """Fresh causal state, closed once even when a callback fails.
+
+    Callbacks start at the first executable research decision. Earlier flat
+    account events are skipped; the bounded feature window supplies declared
+    historical context. Feedback cannot submit orders between decisions.
+    """
+    def on_event(self, event: ProgramEvent) -> OrderCommands: ...
+    def on_feedback(self, feedback: ExecutionFeedback) -> None: ...
+    def close(self) -> None: ...
+
+
+@runtime_checkable
+class StrategyProgram(Protocol):
+    @property
+    def descriptor(self) -> ProgramDescriptor: ...
+    def open(self, context: ProgramContext) -> ProgramRun: ...
+
+
+@dataclass(frozen=True)
+class ProgramSimulation:
+    """Standalone actual-account audit; admission requires portfolio replay.
+
+    Returns/equity are owned resident (B,V_research) arrays, and measurement_ns
+    contains the matching period starts. No complete event or fill trace is
+    retained. on_feedback may stream a user-owned audit during the run.
+    """
+    context: ResearchContext
+    descriptor: ProgramDescriptor
+    plan: ProgramPlan
+    measurement_ns: NDArray[np.int64]
+    returns: FloatArray
+    equity: FloatArray
+    final_account: AccountSnapshot

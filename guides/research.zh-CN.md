@@ -32,6 +32,8 @@ with foundry.open(
 | 操作 | 用途 | 对组合的影响 |
 | --- | --- | --- |
 | `evaluate(inputs)` | 评价候选与准入方案 | 只读 |
+| `plan_program(program)` | 查看设备、内存边界与订单延迟 | 只读 |
+| `simulate(program)` | 审计全新实际账户上的程序运行 | 只读，不执行准入 |
 | `diagnose()` | 描述组合缺口与发现上下文 | 只读 |
 | `judge_family(inputs, hypothesis="")` | 检验邻域或显式参数网格 | 只读 |
 | `portfolio()` | 获取成员来源、权重、指标与基线状态 | 只读 |
@@ -181,6 +183,83 @@ with foundry.open(
 
 此处特征及注册的 `(B,D,S)` 数组使用已完成的 15 分钟决策 Bar。`Execution(fill="next_open")` 在决策完成后的下一个 5 分钟基础开盘执行，允许收盘与开盘共用边界，不等待下一次决策。没有新目标的基础 Bar 保持实际数量。公式窗口按决策 Bar 数计数，因此 `ma_dist_20` 使用 20 条观测。
 
+### 有状态程序与订单审计
+
+`session.plan_program(program)` 在打开运行实例前给出设备、精度、Bar 内路径、成交量参与上限和有界状态。`session.simulate(program)` 创建全新策略状态及空仓账户，以 `Account.initial_cash` 注资，回调失败时也关闭私有资源。目前覆盖明确选择的 CPU/CUDA 后端上的 crypto 现金与 USDT 逐仓账户；股票程序订单所需的公司行动和结算能力尚未接入。
+
+将以下示例保存为 Python 文件，使工件摘要绑定实际源码，并选择自己的数据目录和覆盖日期。程序只向第一个合格资产提交一次固定数量订单。预留价格用于估算资金占用，不是成交限价。
+
+计划会披露报价口径：OHLC 缺失或含非正价格时不可成交订单；现货沿用最后有效收盘价估值，首次有效上市报价前为零。源数据保持不变，既有目标账户模型仍使用原来的估值契约。
+
+```python
+import hashlib
+from pathlib import Path
+import foundry
+
+
+class BuyOnce:
+    descriptor = foundry.ProgramDescriptor(
+        "buy-once",
+        artifact_digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        parameter_digest=hashlib.sha256(b"quantity=0.001").hexdigest(),
+        state_schema=(foundry.TensorState("sent", "bool", (1,)),),
+        features=("close",), devices=("cpu", "cuda"),
+    )
+
+    def open(self, context):
+        return BuyOnceRun(context)
+
+
+class BuyOnceRun:
+    def __init__(self, context):
+        self.xp = context.xp
+        self.sent = self.xp.zeros((1, 1), dtype=self.xp.bool_)
+
+    def on_event(self, event):
+        xp = self.xp
+        integer = lambda value: xp.full((1, 1), value, dtype=xp.int64)
+        number = lambda value: xp.full((1, 1), value, dtype=xp.float32)
+        new = (~self.sent) & event.eligibility[-1:, :1]
+        self.sent |= new
+        return foundry.OrderCommands(
+            action=xp.where(new, int(foundry.OrderAction.NEW), 0),
+            owner=integer(0), id=integer(1), asset=integer(0), side=integer(1),
+            quantity=number(.001), type=integer(int(foundry.OrderType.MARKET)),
+            price=number(0), reservation_price=event.features["close"][-1:, :1],
+            valid_until=integer(-1), reduce_only=xp.zeros((1, 1), dtype=xp.bool_),
+        )
+
+    def on_feedback(self, feedback):
+        pass  # Consume or stream actual fills here; this hook cannot submit orders.
+
+    def close(self):
+        del self.sent
+
+
+with foundry.open(
+    market="crypto_spot", data_dir="/datasets/crypto_5m", backend="cuda",
+    start="2025-01-08", end="2025-01-31",
+    clock=foundry.Clock(decision="5min", statistics="1D"),
+    account=foundry.Account(initial_cash=1000.),
+    execution=foundry.Execution(
+        precision="paired", bar_path="open_low_high_close", participation=.1,
+        order_capacity=32, command_capacity=32,
+    ),
+) as session:
+    program = BuyOnce()
+    print(session.plan_program(program))
+    audit = session.simulate(program)
+
+```
+
+`on_event` 接收此前已完成 Bar 的实际账户及独立复制的因果特征窗口，历史长度受描述符的 `history` 限制。返回的命令列为 `(B,K)`；`action=0` 表示该槽无命令。每个账户的新订单 ID 必须递增，`(owner,id)` 标识订单；修改替换剩余数量和条件并重置优先级。`valid_until` 必须为 `-1` 或已编译的基础 Bar 开盘时间。只减仓数量超过实际未预留持仓时拒绝，不自动裁剪。
+
+命令最早在编译日程中的下一根基础 Bar 开盘生效。所选路径明确 OHLC 的处理顺序，`participation` 按基础 Bar 报告成交量限制成交。每根基础 Bar 完成后，`on_feedback` 接收部分成交、正常业务拒绝和实际账户，必须返回 `None`。依赖新成交的保护单只能在下一次决策提交：5 分钟基础行情配 15 分钟决策时，中间 Bar 可能没有保护；设为 5 分钟决策可在每根已完成的 5 分钟 Bar 后响应，但仍不提供同一根 Bar 内的成交响应。
+
+框架只保留有界活动订单、命令、单 Bar 反馈和统计收益/权益，不自动累积完整成交轨迹；需要完整审计时从 `on_feedback` 流式保存。CUDA 张量保持设备驻留，跨框架调用须使用运行上下文提供的 CUDA stream。不可变工件/参数身份与 `state_schema` 描述运行实例，`open` 必须创建独立状态，共享模型参数保持不变。回调从研究期首次可执行决策开始，更早的空账户事件跳过，历史输入由声明的特征窗口提供。
+
+`simulate` 返回独立审计 `ProgramSimulation`，`commit` 会拒绝该类型。程序候选注册、发现和组合准入仍待共享账户重放集成。远程会话拒绝 Python 程序实例；远程执行须显式部署版本化工件，研究 RPC 不传源码字符串或 pickle。
+
 ## 数值因子、模型信号与目标持仓
 
 `session.grid` 提供规范 ISO UTC `decision_times`、等价的 int64 UTC 纳秒 `time_ns`、有序资产和快照身份。数组维度为 `(B,D,S)`：候选、决策、资产。四市场日线预设保留原有口径，crypto Bar 工件还支持独立的决策与统计频率。股票决策为交易所时段收盘（包含夏令时和提前收盘），crypto 为已完成决策 Bar 的右端点。日历坐标不补造缺失的历史发布时间。
@@ -226,7 +305,7 @@ with foundry.open() as session:
 
 用完调用 `session.release(registered)`；循环中通常放在 `finally` 内。退出会话也会释放其剩余租约。所有活动批次的总行数不得超过 `candidate_batch`，满额后须先释放再注册。释放后的驻留引用失效，即使内部仍有该候选的紧凑测量缓存也不能继续使用。
 
-需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v16`、`candidate-array-v4`、`candidate-discovery-v5`（二进制批次传输为 `candidate-batch-v3`），旧格式须显式重跑，不自动迁移。
+需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v17`、`candidate-array-v4`、`candidate-discovery-v5`（二进制批次传输为 `candidate-batch-v3`），旧格式须显式重跑，不自动迁移。
 
 ## 策略发现
 
@@ -373,7 +452,7 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v16`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
+[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v17`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
 
 输入契约错误抛出 `ValueError` 或 `TypeError`，旧上下文抛出 `ContextConflict`，资源或实现失败直接传播；候选业务拒绝保留为结构化结果。机器调用请读取 `foundry.schema()`，不要拼接未公开的协议字段。
 

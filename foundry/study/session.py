@@ -33,6 +33,8 @@ from foundry.types import ArrayBatch, Formula
 from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
                                    FamilySeed, RegisteredBatch, WeightReport)
 from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport, ExecutionSchedule
+from foundry.types import ProgramPlan, ProgramSimulation, StrategyProgram
+from foundry.study import programs
 
 
 if TYPE_CHECKING:
@@ -340,6 +342,15 @@ class LocalBackend:
     def describe(self):
         return self._describe(self.research)
 
+    def plan_program(self, program: StrategyProgram, context: str) -> ProgramPlan:
+        self.research.require_context(context)
+        with self.runtime.resources.scope():
+            return programs.plan(self.runtime, program)
+
+    def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation:
+        self.research.require_context(context)
+        return programs.simulate(self.runtime, self.research.context, program)
+
     def evaluate(self, candidates, context):
         return evaluation_report(self.research.evaluate(candidates, context))
 
@@ -455,12 +466,22 @@ class Session:
     def evaluate(self, inputs: CandidateInput) -> EvaluationReport:
         return self._backend.evaluate(self._candidates(inputs), self._context.id)
 
+    def plan_program(self, program: StrategyProgram) -> ProgramPlan:
+        """Inspect devices, bounded state and order latency before simulation."""
+        return self._backend.plan_program(program, self._context.id)
+
+    def simulate(self, program: StrategyProgram) -> ProgramSimulation:
+        """Audit a fresh actual account; portfolio admission requires replay."""
+        return self._backend.simulate(program, self._context.id)
+
     def evaluate_device(self, inputs: CandidateInput) -> DeviceBatch:
         """Return resident arrays in an in-process session, without report serialization."""
         return self._backend.evaluate_device(self._candidates(inputs), self._context.id)
 
     def commit(self, report: EvaluationReport | DiscoveryReport) -> CommitReport:
         """Submit the reviewed candidates against exactly the reviewed portfolio."""
+        if not isinstance(report, (EvaluationReport, DiscoveryReport)):
+            raise TypeError('commit requires an EvaluationReport or DiscoveryReport with portfolio admission')
         if isinstance(report, DiscoveryReport) and report.delayed:
             raise ValueError('delayed noise-control reports cannot be submitted; evaluate the actual candidates first')
         candidates = (tuple(row.candidate for row in report.rows) if isinstance(report, DiscoveryReport)

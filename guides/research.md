@@ -32,6 +32,8 @@ For a successful evaluation, `row.ok` is true and `row.metrics` holds results su
 | Operation | Purpose | Portfolio effect |
 | --- | --- | --- |
 | `evaluate(inputs)` | Evaluate candidates and admission proposals | Read-only |
+| `plan_program(program)` | Inspect device, memory bounds and order latency | Read-only |
+| `simulate(program)` | Audit one fresh actual-account program run | Read-only; no admission |
 | `diagnose()` | Describe portfolio gaps and discovery context | Read-only |
 | `judge_family(inputs, hypothesis="")` | Test neighbourhoods or explicit parameter grids | Read-only |
 | `portfolio()` | Get sources, weights, metrics and baseline status | Read-only |
@@ -181,6 +183,83 @@ with foundry.open(
 
 Here features and registered `(B,D,S)` arrays use completed 15-minute decision bars. `Execution(fill="next_open")` executes at the next 5-minute base open after the completed decision, including a shared boundary; it does not wait for the next decision. Between updates, actual quantities remain held. Formula windows count decision bars, so `ma_dist_20` uses 20 observations.
 
+### Stateful programs and order audits
+
+`session.plan_program(program)` declares the selected device, precision, Bar path, volume participation and bounded state before opening a run. `session.simulate(program)` creates fresh strategy state and a flat account funded by `Account.initial_cash`, then closes private resources even when a callback fails. It supports crypto cash and isolated USDT accounts on the explicitly selected CPU or CUDA backend. Equity program orders require corporate-action and settlement support that is not yet available.
+
+Save this example as a Python file so its artifact digest identifies the actual source; select your own dataset and covered dates. It submits one fixed-quantity order for the first eligible asset. The reservation price estimates funding requirements and does not cap its execution price.
+
+The plan discloses its quote policy: missing or nonpositive OHLC quotes cannot fill orders. Spot valuation carries the last valid close, with zero before the first valid listing quote. Source artifacts remain unchanged; the established target-account model retains its existing valuation contract.
+
+```python
+import hashlib
+from pathlib import Path
+import foundry
+
+
+class BuyOnce:
+    descriptor = foundry.ProgramDescriptor(
+        "buy-once",
+        artifact_digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        parameter_digest=hashlib.sha256(b"quantity=0.001").hexdigest(),
+        state_schema=(foundry.TensorState("sent", "bool", (1,)),),
+        features=("close",), devices=("cpu", "cuda"),
+    )
+
+    def open(self, context):
+        return BuyOnceRun(context)
+
+
+class BuyOnceRun:
+    def __init__(self, context):
+        self.xp = context.xp
+        self.sent = self.xp.zeros((1, 1), dtype=self.xp.bool_)
+
+    def on_event(self, event):
+        xp = self.xp
+        integer = lambda value: xp.full((1, 1), value, dtype=xp.int64)
+        number = lambda value: xp.full((1, 1), value, dtype=xp.float32)
+        new = (~self.sent) & event.eligibility[-1:, :1]
+        self.sent |= new
+        return foundry.OrderCommands(
+            action=xp.where(new, int(foundry.OrderAction.NEW), 0),
+            owner=integer(0), id=integer(1), asset=integer(0), side=integer(1),
+            quantity=number(.001), type=integer(int(foundry.OrderType.MARKET)),
+            price=number(0), reservation_price=event.features["close"][-1:, :1],
+            valid_until=integer(-1), reduce_only=xp.zeros((1, 1), dtype=xp.bool_),
+        )
+
+    def on_feedback(self, feedback):
+        pass  # Consume or stream actual fills here; this hook cannot submit orders.
+
+    def close(self):
+        del self.sent
+
+
+with foundry.open(
+    market="crypto_spot", data_dir="/datasets/crypto_5m", backend="cuda",
+    start="2025-01-08", end="2025-01-31",
+    clock=foundry.Clock(decision="5min", statistics="1D"),
+    account=foundry.Account(initial_cash=1000.),
+    execution=foundry.Execution(
+        precision="paired", bar_path="open_low_high_close", participation=.1,
+        order_capacity=32, command_capacity=32,
+    ),
+) as session:
+    program = BuyOnce()
+    print(session.plan_program(program))
+    audit = session.simulate(program)
+
+```
+
+`on_event` receives the actual account after previously completed bars and owned causal feature windows limited by the descriptor's `history`. It emits `(B,K)` command columns; action zero leaves that slot unused. IDs for new orders must increase within each account, `(owner,id)` identifies an order, and amendments replace remaining quantity and reset priority. `valid_until` is `-1` or a compiled base-bar open timestamp. Reduce-only requests exceeding unreserved actual holdings are rejected rather than clipped.
+
+Commands become eligible at the compiled next base-bar open. The chosen path explicitly resolves OHLC ordering; `participation` caps fills by reported base-bar volume. Partial fills and normal business rejections arrive in `on_feedback` after each completed base bar, along with its actual account. That hook returns `None`. Protection based on a new fill can be submitted only at the next configured decision: 15-minute decisions on 5-minute bars can leave intervening bars unprotected. Use a 5-minute decision clock to react after each completed 5-minute bar; this still does not provide intrabar fill reactions.
+
+The framework retains bounded active orders, commands and per-bar feedback, plus measurement returns/equity. It does not accumulate a full fill trace; stream audit records from `on_feedback` if needed. CUDA tensors remain resident, and framework interop must use the CUDA stream supplied in the run context. Immutable artifact/parameter identities and `state_schema` describe the run; `open` must create independent state and keep shared model parameters unchanged. Callbacks begin at the first executable research decision; earlier flat account events are skipped and the feature window supplies the declared history.
+
+`simulate` returns `ProgramSimulation`, a standalone audit that `commit` rejects. Program candidate registration, discovery and portfolio admission await shared-account replay integration. Remote sessions reject Python program instances; remote program execution requires explicitly deployed versioned artifacts, with no source strings or pickle sent through research RPC.
+
 ## Numerical factors, model signals and target positions
 
 `session.grid` gives canonical ISO UTC `decision_times`, the equivalent int64 UTC nanoseconds in `time_ns`, ordered assets and snapshot identity. Arrays use shape `(B,D,S)`: candidates, decisions, assets. The four daily presets retain their existing conventions; crypto bar artifacts also support independent decision and statistics frequencies. Equity decisions use the exchange session close (including DST and early closes); crypto decisions use the right boundary of each completed decision bar. This calendar coordinate does not supply missing historical publication timestamps.
@@ -224,7 +303,7 @@ Values must be float32 or float64 arrays. Observation and fitting declarations a
 
 Call `session.release(registered)` when finished, normally in `finally` in a repeated loop. Session exit releases its remaining leases. Across active batches, the total row count cannot exceed `candidate_batch`; release a batch before registering more. Released resident references cannot be evaluated, even if an internal measurement remains cached.
 
-To keep selected outputs, use `saved = session.retain(registered.candidates[:1])` before release and save `saved.candidates` for future use. Only this explicit request, accepted portfolio members, or discovery checkpoint references write artifacts to `Admission.artifact_dir`. `retain` returns durable references; it does not release the original batch. Commit and discovery handle their own required retention automatically. Portfolio/RPC, array and discovery formats are `research-v16`, `candidate-array-v4` and `candidate-discovery-v5` (binary batch transport: `candidate-batch-v3`); old formats require an explicit rerun, with no automatic migration.
+To keep selected outputs, use `saved = session.retain(registered.candidates[:1])` before release and save `saved.candidates` for future use. Only this explicit request, accepted portfolio members, or discovery checkpoint references write artifacts to `Admission.artifact_dir`. `retain` returns durable references; it does not release the original batch. Commit and discovery handle their own required retention automatically. Portfolio/RPC, array and discovery formats are `research-v17`, `candidate-array-v4` and `candidate-discovery-v5` (binary batch transport: `candidate-batch-v3`); old formats require an explicit rerun, with no automatic migration.
 
 ## Strategy discovery
 
@@ -371,7 +450,7 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 Formula evaluation, registration, family judging, diagnosis, weight trials and portfolio commands use the same public session methods. Fit external models in your own process and register their outputs for remote evaluation. `session.resident` and `evaluate_device` are in-process facilities.
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) derives requests and responses from the typed contracts; [`rpc/codec.py`](../foundry/rpc/codec.py) handles encoding, with [`rpc/server.py`](../foundry/rpc/server.py) and [`rpc/client.py`](../foundry/rpc/client.py) owning transport. Array uploads use a binary bundle with 1 GiB encoded and decoded limits and no pickle. Portfolio/RPC protocol `research-v16` rejects old formats explicitly. Commands run through one bounded worker queue; disconnecting a client does not cancel an accepted command.
+[`rpc/schema.py`](../foundry/rpc/schema.py) derives requests and responses from the typed contracts; [`rpc/codec.py`](../foundry/rpc/codec.py) handles encoding, with [`rpc/server.py`](../foundry/rpc/server.py) and [`rpc/client.py`](../foundry/rpc/client.py) owning transport. Array uploads use a binary bundle with 1 GiB encoded and decoded limits and no pickle. Portfolio/RPC protocol `research-v17` rejects old formats explicitly. Commands run through one bounded worker queue; disconnecting a client does not cancel an accepted command.
 
 Input-contract errors raise `ValueError` or `TypeError`; stale contexts raise `ContextConflict`; resource/implementation failures propagate. Candidate business rejection remains a structured report. Consult `foundry.schema()` rather than constructing undocumented wire messages.
 

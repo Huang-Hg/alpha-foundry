@@ -10,6 +10,7 @@ from foundry.types import (
     Candidate, CandidateGrid, CommitReport, Diagnostics, EvaluationReport, FamilyResult,
     FamilySeed, Metrics, PortfolioReport, RegisteredBatch, ResearchContext, ReweightResult,
     RiskSummary, WeightCommit, WeightReport,
+    ProgramDescriptor, ProgramPlan,
 )
 
 HOST = '127.0.0.1'
@@ -195,5 +196,10 @@ def describe():
                   'research.commit(context, candidates) / research.reweight(context, iterations, count, seed) -> new context.id',
                   'research.retain(context, candidates) -> durable references; research.release_batch(lease) -> null',
                   'research.refresh -> current context after an explicit conflict'],
+        programs=dict(transport='in_process', descriptor=schema_for(ProgramDescriptor), plan=schema_for(ProgramPlan),
+            methods=dict(plan_program='Validate a StrategyProgram and return its execution plan without opening state',
+                         simulate='Open fresh private state and return resident actual-account audit arrays'),
+            returns='ProgramSimulation: resident returns/equity (B,V), immutable period-start UTC ns (V,), final AccountSnapshot',
+            scope='Crypto spot and isolated linear perpetual Bar orders; simulation is not an admission report'),
         binary='register_batch carries exactly params.bytes bytes after the JSON request newline; 1GiB encoded and decoded limits; no pickle',
         python='with foundry.open() as session: report = session.evaluate(formulas); session.commit(report)')

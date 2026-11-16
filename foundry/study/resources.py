@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType, TracebackType
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Literal, Self, cast
 
 import numpy as np
 
@@ -17,6 +17,7 @@ from foundry.config import (
     Settings,
     UsEquityConfig,
 )
+from foundry.backtest import orders, orders_cuda
 from foundry.market.a_share import AShare
 from foundry.market.crypto_spot import CryptoSpot
 from foundry.market.data import load_data
@@ -34,6 +35,7 @@ from foundry.types import (
     HostArray,
     Backend,
     BoolArray,
+    BarExecution,
     FloatArray,
     ExecutionSpec,
     ParsedFormula,
@@ -96,10 +98,10 @@ def load_study(settings: Settings, study: Study, backend: Backend) -> StudyData:
     elif isinstance(cfg, UsEquityConfig):
         market = UsEquity(cfg.cost_rate, cfg.daily_borrow, settings.account.gross_limit)
     elif isinstance(cfg, CryptoSpotConfig):
-        market = CryptoSpot(cfg.cost_rate, settings.account.gross_limit, settings.clock)
+        market = CryptoSpot(cfg.cost_rate, settings.account.gross_limit, settings.clock, settings.execution)
     else:
         market = CryptoPerpetual(settings.account.leverage, cfg.cost_rate, cfg.maintenance_rate,
-                                 cfg.liquidation_fee, settings.account.gross_limit, settings.clock)
+                                 cfg.liquidation_fee, settings.account.gross_limit, settings.clock, settings.execution)
     return market.compile(load_data(settings, study), backend, study)
 
 
@@ -240,6 +242,9 @@ class Runtime:
     executor: ExecutionBackend
     resources: DeviceResources
     pipeline: Pipeline
+    program_data: orders.PreparedData | None
+    program_backend: orders_cuda.PreparedBackend | None
+    program_native: ModuleType | None
 
     @property
     def market(self) -> AShare | UsEquity | CryptoSpot | CryptoPerpetual:
@@ -257,10 +262,27 @@ class Runtime:
     def window(self) -> Window:
         return self.loaded.window
 
+    def open_program_account(self, batch: int, precision: Literal['mixed', 'paired'],
+                             start_event: int) -> orders.OrderRuntime | orders_cuda.OrderRuntime:
+        """Create a private account from this runtime's explicitly prepared backend."""
+        spec = cast(BarExecution, self.loaded.program_spec)
+        data = cast(orders.PreparedData, self.program_data)
+        if self.resources.placement.kind == 'cuda':
+            return orders_cuda.OrderRuntime(spec, self.settings.account, self.settings.execution,
+                batch=batch, precision=precision, array_module=self.backend.xp,
+                prepared=cast(orders_cuda.PreparedBackend, self.program_backend),
+                prepared_data=data, start_event=start_event)
+        return orders.OrderRuntime(spec, self.settings.account, self.settings.execution,
+            batch=batch, precision=precision, native=cast(ModuleType, self.program_native),
+            prepared_data=data, start_event=start_event)
+
     def close(self) -> None:
         self.pipeline.close()
         self.loaded.panel.release()
         self.executor.close()
+        self.program_data = None
+        self.program_backend = None
+        self.program_native = None
         self.backend.close()
         self.resources.close()
 
@@ -314,10 +336,19 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             cleanup.callback(executor.close)
             loaded = load_study(settings, study, backend)
             cleanup.callback(loaded.panel.release)
-            context = study_snapshot(loaded, settings, plan_precision(settings.cuda.precision,
+            program_data, program_backend, program_native = None, None, None
+            if loaded.program_spec is not None:
+                program_data = orders.prepare_data(loaded.program_spec, backend.xp)
+                if name == 'cuda':
+                    program_backend = orders_cuda.prepare(backend.xp)
+                else:
+                    from foundry.backtest import _orders
+                    program_native = _orders
+            context = study_snapshot(loaded, settings, plan_precision(settings.execution.precision,
                                       executor.precisions))
             pipeline = Pipeline(loaded, backend, executor, resources, settings, context)
             cleanup.callback(pipeline.close)
-        runtime = Runtime(settings, loaded, backend, executor, resources, pipeline)
+        runtime = Runtime(settings, loaded, backend, executor, resources, pipeline,
+                          program_data, program_backend, program_native)
         cleanup.pop_all()  # Ownership now belongs to Runtime.close.
         return runtime

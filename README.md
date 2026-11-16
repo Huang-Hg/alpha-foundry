@@ -37,7 +37,7 @@ The example uses the bundled US equity snapshot. You can replace it with your ow
 | Crypto spot | Continuous UTC calendar, independent bar clocks, eligibility and trading fees |
 | USDT linear perpetuals | Long/short exposure, isolated margin, base-bar funding events and liquidation |
 
-Crypto supports explicit base bars with independent decision and statistics frequencies, including 5-minute execution, 15-minute decisions and daily statistics. Existing daily presets and hourly perpetual datasets retain their conventions. Stateful strategy callbacks and orders are later delivery phases. The [guide](guides/research.md#crypto-execution) describes the model's price, funding and liquidation assumptions.
+Crypto supports explicit base bars with independent decision and statistics frequencies, including 5-minute execution, 15-minute decisions and daily statistics. Existing daily presets and hourly perpetual datasets retain their conventions. Stateful programs can inspect actual accounts and fills through [`plan_program` and `simulate`](guides/research.md#stateful-programs-and-order-audits); portfolio admission for these programs requires the subsequent replay integration. The [guide](guides/research.md#crypto-execution) describes the model's price, funding and liquidation assumptions.
 
 ## Bring your own data
 
@@ -123,7 +123,8 @@ with foundry.open(
     market="crypto_perpetual",
     account=foundry.Account(margin="isolated", leverage=3.0, gross_limit=3.0),
     cost_rate=0.0004,
-    cuda=foundry.CUDA(candidate_batch=64, precision="paired"),
+    cuda=foundry.CUDA(candidate_batch=64),
+    execution=foundry.Execution(precision="paired"),
     admission=foundry.Admission(min_sharpe_gain=0.02),
 ) as session:
     report = session.evaluate("gt(ma_dist_20,0)")

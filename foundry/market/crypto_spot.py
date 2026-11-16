@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import numpy as np
 
-from foundry.config import Clock
+from foundry.config import Clock, Execution
 from foundry.market.execution import cash_spec, ffill
 from foundry.market.clock import daily_clock, daily_schedule
 from foundry.market.intraday import IntradayData
+from foundry.market.orders import crypto_bars
 from foundry.types import Allocation, Backend, BoolArray, ExecutionSpec, LoadedStudy, MarketData, Study, Window
 from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
@@ -28,10 +29,12 @@ class CryptoSpot(Market[MarketData | IntradayData, ExecutionSpec]):
     categories = {'pricevolume': 'scale-free daily price/volume primitives',
                   'trend': 'distance to moving average, trailing return'}
 
-    def __init__(self, cost_rate: float, gross_limit: float = 1., clock: Clock = Clock()):
+    def __init__(self, cost_rate: float, gross_limit: float = 1., clock: Clock = Clock(),
+                 execution: Execution = Execution()):
         self.cost_rate = cost_rate
         self.allocation = Allocation(gross_limit, False)
         self.clock = clock
+        self.execution = execution
 
     def compile(self, data: MarketData | IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoSpot, Panel, ExecutionSpec]:
         if isinstance(data, IntradayData):
@@ -51,8 +54,9 @@ class CryptoSpot(Market[MarketData | IntradayData, ExecutionSpec]):
         block = np.where(seen & ~src['trading'], 3, 0)
         spec = cash_spec(open_, close, self.cost_rate * open_, block=block,
                          schedule=daily_schedule(dates, self.name, clock))
+        program_spec = crypto_bars(self.name, spec.schedule, clock.decision_ns, g, self.execution, self.cost_rate)
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
-                           window, data.contract)
+                           window, data.contract, program_spec)
 
     def _intraday(self, data: IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoSpot, Panel, ExecutionSpec]:
         bars = data.panel
@@ -71,7 +75,9 @@ class CryptoSpot(Market[MarketData | IntradayData, ExecutionSpec]):
         self.ppy = data.periods_per_year
         self.decision_clock = data.clock.provenance
         self.execution_clock = 'next_base_bar_open'
-        return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec, window, bars.contract)
+        program_spec = crypto_bars(self.name, data.schedule, data.event_close_ns, g, self.execution, self.cost_rate)
+        return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec,
+                           window, bars.contract, program_spec)
 
     def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel['trading']

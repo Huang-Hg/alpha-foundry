@@ -23,6 +23,7 @@ from foundry.types import (
     Array, ArrayBatch, Candidate, CandidateGrid, CommitReport, ContextConflict, DataGrid, Diagnostics, EvaluationReport,
     FamilyResult, FamilySeed, PortfolioReport, RegisteredBatch, ResearchContext,
     ReweightResult, WeightCommit, WeightReport,
+    ProgramPlan, ProgramSimulation, StrategyProgram,
 )
 
 if TYPE_CHECKING:
@@ -240,6 +241,12 @@ class RemoteBackend:
 
     def evaluate(self, candidates: tuple[Candidate, ...], context: str) -> EvaluationReport:
         return self._call('research.evaluate', dict(context=context, candidates=[asdict(c) for c in candidates]), EvaluationReport)
+
+    def plan_program(self, program: StrategyProgram, context: str) -> ProgramPlan:
+        raise ValueError('Program instances require an in-process session; remote programs require explicit versioned artifact deployment')
+
+    def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation:
+        raise ValueError('Program instances require an in-process session; remote programs require explicit versioned artifact deployment')
 
     def resident(self):
         raise ValueError('resident views require an in-process session')

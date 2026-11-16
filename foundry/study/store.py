@@ -233,6 +233,7 @@ def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: Precision
                   evaluation='in_sample_research', decision=loaded.market.decision_clock,
                   execution=loaded.market.execution_clock, allocation=loaded.market.allocation, precision=precision)
     identity = digest(dict(data=values['data_snapshot'], execution=values['execution_snapshot'],
+        program_execution=None if loaded.program_spec is None else loaded.program_spec.snapshot,
         semantics=values['implementation'], configuration=configuration, window=asdict(loaded.study),
         allocation=asdict(loaded.market.allocation), decision=values['decision'], clock=values['execution']))
     return StudySnapshot(id=identity, **values)

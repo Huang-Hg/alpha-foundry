@@ -58,6 +58,7 @@ class Account:
     margin: Literal['cash', 'isolated'] = 'cash'
     leverage: float = 1.
     gross_limit: float = 1.
+    initial_cash: float = 1.
 
     def __post_init__(self) -> None:
         if self.margin not in ('cash', 'isolated'):
@@ -67,16 +68,35 @@ class Account:
             raise ValueError('Account requires finite leverage >= 1 and 0 < gross_limit <= leverage')
         if self.margin == 'cash' and self.leverage != 1:
             raise ValueError('Cash accounts require leverage=1')
+        if not math.isfinite(self.initial_cash) or self.initial_cash <= 0:
+            raise ValueError('Initial quote cash must be positive and finite')
 
 
 @dataclass(frozen=True)
 class Execution:
     """Bar fill rule; next_open means the next base bar after the decision."""
     fill: Literal['next_open'] = 'next_open'
+    precision: Literal['paired', 'mixed'] = 'paired'
+    bar_path: Literal['open_low_high_close', 'open_high_low_close'] = 'open_low_high_close'
+    participation: float = 1.
+    order_capacity: int = 32
+    command_capacity: int = 32
+    quantity_step: float = 0.
+    price_tick: float = 0.
 
     def __post_init__(self) -> None:
         if self.fill != 'next_open':
             raise ValueError('The target execution plan supports only next_open fills')
+        if self.precision not in ('paired', 'mixed'):
+            raise ValueError('Execution precision must be paired or mixed')
+        if self.bar_path not in ('open_low_high_close', 'open_high_low_close'):
+            raise ValueError('Unknown deterministic Bar path')
+        if not math.isfinite(self.participation) or not 0 < self.participation <= 1:
+            raise ValueError('Volume participation must lie in (0,1]')
+        if any(type(value) is not int or value < 1 for value in (self.order_capacity, self.command_capacity)):
+            raise ValueError('Order and command capacities must be positive integers')
+        if any(not math.isfinite(value) or value < 0 for value in (self.quantity_step, self.price_tick)):
+            raise ValueError('Quantity and price steps must be finite and nonnegative; zero means continuous')
 
 
 @dataclass(frozen=True)
@@ -151,7 +171,6 @@ class CudaConfig:
     streams: int = 8
     candidate_batch: int = 256
     trial_batch: int = 16384
-    precision: str = 'paired'
     return_atol: float = 1e-06
     perpetual_host_cells: int = 100000
     measurement_cache_mib: int = 32
@@ -159,8 +178,6 @@ class CudaConfig:
     def __post_init__(self):
         if self.streams <= 0 or self.candidate_batch <= 0 or self.trial_batch <= 0:
             raise ValueError('CUDA parameters stream count and batch sizes must be positive')
-        if self.precision not in ('mixed', 'paired'):
-            raise ValueError('CUDA parameters precision must be mixed or paired')
         if not (math.isfinite(self.return_atol) and self.return_atol > 0):
             raise ValueError('CUDA parameters return error budget must be positive')
         if self.perpetual_host_cells < 0:

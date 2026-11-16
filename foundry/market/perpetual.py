@@ -13,12 +13,13 @@ from zipfile import ZipFile
 import numpy as np
 from numpy.typing import NDArray
 
-from foundry.config import Clock, CryptoPerpetualConfig
+from foundry.config import Clock, CryptoPerpetualConfig, Execution
 from foundry.types import Allocation, Backend, BoolArray, DataContract, ExecutionSchedule, LoadedStudy, MarketData, PerpetualSpec, Study, Window
 from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
 from foundry.market.clock import daily_clock
 from foundry.market.intraday import IntradayData
+from foundry.market.orders import crypto_bars
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -33,6 +34,10 @@ class PerpetualData:
     event_ns: NDArray[np.int64]
     measurement_index: NDArray[np.int64]
     trade_open: NDArray[np.floating]
+    trade_high: NDArray[np.floating]
+    trade_low: NDArray[np.floating]
+    trade_close: NDArray[np.floating]
+    volume: NDArray[np.floating]
     mark_open: NDArray[np.floating]
     mark_high: NDArray[np.floating]
     mark_low: NDArray[np.floating]
@@ -350,7 +355,8 @@ def _project(tables: Mapping[str, pd.DataFrame], manifest: Manifest, asof: str) 
     data = MarketData(dates, assets, {key: np.ascontiguousarray(value) for key, value in daily.items()},
                       np.ones((len(dates), len(assets)), dtype=bool), contract)
     return PerpetualData(data, times * 1_000_000, measurement_index,
-                         trade['open'], mark['open'], mark['high'], mark['low'], mark['close'],
+                         trade['open'], trade['high'], trade['low'], trade['close'], trade['volume'],
+                         mark['open'], mark['high'], mark['low'], mark['close'],
                          rates, mark['open'].copy())
 
 
@@ -394,11 +400,12 @@ class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
                   'trend': 'daily trend; execution-only funding and mark risk stay outside features'}
 
     def __init__(self, leverage: float, cost_rate: float, maintenance_rate: float, liquidation_fee: float,
-                 gross_limit: float, clock: Clock = Clock()):
+                 gross_limit: float, clock: Clock = Clock(), execution: Execution = Execution()):
         self.leverage = leverage
         self.allocation = Allocation(gross_limit, True)
         self.cost_rate, self.maintenance_rate, self.liquidation_fee = cost_rate, maintenance_rate, liquidation_fee
         self.clock = clock
+        self.execution = execution
 
     def compile(self, data: PerpetualData | IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
         if isinstance(data, IntradayData):
@@ -421,7 +428,12 @@ class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
             np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee),
             self.leverage, self.allocation.max_gross)
         panel = Panel(daily.dates, daily.assets, fields, src, backend)
-        return LoadedStudy(study, self, panel, spec, window, daily.contract)
+        bars = {name: getattr(data, 'trade_' + name) for name in ('open', 'high', 'low', 'close')}
+        bars.update({name: getattr(data, name) for name in
+                     ('volume', 'mark_open', 'mark_high', 'mark_low', 'mark_close', 'funding_rate', 'funding_mark')})
+        program_spec = crypto_bars(self.name, schedule, data.event_ns + HOUR_MS * 1_000_000,
+                                  bars, self.execution, self.cost_rate, self.maintenance_rate, self.liquidation_fee)
+        return LoadedStudy(study, self, panel, spec, window, daily.contract, program_spec)
 
     def _intraday(self, data: IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
         bars = data.panel
@@ -440,7 +452,10 @@ class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
         self.ppy = data.periods_per_year
         self.decision_clock = data.clock.provenance
         self.execution_clock = 'next_base_bar_open_then_exact_funding_and_mark_risk'
-        return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec, window, bars.contract)
+        program_spec = crypto_bars(self.name, data.schedule, data.event_close_ns, g,
+                                  self.execution, self.cost_rate, self.maintenance_rate, self.liquidation_fee)
+        return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec,
+                           window, bars.contract, program_spec)
 
     def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel.backend.xp.isfinite(panel['close'])
