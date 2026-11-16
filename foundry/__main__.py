@@ -120,7 +120,7 @@ def cmd_import_perpetual(a):
 def cmd_benchmark(a):
     from foundry.api import benchmark
     print(benchmark(a.output, suite=a.suite, sizes=a.sizes, assets=a.assets,
-                    spectre_python=a.spectre_python, **a.parameters))
+                    spectre_python=a.spectre_python, backends=a.backends, **a.parameters))
 
 
 def main():
@@ -152,6 +152,7 @@ def main():
     s.add_argument('output')
     s.add_argument('--suite', choices=('foundry', 'frameworks'), default='foundry')
     s.add_argument('--sizes', type=int, nargs='+')
+    s.add_argument('--backends', nargs='+', choices=('cpu', 'cuda'), default=['cpu', 'cuda'])
     s.add_argument('--assets', type=int, default=8)
     s.add_argument('--spectre-python', help='isolated interpreter containing the pinned Spectre revision')
     s = sub.add_parser('calibrate')

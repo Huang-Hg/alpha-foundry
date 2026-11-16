@@ -4,6 +4,8 @@
 
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
 
+A100/L4 的对比统一使用[固定 Colab CPU 基线](fixed-cpu-20261116/README.zh-CN.md)：独立 CPU 类型运行时，启用实际获配的全部 8 个 vCPU，不使用某张 GPU 附带的主机作为 CPU 基准。
+
 [小缓存与多 GPU 对比](compact-multigpu-20261116/README.zh-CN.md) 将此前的完整持仓缓存改为 32 MiB 收益/报告预算，让成员持仓空间独立于候选总数，并以相同输入比较各 GPU 的耗时、显存和决策。
 
 [2026-11-16 TMA 与测量复用报告](history-pro6000-20261116/README.zh-CN.md) 比较 `ts_slope`、`ts_av_diff` 和查询到提交的提速，验证 4096 条公式决策一致，并披露显存成本和实际 Blackwell 批量搬运指令。
@@ -19,10 +21,10 @@
 ```bash
 python -m pip install -r requirements-benchmark.txt
 bash build.sh
-OMP_NUM_THREADS=2 python -m foundry benchmark var/runs/benchmark-new
+OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 python -m foundry benchmark var/runs/benchmark-new --backends cpu
 ```
 
-先安装与 CUDA 运行时匹配的 CuPy。计算在选定的云端实例执行；GitHub Actions 只展示和归档已测结果。
+示例使用 8 vCPU 的 CPU 类型运行时，线程数应匹配实际 CPU affinity 与配额，并记录 OpenMP/BLAS 设置。`--backends cpu` 不需要 CuPy 或显卡，只运行基准契约检查与测量。省略 `--backends` 则在授权 GPU 上执行完整回归与 CPU/CUDA 双端测量，此时才需要匹配 CUDA 的 CuPy。计算在选定的云端实例执行；GitHub Actions 只展示和归档已测结果。
 
 执行、计时和 HTML 验证报告分别使用 [pytest](https://docs.pytest.org/en/stable/how-to/unittest.html)、[pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/latest/pedantic.html) 与 pytest-html。原有回归检查迁入 `validation/`，删除旧 `tests/` 和 `scripts/` 目录。
 
@@ -37,7 +39,7 @@ OMP_NUM_THREADS=2 python -m foundry benchmark var/runs/benchmark-new
 
 输出目录包含双语摘要、逐项 CSV、标准 pytest-benchmark JSON、JUnit XML、独立 HTML 验证报告、公式原始报告、源码/数据/语料身份和日志。正确性失败或基准覆盖不完整，命令会失败并保留报告。
 
-自有数据、费用等继续使用 `foundry.open` 的公开参数，两端共享同一组参数。不要传 `backend`，基准自行选择两端并拒绝该参数。固定公式语料必须符合所选数据的字段词表。可用 `foundry.benchmark(output, sizes=(1, 64), market="us_equity", data_dir="...")` 限定候选数量。不同 GPU、数据和实现之间不继承速度门槛。
+自有数据、费用等继续使用 `foundry.open` 的公开参数，两端共享同一组参数。通过 `backends=("cpu",)` 或 CLI `--backends cpu` 选择测量设备，不使用研究参数 `backend`；默认测量两端。固定公式语料必须符合所选数据的字段词表。可用 `foundry.benchmark(output, backends=("cpu",), sizes=(1, 64), market="us_equity", data_dir="...")` 限定候选数量。不同 GPU、数据和实现之间不继承速度门槛。基准 schema v2 明确记录后端与验证范围，独立测量本身不宣称跨设备一致性或加速比。
 
 新公开结果包包含报告、逐项 CSV、pytest 证据、运行元数据与实测源码包；完整逐公式原始证据保留在本地。CUDA 账户使用双 FP32，未测同卡单 FP32 对照，因此本次不重新验收独立的 1.5 倍精度开销预算。
 

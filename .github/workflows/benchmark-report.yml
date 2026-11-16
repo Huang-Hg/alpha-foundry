@@ -27,7 +27,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Verify saved evidence
-        working-directory: guides/benchmarks/current
+        working-directory: guides/benchmarks/fixed-cpu-20261116
         run: sha256sum -c SHA256SUMS
       - name: Verify selected data snapshots
         run: sha256sum -c data/SHA256SUMS
@@ -39,18 +39,26 @@ jobs:
           from pathlib import Path
           import tarfile
 
-          root = Path('guides/benchmarks/current')
+          root = Path('guides/benchmarks/fixed-cpu-20261116')
           summary = json.loads((root / 'summary.json').read_text())
-          result = json.loads((root / 'benchmark.json').read_text())
+          result = json.loads((root / 'measured/benchmark.json').read_text())
           evidence = result['foundry']
-          if summary['schema'] != 'foundry-benchmark-v1' or evidence['schema'] != summary['schema']:
+          if summary['schema'] != 'foundry-fixed-cpu-v1' or evidence['schema'] != 'foundry-benchmark-v2':
               raise SystemExit('Unsupported benchmark evidence schema')
-          if not summary['passed'] or summary['operator_count'] != 66:
-              raise SystemExit('The saved benchmark is incomplete or failed')
-          if set(summary['comparisons']) != {'1', '64', '4096'}:
-              raise SystemExit('Required candidate batch measurements are missing')
-          if not all(row['passed'] for row in summary['comparisons'].values()):
-              raise SystemExit('CPU/CUDA parity failed')
+          baseline = json.loads((root / 'measured/summary.json').read_text())
+          comparisons = json.loads((root / 'comparisons.json').read_text())
+          expected = {f'{gpu}/{size}' for gpu in ('a100', 'l4') for size in (64, 256, 1024, 4096)}
+          if not summary['passed'] or not baseline['passed'] or set(comparisons) != expected:
+              raise SystemExit('The fixed CPU comparison is incomplete or failed')
+          if not all(row['passed'] for row in comparisons.values()):
+              raise SystemExit('Fixed CPU/GPU parity failed')
+          if baseline['operator_cases']['observed'] != 124 or baseline['backend'] != 'cpu':
+              raise SystemExit('The fixed CPU operator baseline is incomplete')
+          if summary['cpu']['threads'] != 8 or evidence['omp_num_threads'] != '8' or evidence['openblas_num_threads'] != '8':
+              raise SystemExit('The fixed CPU parallelism differs from the recorded contract')
+          pools = json.loads((root / 'threadpools.json').read_text())
+          if {row['user_api'] for row in pools if row['num_threads'] == 8} != {'openmp', 'blas'}:
+              raise SystemExit('Native CPU thread pools were not verified')
 
           def canonical(content):
               return content.replace(b'\r\n', b'\n').rstrip() + b'\n'
@@ -68,11 +76,20 @@ jobs:
                   measured = archive.extractfile(name).read()
                   if hashlib.sha256(measured).hexdigest() != digest:
                       raise SystemExit(f'Measured source checksum failed: {name}')
-                  if name != 'validation/benchmarks/report.py' and canonical(Path(name).read_bytes()) != canonical(measured):
+                  if canonical(Path(name).read_bytes()) != canonical(measured):
                       changed.append(name)
-          renderer = Path('validation/benchmarks/report.py').read_bytes()
-          if hashlib.sha256(renderer).hexdigest() != summary['report_renderer_sha256']:
-              raise SystemExit('Regenerate the saved reports with the current renderer')
+          orchestration = {'foundry/api.py', 'foundry/__main__.py', 'validation/bench_workloads.py',
+                           'validation/conftest.py', 'validation/benchmarks/run.py', 'validation/benchmarks/report.py'}
+          for gpu, record in summary['devices'].items():
+              artifact = Path('guides/benchmarks/compact-multigpu-20261116') / gpu / 'benchmark.json'
+              if hashlib.sha256(artifact.read_bytes()).hexdigest() != record['gpu_benchmark_sha256']:
+                  raise SystemExit(f'GPU evidence changed: {gpu}')
+              previous = json.loads(artifact.read_text())['foundry']
+              if set(manifest) != set(previous['source_sha256']):
+                  raise SystemExit('GPU source coverage differs')
+              different = {name for name, digest in manifest.items() if previous['source_sha256'][name] != digest}
+              if different - orchestration:
+                  raise SystemExit('GPU evidence has different numerical sources')
           corpus = Path('guides/benchmarks/fixtures/us-formulas.json').read_bytes()
           if hashlib.sha256(corpus).hexdigest() != evidence['corpus_sha256']:
               raise SystemExit('Formula corpus differs from the measured workload')
@@ -89,8 +106,8 @@ jobs:
           import re
 
           base = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/blob/"
-                  f"{os.environ['REPORT_REVISION']}/guides/benchmarks/current/")
-          report = Path('guides/benchmarks/current/report.md').read_text()
+                  f"{os.environ['REPORT_REVISION']}/guides/benchmarks/fixed-cpu-20261116/")
+          report = Path('guides/benchmarks/fixed-cpu-20261116/README.md').read_text()
           report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + base + match[1] + ')', report)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
               output.write('This job verifies saved Colab evidence; it does not execute numerical tests.\n\n')
@@ -99,7 +116,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-evidence-${{ github.event.pull_request.head.sha || github.sha }}
-          path: guides/benchmarks/current/
+          path: guides/benchmarks/fixed-cpu-20261116/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

@@ -288,3 +288,5 @@ CUDA 批量和精度显式配置。双 FP32 用两个分量在支持的账户与
 独立私有生产审计未通过：保留基线缺少 protocol/study 元数据，保存的组合仍含旧 BTC 特征公式。原文件没有改写或重录，不能宣称私有基线完全通过。CUDA 账户使用双 FP32，但未执行同卡单 FP32 对照，因此没有重新验收独立的 1.5 倍精度开销预算。详见[验收范围](benchmarks/arch-v2-pro6000-20261115/README.zh-CN.md)。
 
 在获得授权的计算环境中，`python -m foundry benchmark OUTPUT` 是统一验证和基准入口，分别记录准备、驻留评价与完整查询/有序提交耗时，并报告数值误差和决策一致性。实现位于 [`validation/benchmarks`](../validation/benchmarks)，架构检查位于 [`validation/test_architecture.py`](../validation/test_architecture.py)。
+
+使用 `--backends cpu` 或 `foundry.benchmark(output, backends=("cpu",))` 可独立测量 CPU 基线，不初始化 CUDA。此模式运行基准契约检查与性能测量，不运行完整多设备回归。OpenMP/BLAS 线程数应匹配实际 CPU 配额并随结果保存；GPU 加速比必须注明所采用的固定 CPU 基线。

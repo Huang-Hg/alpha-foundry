@@ -4,6 +4,8 @@
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
 
+Use the [fixed Colab CPU baseline](fixed-cpu-20261116/README.md) for A100/L4 comparisons. The CPU reference is a dedicated CPU runtime with all eight allocated vCPUs enabled, not the CPU attached to a particular GPU instance.
+
 The [compact-cache GPU comparison](compact-multigpu-20261116/README.md) replaces the earlier full-book cache with a 32 MiB return/report budget, bounds member storage independently of candidate count, and compares GPU latency, memory and decisions on identical inputs.
 
 The [2026-11-16 TMA and measurement-reuse report](history-pro6000-20261116/README.md) measures faster `ts_slope` and `ts_av_diff`, bounded query-to-commit reuse, and unchanged 4096-formula decisions. It includes the memory tradeoff and actual Blackwell bulk-copy instruction evidence.
@@ -19,10 +21,10 @@ Run one command on the authorized GPU:
 ```bash
 python -m pip install -r requirements-benchmark.txt
 bash build.sh
-OMP_NUM_THREADS=2 python -m foundry benchmark var/runs/benchmark-new
+OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 python -m foundry benchmark var/runs/benchmark-new --backends cpu
 ```
 
-Install CuPy for the runtime's CUDA version first. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.
+This example uses the eight-vCPU CPU runtime. Match the thread count to the runtime's actual CPU affinity and quota; record OpenMP and BLAS settings. `--backends cpu` needs neither CuPy nor a GPU and runs benchmark contracts plus measurements. Omit `--backends` to run the full regression suite and both CPU/CUDA measurements on an authorized GPU, with matching CuPy installed. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.
 
 The runner uses [pytest](https://docs.pytest.org/en/stable/how-to/unittest.html), [pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/latest/pedantic.html) and pytest-html. Existing regression checks live in `validation/`; the old `tests/` and `scripts/` directories are removed.
 
@@ -37,7 +39,7 @@ Each performance condition has one warm-up and one measured round. Warm-up uses 
 
 The output directory contains bilingual Markdown summaries, detailed CSVs, the standard pytest-benchmark JSON, JUnit XML, a standalone HTML check report, raw formula reports, source/data/corpus identities and the run log. A failing correctness check or incomplete benchmark fails the command while preserving its report.
 
-For custom data or fees, pass the same public parameters as `foundry.open`; the CPU and CUDA runs share them. Omit `backend`: the benchmark selects both backends itself and rejects that parameter. The fixed corpus must be valid for that dataset's vocabulary. `foundry.benchmark(output, sizes=(1, 64), market="us_equity", data_dir="...")` can limit candidate counts. Timing thresholds from another GPU, dataset or implementation are not inherited.
+For custom data or fees, pass the same public parameters as `foundry.open`; the CPU and CUDA runs share them. Select benchmark devices with `backends=("cpu",)` or CLI `--backends cpu`, not the research `backend` parameter. The default is both backends. The fixed corpus must be valid for that dataset's vocabulary. `foundry.benchmark(output, backends=("cpu",), sizes=(1, 64), market="us_equity", data_dir="...")` can limit candidate counts. Timing thresholds from another GPU, dataset or implementation are not inherited. Benchmark schema v2 records selected backends and validation scope; standalone measurements make no cross-device correctness or speedup claim by themselves.
 
 The new public bundle contains reports, detailed CSVs, pytest evidence, run metadata and the measured source archive; full raw per-formula evidence is retained locally. CUDA account arithmetic used paired FP32. No same-device single-FP32 control was measured, so this run does not requalify the separate 1.5× precision budget.
 
