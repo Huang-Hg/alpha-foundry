@@ -405,6 +405,11 @@ class Server:
             result = self.backend.refresh()
         elif method == 'research.register_batch':
             result = self.backend.register(decode_bundle(payload), parameters['context'])
+        elif method == 'research.release_batch':
+            self.backend.release(parameters['lease'])
+            return None
+        elif method == 'research.retain':
+            result = self.backend.retain(tuple(candidate_from_json(row) for row in parameters['candidates']), parameters['context'])
         elif method == 'research.portfolio':
             result = self.backend.portfolio(parameters['context'])
         elif method == 'research.trial_weights':

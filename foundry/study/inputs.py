@@ -1,0 +1,70 @@
+"""Bounded, explicitly released candidate leases on the study's device."""
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from types import ModuleType
+from uuid import uuid4
+
+import numpy as np
+
+from foundry.study.identity import digest_for, metadata_for, source_for
+from foundry.types import Array, ArrayBatch, ArraySource, ContextConflict, HostArray
+
+
+@dataclass(frozen=True)
+class InputLease:
+    batch: ArrayBatch
+    sources: tuple[ArraySource, ...]
+
+
+class ResidentInputs:
+    def __init__(self, capacity: int, xp: ModuleType, leaves: Callable[[Array], HostArray]):
+        self.capacity, self.xp, self.leaves = capacity, xp, leaves
+        self.scope = uuid4().hex
+        self.leases: dict[str, InputLease] = {}
+        self.rows: dict[ArraySource, tuple[str, int]] = {}
+        self.retained: dict[ArraySource, ArraySource] = {}
+
+    @property
+    def count(self) -> int:
+        return sum(len(lease.sources) for lease in self.leases.values())
+
+    def register(self, batch: ArrayBatch) -> tuple[str, InputLease]:
+        if self.count + len(batch.ids) > self.capacity:
+            raise ValueError('resident candidate capacity exceeded; release a batch or split the input')
+        def own(values: Array) -> Array:
+            module = np if isinstance(values, np.ndarray) else self.xp
+            return module.array(values, copy=True, order='C')
+        owned = replace(batch, values=self.xp.array(batch.values, copy=True, order='C'),
+                        observed_through=own(batch.observed_through), fit_through=own(batch.fit_through))
+        arrays = (owned.values, owned.observed_through, owned.fit_through)
+        leaves = tuple(self.leaves(values) for values in arrays)
+        sources = tuple(source_for(metadata_for(owned, i),
+            digest_for(metadata_for(owned, i), tuple(values[i] for values in arrays),
+                       tuple(hashes[i] for hashes in leaves)), self.scope) for i in range(len(batch.ids)))
+        key = uuid4().hex
+        lease = InputLease(owned, sources)
+        self.leases[key] = lease
+        self.rows.update((source, (key, i)) for i, source in enumerate(sources))
+        return key, lease
+
+    def read(self, source: ArraySource) -> ArrayBatch:
+        if source not in self.rows:
+            raise ContextConflict('resident candidate lease ended or belongs to another session')
+        token, index = self.rows[source]
+        batch = self.leases[token].batch
+        return replace(batch, ids=(batch.ids[index],), values=batch.values[index:index+1],
+                       observed_through=batch.observed_through[index:index+1], fit_through=batch.fit_through[index:index+1],
+                       complexity=None if batch.complexity is None else batch.complexity[index:index+1])
+
+    def release(self, token: str) -> tuple[ArraySource, ...]:
+        if token not in self.leases:
+            raise ContextConflict('candidate batch lease is no longer active in this session')
+        lease = self.leases.pop(token)
+        self.rows = {source: (key, i) for key, live in self.leases.items() for i, source in enumerate(live.sources)}
+        self.retained = {source: value for source, value in self.retained.items() if source in self.rows}
+        return lease.sources
+
+    def close(self) -> None:
+        self.rows.clear()
+        self.leases.clear()
+        self.retained.clear()

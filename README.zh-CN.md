@@ -56,7 +56,7 @@ with foundry.open(
 
 美股需要包含 OHLCV 和复权因子的 `panel.parquet`，以及记录历史资格区间的 `membership.parquet`。保留研究起点之前的历史，以便计算滚动特征。其他市场同样有明确的数据契约；永续还需要小时成交价、标记价和资金费记录。详见[文件格式与转换示例](guides/research.zh-CN.md#接入自己的数据)。
 
-如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明日期、资产坐标与信息截止点。
+如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明日期、资产坐标与信息截止点。临时 GPU 候选保持驻留，用完调用 `session.release(batch)`；只有入选、检查点引用或明确要求保留的候选才落盘。
 
 ## 在 Linux 或 Windows 上使用
 
@@ -89,6 +89,7 @@ with foundry.connect(("127.0.0.1", port)) as session:
 | --- | --- |
 | 评价公式或已注册模型输出 | `session.evaluate(inputs)` |
 | 注册信号或持仓批次 | `session.register(values, ...)` |
+| 保存选定候选 / 释放临时批次 | `session.retain(inputs)` / `session.release(batch)` |
 | 诊断当前组合的不足 | `session.diagnose()` |
 | 检验公式邻域或模型参数网格 | `session.judge_family(inputs)` |
 | 查看组合或比较成员权重 | `session.portfolio()` / `session.trial_weights(matrix)` |

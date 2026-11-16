@@ -217,11 +217,13 @@ class Formula:
 
 @dataclass(frozen=True)
 class ArraySource:
+    """Versioned content identity; empty scope is durable, otherwise session-resident."""
     kind: Literal['signals', 'target_weights', 'target_exposure']
     digest: str
     snapshot: str
     producer: str
     complexity: float = 0.
+    scope: str = ''
 
     def normalized_complexity(self, ast_cost: int, max_cost: int) -> float:
         return self.complexity
@@ -273,7 +275,7 @@ class ArrayBatch:
 
 
 class ArrayStore(Protocol):
-    """Immutable, content-addressed artifacts; writes only on registration."""
+    """Immutable durable artifacts; writes only on explicit retention."""
     def put(self, batch: ArrayBatch) -> tuple[ArraySource, ...]: ...
     def read(self, source: ArraySource) -> ArrayBatch: ...
 
@@ -467,8 +469,10 @@ class CommitReport:
 
 @dataclass(frozen=True)
 class RegisteredBatch:
+    """Candidate references plus an owned resident lease, or empty lease after retain."""
     context: ResearchContext
     candidates: tuple[Candidate, ...]
+    lease: str
 
 
 @dataclass(frozen=True)
@@ -615,6 +619,8 @@ class SessionBackend(Protocol[ResidentValue]):
     def evaluate_device(self, candidates: tuple[Candidate, ...], context: str) -> DeviceBatch: ...
     def commit(self, candidates: tuple[Candidate, ...], context: str) -> CommitReport: ...
     def register(self, batch: ArrayBatch, context: str) -> RegisteredBatch: ...
+    def retain(self, candidates: tuple[Candidate, ...], context: str) -> RegisteredBatch: ...
+    def release(self, lease: str) -> None: ...
     def diagnose(self, context: str) -> Diagnostics: ...
     def judge_family(self, families: Sequence[FamilySeed | CandidateGrid], context: str) -> FamilyResult: ...
     def portfolio(self, context: str) -> PortfolioReport: ...
@@ -929,6 +935,7 @@ class MiningTimings:
     training_seconds: float = 0.
     commit_seconds: float = 0.
     reweight_seconds: float = 0.
+    retention_seconds: float = 0.
     checkpoint_seconds: float = 0.
 
 
@@ -976,6 +983,7 @@ class MiningEpoch:
     training: TrainingResult
     timings: MiningTimings
     counters: Mapping[str, int]
+    checkpoint_candidates: tuple[Candidate, ...] = ()
 
 
 class CheckpointStore(Protocol):

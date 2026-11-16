@@ -24,7 +24,7 @@ MAX_RESPONSE_BYTES = 1 << 30
 MAX_PENDING = 64
 HEARTBEAT_SECONDS = 10.
 BUNDLE = 'candidate-batch-v2'
-CHECKPOINT_FORMAT = 'candidate-discovery-v2'
+CHECKPOINT_FORMAT = 'candidate-discovery-v3'
 
 REPORT_NOTES = {
     Metrics: {
@@ -105,6 +105,8 @@ METHODS = {
     'research.refresh': object_schema({}),
     'research.register_batch': object_schema(dict(context=TEXT,
         bytes=dict(type='integer', minimum=1, maximum=MAX_ARRAY_BYTES))),
+    'research.retain': object_schema(dict(context=TEXT, candidates=dict(type='array', minItems=1, items=CANDIDATE))),
+    'research.release_batch': object_schema(dict(lease=TEXT)),
     'research.evaluate': object_schema(dict(context=TEXT, candidates=dict(type='array', minItems=1, items=CANDIDATE))),
     'research.commit': object_schema(dict(context=TEXT, candidates=dict(type='array', minItems=1, items=CANDIDATE))),
     'research.diagnose': object_schema(dict(context=TEXT)),
@@ -127,6 +129,8 @@ RESPONSES = {
     'research.evaluate': schema_for(EvaluationReport),
     'research.commit': schema_for(CommitReport),
     'research.register_batch': schema_for(RegisteredBatch),
+    'research.retain': schema_for(RegisteredBatch),
+    'research.release_batch': schema_for(type(None)),
     'research.diagnose': schema_for(Diagnostics),
     'research.judge_family': schema_for(FamilyResult),
     'research.portfolio': schema_for(PortfolioReport),
@@ -144,7 +148,7 @@ def parse(request):
         validate(request, REQUEST)
     except ValidationError as error:
         raise ValueError(error.message) from error
-    if request['method'] in ('research.evaluate', 'research.commit'):
+    if request['method'] in ('research.evaluate', 'research.commit', 'research.retain'):
         ids = [row['id'] for row in request['params']['candidates']]
         if len(ids) != len(set(ids)):
             raise ValueError('candidate IDs must be unique within a request')
@@ -185,10 +189,11 @@ def describe():
     return dict(protocol=PROTOCOL, request=REQUEST, methods=METHODS,
         parameters=dict(oneOf=variants), defaults=defaults, responses=RESPONSES,
         workflow=['research.describe -> context.id',
-                  'research.register_batch(context, bytes) + binary bundle -> typed candidates',
+                  'research.register_batch(context, bytes) + binary bundle -> resident candidates and lease',
                   'research.evaluate(context, candidates)',
                   'research.diagnose(context) / research.judge_family(context, families)',
                   'research.commit(context, candidates) / research.reweight(context, iterations, count, seed) -> new context.id',
+                  'research.retain(context, candidates) -> durable references; research.release_batch(lease) -> null',
                   'research.refresh -> current context after an explicit conflict'],
         binary='register_batch carries exactly params.bytes bytes after the JSON request newline; 1GiB encoded and decoded limits; no pickle',
         python='with foundry.open() as session: report = session.evaluate(formulas); session.commit(report)')

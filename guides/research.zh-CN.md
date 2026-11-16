@@ -38,7 +38,7 @@ with foundry.open(
 
 权重试验的形状为 `(试验数, 成员数)`，成员顺序与 `portfolio()` 一致。权重必须有限且非负，全零表示现金。这些是组合成员权重，不是逐资产目标持仓。
 
-省略组合路径时，组合库保存在内存中。注册数组仍写入 `Admission.artifact_dir`，默认是 `var/candidates`。传入组合路径后启用持久化和原子发布。退出 `with` 释放本地计算资源；关闭远程客户端不会停止共享服务。
+省略组合路径时，组合库保存在内存中。注册数组暂存于计算设备，仅入选、检查点引用或明确要求保留的候选写入 `Admission.artifact_dir`，默认是 `var/candidates`。传入组合路径后启用组合持久化和原子发布。退出 `with` 释放候选租约及本地计算资源；关闭远程客户端不会停止共享服务。
 
 报告绑定研究快照和组合版本。其他写入者改变上下文后，旧报告会触发 `ContextConflict`；显式调用 `session.refresh()` 后重新评价，不会自动重试旧决策。
 
@@ -155,7 +155,11 @@ with foundry.open() as session:
 
 数值必须是浮点数组。观测和拟合截止点为 `(B,T)` 整数数组，使用研究网格行号且不晚于决策行 `t`；`-1` 表示未使用观测或拟合。已训练模型不能为了通过检查而伪报 `-1`。日线收盘决策最早在下一开盘执行。
 
-`producer` 标识生成程序。可选的逐候选 `complexity` 范围为 `[0,1]`，仅影响发现流程的软评分，不改变硬准入。注册后返回绑定内容身份的候选并保存工件。远程注册自动传输 NumPy 数组，无需服务器路径；本地也支持 CuPy。
+`producer` 标识生成程序。可选的逐候选 `complexity` 范围为 `[0,1]`，仅影响发现流程的软评分，不改变硬准入。注册创建有界驻留副本，返回绑定内容身份的候选与租约。本地 CuPy 数据留在 GPU，只传回紧凑摘要；远程注册自动上传 NumPy 数组，无需服务器路径。
+
+用完调用 `session.release(registered)`；循环中通常放在 `finally` 内。退出会话也会释放其剩余租约。所有活动批次的总行数不得超过 `candidate_batch`，满额后须先释放再注册。释放后的驻留引用失效，即使内部仍有该候选的紧凑测量缓存也不能继续使用。
+
+需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v14`、`candidate-array-v3`、`candidate-discovery-v3`，旧格式须显式重跑，不自动迁移。
 
 ## 策略发现
 
@@ -196,7 +200,7 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
 
 `ExternalProposer` 接受有限的候选或已注册批次。`foundry.mine(..., session=session, proposers=[proposer])` 自动打开、恢复和关闭提案器资源，不关闭调用者传入的会话。可选回调接收一个 `LearningFeedback`：`feedback.batch` 保留候选顺序及研究快照，`feedback.rewards` 是同设备的 FP32 向量。CPU 程序可显式调用 `to_host()`；CUDA 程序在自己的流上使用 `borrow(stream_pointer)`，再用 DLPack 零拷贝接入 PyTorch。借用范围内不得修改反馈或向外保留别名。反馈不借用行情/组合缓冲区，因此可与提交和重配重叠。
 
-自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v2`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
+自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v3`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
 
 
 不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
@@ -221,9 +225,9 @@ with foundry.open(
 
 `mode="factor"` 用 GPU 张量、交互特征和横截面排序生成 `signals`，GPU CEM 根据同一奖励向量更新参数分布。示例还通过 `CandidateGrid` 执行九点邻域和延迟双生子检查。两者共用注册、归档、硬准入和有序提交接口；模型参数、拟合过程和学习规则由客户端持有。
 
-数组注册仍包含主机哈希和 NPZ 落盘；只有学习反馈是事件同步的驻留零拷贝，不能据此宣称端到端没有传输。输出及拟合截止点通过 `session.register` 显式声明。因果预测拟合不等于独立样本外选模：超参和因子搜索使用研究窗口反馈，报告中的收益仅供样本内研究。
+数组注册把 GPU 输出复制到有界驻留租约，并在 GPU 上计算分块摘要，仅将紧凑摘要传回主机。入选、检查点引用及明确保留的候选才传输完整数据并落盘。输出及拟合截止点通过 `session.register` 显式声明。因果预测拟合不等于独立样本外选模：超参和因子搜索使用研究窗口反馈，报告中的收益仅供样本内研究。
 
-注册为每个分块保留一份 GPU 副本供评价使用，经有界页锁定主机缓冲区传输并流式写入原子文件。`candidate_batch` 同时限制暂存与驻留输入，按整个分配淘汰可避免行视图拖住历史批次。候选身份和重新打开后的恢复能力不变。[同卡注册优化报告](benchmarks/registration-l4-20261116/README.zh-CN.md) 中，注册约提速 2×，因子挖掘循环提速 1.51×，指标和决策完全一致；持久化仍需一次主机复制。
+`candidate_batch` 限制活动驻留输入总行数及持久化暂存。生产者在 `release(batch)` 中释放自己注册的批次；驱动器先等待学习完成并保存检查点最终引用。未选中数据直接释放，不写文件。明确保留使用有界主机暂存及原子文件，返回内容摘要相同、scope 为空的持久引用。组合和检查点禁止包含驻留 scope；不缓存历史 GPU 批次，也不自动归档每次试探。 注册、必要落盘和完整用时见[同卡生命周期对照](benchmarks/lease-l4-20261116/README.zh-CN.md)。
 
 统一测速入口：
 
@@ -286,7 +290,7 @@ with foundry.open(start="2025-07-01", end="2026-06-30") as session:
 
 每次预测用当前后端的数组库返回 `(B,S)`，资产顺序与研究一致。`FoldView` 提供 `start`、不包含的 `stop`、`dates`、`assets`、`features` 和 `eligibility`。输出执行与外部数组相同的注册检查，非法敞口直接拒绝，不自动遮盖。执行器记录观测行 `t` 和该折拟合截止点；无法约束回调私自读取未来数据，或使用已在未来数据上训练的模型。
 
-每折净收益从首个可执行决策归属到下一模型开始执行；最后一折归属到研究结束。空档期的退出成本、资金费和无法退出的持仓延续计入前一模型。`sign_consistency` 是正收益折数与负收益折数中较大者除以总折数；零收益或无效折不计入分子。持续亏损模型也可能得到 1，因此要同时看各折符号和收益。该操作注册并评价预测，不提交候选。
+每折净收益从首个可执行决策归属到下一模型开始执行；最后一折归属到研究结束。空档期的退出成本、资金费和无法退出的持仓延续计入前一模型。`sign_consistency` 是正收益折数与负收益折数中较大者除以总折数；零收益或无效折不计入分子。持续亏损模型也可能得到 1，因此要同时看各折符号和收益。该操作注册并评价预测，不提交候选。用完释放 `result.registered`；需要保存时先显式调用 `retain`。
 
 ## 远程会话
 
@@ -301,7 +305,7 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 公式评价、数组注册、家族检验、诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v13`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
+[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v14`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
 
 输入契约错误抛出 `ValueError` 或 `TypeError`，旧上下文抛出 `ContextConflict`，资源或实现失败直接传播；候选业务拒绝保留为结构化结果。机器调用请读取 `foundry.schema()`，不要拼接未公开的协议字段。
 

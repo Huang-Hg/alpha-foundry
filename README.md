@@ -56,7 +56,7 @@ with foundry.open(
 
 For US equities, prepare `panel.parquet` with OHLCV and adjustment factors, plus `membership.parquet` with historical eligibility intervals. Retain earlier history for rolling features. Other markets have explicit data contracts; perpetuals additionally require hourly trade, mark and funding records. See [file formats and conversion examples](guides/research.md#bring-your-own-data).
 
-If your program already produces signals or positions, use `session.register(...)` instead. It accepts batches of model scores, long-only target weights or signed perpetual exposures with date/asset coordinates and information cutoffs.
+If your program already produces signals or positions, use `session.register(...)` instead. It accepts batches of model scores, long-only target weights or signed perpetual exposures with date/asset coordinates and information cutoffs. Temporary GPU candidates stay resident until `session.release(batch)`; only admitted, checkpoint-referenced or explicitly retained outputs are saved.
 
 ## Start on Linux or Windows
 
@@ -89,6 +89,7 @@ Here `port` is the service port, or the local end of your tunnel. See [remote se
 | --- | --- |
 | Evaluate formulas or registered model outputs | `session.evaluate(inputs)` |
 | Register signal or target batches | `session.register(values, ...)` |
+| Save selected outputs / release a temporary batch | `session.retain(inputs)` / `session.release(batch)` |
 | Inspect portfolio weaknesses | `session.diagnose()` |
 | Check formula neighbours or a model parameter grid | `session.judge_family(inputs)` |
 | Inspect holdings or compare component weights | `session.portfolio()` / `session.trial_weights(matrix)` |

@@ -1,4 +1,4 @@
-"""Causal model fitting, daily prediction and registered out-of-fold signals."""
+"""Causal model fitting and out-of-fold signals with caller-owned resident leases."""
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence

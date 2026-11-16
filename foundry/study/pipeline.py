@@ -26,6 +26,7 @@ from foundry.numeric import metrics as M
 from foundry.ops.parse import validate
 from foundry.portfolio.allocation import signal_to_book
 from foundry.study.cache import CandidateCache, MeasurementKey, MemberKey
+from foundry.study.inputs import ResidentInputs
 from foundry.types import (
     ComputeDevice,
     Array,
@@ -91,6 +92,7 @@ class DeviceResources(Protocol):
     def finish_batch(self) -> None: ...
     def synchronize(self) -> None: ...
     def stage_host(self, values: Array) -> HostArray: ...
+    def content_leaves(self, values: Array) -> HostArray: ...
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]: ...
     def measurement_budget(self, cfg: CudaConfig) -> int: ...
     def status(self) -> ResourceStatus: ...
@@ -144,6 +146,7 @@ class Pipeline:
         self.precision = context.precision.effective
         self.cache = CandidateCache(self.candidate_batch, settings.portfolio.max_members,
                                     resources.measurement_budget(settings.cuda), self.panel.shape[0])
+        self.inputs = ResidentInputs(self.candidate_batch, self.xp, resources.content_leaves)
 
     def batches(self, items: Sequence[Item]) -> Iterator[Sequence[Item]]:
         """Apply the runtime's resident candidate bound at every batch boundary."""
@@ -435,5 +438,6 @@ class Pipeline:
     def close(self) -> None:
         """Release this study's caches; runtime closes its execution resources."""
         self.cache.close()
+        self.inputs.close()
         self.fields.clear()
         del self.spec, self.universe, self.slots, self.years

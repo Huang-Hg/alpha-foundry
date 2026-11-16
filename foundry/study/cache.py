@@ -79,6 +79,10 @@ class ArrayCache:
         self._rows.clear()
         self._groups.clear()
 
+    def drop(self, sources: Sequence[ArraySource]) -> None:
+        for group in {self._rows[s][0] for s in sources if s in self._rows}:
+            self._remove(group)
+
 
 @dataclass(frozen=True)
 class MeasurementKey:

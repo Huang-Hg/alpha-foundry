@@ -38,6 +38,9 @@ jobs:
       - name: Verify registration evidence
         working-directory: guides/benchmarks/registration-l4-20261116
         run: sha256sum -c SHA256SUMS
+      - name: Verify resident lease evidence
+        working-directory: guides/benchmarks/lease-l4-20261116
+        run: sha256sum -c SHA256SUMS
       - name: Verify selected data snapshots
         run: sha256sum -c data/SHA256SUMS
       - name: Bind evidence to the proposed source
@@ -86,6 +89,45 @@ jobs:
           clients = {'validation/benchmarks/nonformula.py', 'validation/benchmarks/tensor_programs.py',
               'validation/test_tensor_programs.py'}
           routing = {'foundry/api.py', 'foundry/__main__.py'}
+          lease_changes = {
+              'foundry/monitor/components.py',
+              'foundry/portfolio/admission.py',
+              'foundry/portfolio/library.py',
+              'foundry/rpc/client.py',
+              'foundry/rpc/codec.py',
+              'foundry/rpc/schema.py',
+              'foundry/rpc/server.py',
+              'foundry/search/archive.py',
+              'foundry/search/driver.py',
+              'foundry/search/proposer/external.py',
+              'foundry/study/cache.py',
+              'foundry/study/identity.py',
+              'foundry/study/inputs.py',
+              'foundry/study/pipeline.py',
+              'foundry/study/resources.py',
+              'foundry/study/session.py',
+              'foundry/study/src/array_hash.cu',
+              'foundry/study/store.py',
+              'foundry/study/walk_forward.py',
+              'foundry/types.py',
+              'validation/benchmarks/nonformula.py',
+              'validation/benchmarks/tensor_programs.py',
+              'validation/fixtures.py',
+              'validation/test_architecture.py',
+              'validation/test_cuda_candidates.py',
+              'validation/test_cuda_perpetual.py',
+              'validation/test_monitor.py',
+              'validation/test_resident_inputs.py',
+              'validation/test_search.py',
+              'validation/test_session.py',
+              'validation/test_walk_forward.py',
+          }
+          lease_added = {
+              'foundry/study/identity.py',
+              'foundry/study/inputs.py',
+              'foundry/study/src/array_hash.cu',
+              'validation/test_resident_inputs.py',
+          }
           registration_changes = {'foundry/study/cache.py', 'foundry/study/pipeline.py',
               'foundry/study/resources.py', 'foundry/study/session.py', 'foundry/study/store.py',
               'validation/test_candidates.py', 'validation/test_cuda_candidates.py'}
@@ -98,8 +140,8 @@ jobs:
               'foundry/monitor/schema.py', 'foundry/rpc/schema.py', 'foundry/search/diagnostics.py',
               'foundry/search/objective.py', 'foundry/search/proposer/external.py',
               'foundry/study/pipeline.py', 'foundry/study/resources.py', 'foundry/study/session.py',
-              'validation/test_monitor.py', 'validation/test_search.py'} | registration_changes
-          if tracked != (recorded - removed) | added:
+              'validation/test_monitor.py', 'validation/test_search.py'} | registration_changes | lease_changes
+          if tracked != (recorded - removed) | added | lease_added:
               raise SystemExit('Source coverage changed; publish a new authorized cloud run')
           with tarfile.open(root / 'source.tar.gz') as archive:
               for name, digest in manifest.items():
@@ -111,7 +153,7 @@ jobs:
           discovery = Path('guides/benchmarks/api-boundary-l4-20261116')
           latest = json.loads((discovery / 'measured/plan.json').read_text())['source_sha256']
           smoke = json.loads((discovery / 'smoke/plan.json').read_text())['source_sha256']
-          if tracked != set(latest) | clients or smoke != latest:
+          if tracked != set(latest) | clients | lease_added or smoke != latest:
               raise SystemExit('Discovery source coverage or smoke identity differs')
           for stage, epochs, batch in (('smoke', 1, 32), ('measured', 8, 512)):
               result = json.loads((discovery / stage / 'summary.json').read_text())
@@ -128,12 +170,12 @@ jobs:
                   measured = archive.extractfile(name).read()
                   if hashlib.sha256(measured).hexdigest() != digest:
                       raise SystemExit(f'Discovery evidence checksum failed: {name}')
-                  if name not in routing | registration_changes and canonical(Path(name).read_bytes()) != canonical(measured):
+                  if name not in routing | registration_changes | lease_changes and canonical(Path(name).read_bytes()) != canonical(measured):
                       raise SystemExit(f'Discovery evidence is stale for: {name}')
           nonformula = Path('guides/benchmarks/nonformula-l4-20261116')
           current = json.loads((nonformula / 'measured/plan.json').read_text())['source_sha256']
           smoke = json.loads((nonformula / 'smoke/plan.json').read_text())['source_sha256']
-          if tracked != set(current) or smoke != current:
+          if tracked != set(current) | lease_added or smoke != current:
               raise SystemExit('Non-formula source coverage or smoke identity differs')
           differences = {name for name in current.keys() | latest.keys() if current.get(name) != latest.get(name)}
           audit = json.loads((nonformula / 'source-audit.json').read_text())
@@ -144,7 +186,7 @@ jobs:
                   measured = archive.extractfile(name).read()
                   if hashlib.sha256(measured).hexdigest() != digest:
                       raise SystemExit(f'Non-formula evidence checksum failed: {name}')
-                  if name not in registration_changes and canonical(Path(name).read_bytes()) != canonical(measured):
+                  if name not in registration_changes | lease_changes and canonical(Path(name).read_bytes()) != canonical(measured):
                       raise SystemExit(f'Non-formula evidence is stale for: {name}')
           for stage, count in (('smoke', 8), ('measured', 256)):
               result = json.loads((nonformula / stage / 'summary.json').read_text())
@@ -168,7 +210,7 @@ jobs:
           measured = json.loads((registration / 'measured/plan.json').read_text())['source_sha256']
           previous = json.loads((registration / 'previous/plan.json').read_text())['source_sha256']
           smoke = json.loads((registration / 'smoke/plan.json').read_text())['source_sha256']
-          if previous != current or smoke != measured or set(measured) != tracked:
+          if previous != current or smoke != measured or set(measured) | lease_added != tracked:
               raise SystemExit('Registration source identity or coverage changed')
           changed = {name for name in measured if measured[name] != previous[name]}
           audit = json.loads((registration / 'source-audit.json').read_text())
@@ -177,7 +219,7 @@ jobs:
           with tarfile.open(registration / 'source.tar.gz') as archive:
               for name, digest in measured.items():
                   content = archive.extractfile(name).read()
-                  if hashlib.sha256(content).hexdigest() != digest or canonical(Path(name).read_bytes()) != canonical(content):
+                  if hashlib.sha256(content).hexdigest() != digest or (name not in lease_changes and canonical(Path(name).read_bytes()) != canonical(content)):
                       raise SystemExit(f'Registration evidence is stale for: {name}')
           parity = json.loads((registration / 'parity.json').read_text())
           if not parity['passed'] or parity['maximum_absolute_error'] != 0 or parity['counts'] != {'candidates': 512, 'decisions': 512}:
@@ -193,6 +235,39 @@ jobs:
           for contract in submissions.values():
               if not all(contract[k] for k in ('passed', 'accepted', 'cas_conflict_rejected', 'query_readonly')) or contract['batch_vs_single_max_absolute_error'] != 0:
                   raise SystemExit('Registration submission contract failed')
+          leases = Path('guides/benchmarks/lease-l4-20261116')
+          latest = json.loads((leases / 'measured/plan.json').read_text())['source_sha256']
+          previous = json.loads((leases / 'previous/plan.json').read_text())['source_sha256']
+          smoke = json.loads((leases / 'smoke/plan.json').read_text())['source_sha256']
+          audit = json.loads((leases / 'source-audit.json').read_text())
+          changed = {name for name in latest.keys() | previous.keys() if latest.get(name) != previous.get(name)}
+          smoke_changed = {name for name in latest if latest[name] != smoke[name]}
+          if set(latest) != tracked or previous != measured or changed != lease_changes or changed != set(audit['changes']):
+              raise SystemExit('Resident lease source coverage differs from the reviewed patch')
+          if smoke_changed != set(audit['after_smoke_test_changes']) or any(not name.startswith('validation/test_') for name in smoke_changed):
+              raise SystemExit('Production changed after smoke without validation')
+          with tarfile.open(leases / 'source.tar.gz') as archive:
+              for name, digest in latest.items():
+                  content = archive.extractfile(name).read()
+                  if hashlib.sha256(content).hexdigest() != digest or canonical(Path(name).read_bytes()) != canonical(content):
+                      raise SystemExit(f'Resident evidence is stale for: {name}')
+          parity = json.loads((leases / 'parity.json').read_text())
+          if not parity['passed'] or parity['maximum_absolute_error'] != 0 or parity['counts'] != {'candidates': 512, 'decisions': 512}:
+              raise SystemExit('Resident numerical and decision parity failed')
+          for stage, count in (('smoke', 8), ('measured', 256)):
+              result = json.loads((leases / stage / 'summary.json').read_text())
+              if not result['passed'] or set(result['cases']) != {'mlp', 'factor'}:
+                  raise SystemExit('Resident workload coverage is incomplete')
+              for case in result['cases'].values():
+                  if case['candidates'] != count or case['active_candidate_leases'] or not all(case[k] for k in ('selective_persistence', 'artifacts_pit_valid', 'resources_released', 'feedback_zero_copy')):
+                      raise SystemExit('Resident lifetime or selective persistence evidence failed')
+          import xml.etree.ElementTree as ET
+          initial = ET.parse(leases / 'contracts.xml').getroot()
+          repaired = ET.parse(leases / 'contracts-repair.xml').getroot()
+          failed = {(case.attrib['classname'], case.attrib['name']) for case in initial.iter('testcase') if case.find('failure') is not None or case.find('error') is not None}
+          rerun = {(case.attrib['classname'], case.attrib['name']) for case in repaired.iter('testcase')}
+          if not failed or failed != rerun or any(case.find('failure') is not None or case.find('error') is not None for case in repaired.iter('testcase')):
+              raise SystemExit('Targeted repair does not cover the failed contract')
           allowed = {'foundry/api.py', 'foundry/__main__.py', 'foundry/__init__.py', 'foundry/config.py',
               'foundry/backtest/cpu.py', 'foundry/backtest/perpetual_cpu.py', 'foundry/ops/src/module.cpp',
               'foundry/numeric/parallel.py', 'foundry/study/pipeline.py', 'foundry/study/resources.py',
@@ -238,6 +313,10 @@ jobs:
               registration_report = Path('guides/benchmarks/registration-l4-20261116/README.md').read_text()
               registration_report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + registration_base + match[1] + ')', registration_report)
               output.write('\n\n' + registration_report)
+              lease_base = base.replace('parallel-cpu-20261116', 'lease-l4-20261116')
+              lease_report = Path('guides/benchmarks/lease-l4-20261116/README.md').read_text()
+              lease_report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + lease_base + match[1] + ')', lease_report)
+              output.write('\n\n' + lease_report)
       - name: Preserve benchmark evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -247,6 +326,7 @@ jobs:
             guides/benchmarks/api-boundary-l4-20261116/
             guides/benchmarks/nonformula-l4-20261116/
             guides/benchmarks/registration-l4-20261116/
+            guides/benchmarks/lease-l4-20261116/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

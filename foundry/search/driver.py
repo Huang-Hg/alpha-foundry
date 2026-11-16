@@ -167,9 +167,14 @@ class MiningDriver:
                         reweight = self.session.reweight(iterations=cfg.reweight_iterations,
                                                          count=cfg.reweight_batch, seed=cfg.seed + epoch)
                     timings = replace(timings, reweight_seconds=time.perf_counter() - reweight_start)
+                    retention_start = time.perf_counter()
+                    self.archive.update(discovery.pending)
+                    if self.archive.items:
+                        retained = self.session.retain(tuple(self.archive.items))
+                        self.archive.retained(retained.candidates)
+                    retention_seconds = time.perf_counter() - retention_start
                     learned, training_seconds = training.result()
-                    timings = replace(timings, training_seconds=training_seconds)
-                self.archive.update(discovery.pending)
+                    timings = replace(timings, training_seconds=training_seconds, retention_seconds=retention_seconds)
                 totals.update(discovery.counters)
                 totals['auxiliary_evaluations'] += batch.auxiliary
                 totals['reweight_evaluations'] += reweight.evaluations if reweight is not None else 0
@@ -180,7 +185,7 @@ class MiningDriver:
                                  device=resources.device, used_mib=resources.used_mib)
                 record = MiningEpoch(epoch + 1, self.signature, proposer.name, archive_version, report,
                                      candidate.candidate if candidate is not None else None,
-                                     reweight, learned, timings, dict(discovery.counters))
+                                     reweight, learned, timings, dict(discovery.counters), tuple(self.archive.items))
                 checkpoint_start = time.perf_counter()
                 self.telemetry.record(record)
                 self.checkpoints.publish(MiningCheckpoint(self.signature, epoch + 1, portfolio,

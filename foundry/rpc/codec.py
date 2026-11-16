@@ -21,7 +21,7 @@ from foundry.study.session import candidate_report, evaluation_report
 from foundry.study.store import encode_archive, decode_archive, publish, source_from_json
 from foundry.types import (
     ArrayBatch, Candidate, Metrics, MiningCheckpoint, MiningEpoch, MiningStatus,
-    RiskSummary, Source,
+    RiskSummary, Source, ArraySource,
 )
 
 
@@ -91,6 +91,7 @@ def describe(research):
                    for op in OPS.values()], window=dict(min=MIN_WINDOW, max=MAX_WINDOW), batch_size=engine.candidate_batch,
         axes=dict(snapshot=engine.context.id, dates=[str(day) for day in engine.dates], assets=list(engine.panel.assets)),
         external_batch=dict(kinds=['signals', 'target_exposure'] if engine.allocation.allow_short else ['signals', 'target_weights', 'target_exposure'],
+            active_candidates=engine.inputs.count, resident_capacity=engine.inputs.capacity,
             values='(B,T,S) float32 or float64; exact published axes',
             ids='B unique candidate IDs', snapshot='context.snapshot.id', producer='nonempty producer identity',
             signals=('NaN is missing; clip(-1,1)/eligible_count gives signed exposure at at most 1x gross.'
@@ -102,7 +103,8 @@ def describe(research):
             observed_through='(B,T) int64; last source row known to the producer, -1 <= value <= decision row',
             fit_through='(B,T) int64; last fit row used by the producer, -1 <= value <= decision row',
             pit='Producer-declared cutoffs are checked for forward references; the engine cannot prove the provenance of externally computed values.',
-            persistence='research.register_batch writes immutable artifacts; evaluate and commit only read registered sources'),
+            persistence='register_batch creates a bounded resident lease; release_batch frees it. retain returns durable references; commit persists admitted arrays before atomic publication. Queries never persist.',
+            capacity='All active leases together fit batch_size candidates. Split larger arrays and release completed batches; no spill or automatic persistence.'),
         execution_risk=dict(report=schema_for(RiskSummary),
             small_perpetual_cpu_cells=engine.cuda_cfg.perpetual_host_cells,
             routing='Perpetual batches at or below B*T*S cells are planned on CPU before execution; larger batches use the selected device. No precision replay.',
@@ -116,6 +118,7 @@ def describe(research):
 
 
 def checkpoint_bytes(checkpoint: MiningCheckpoint) -> bytes:
+    validate_checkpoint_sources(checkpoint)
     return json.dumps(dict(format=CHECKPOINT_FORMAT, checkpoint=json_value(asdict(checkpoint))),
                       ensure_ascii=False, allow_nan=False).encode('utf-8')
 
@@ -131,7 +134,15 @@ def checkpoint_from_bytes(payload: bytes) -> MiningCheckpoint:
             checkpoint=schema_for(MiningCheckpoint)), required=['format', 'checkpoint'], additionalProperties=False))
     except ValidationError as error:
         raise ValueError(error.message) from error
-    return from_json(MiningCheckpoint, record['checkpoint'])
+    checkpoint = from_json(MiningCheckpoint, record['checkpoint'])
+    validate_checkpoint_sources(checkpoint)
+    return checkpoint
+
+
+def validate_checkpoint_sources(checkpoint: MiningCheckpoint) -> None:
+    sources = checkpoint.portfolio.sources + tuple(candidate.source for candidate in checkpoint.archive)
+    if any(isinstance(source, ArraySource) and source.scope for source in sources):
+        raise ValueError('checkpoint references a resident source; retain it before publication')
 
 
 def telemetry_bytes(record: MiningStatus | MiningEpoch) -> bytes:

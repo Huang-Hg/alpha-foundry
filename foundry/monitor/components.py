@@ -368,7 +368,8 @@ class PerformanceCard(Card):
     title = '运行性能'
     TIMING = (('采样', 'sampling_seconds', ACCENT), ('回测', 'evaluation_seconds', TEAL),
               ('学习', 'training_seconds', VIOLET), ('提交', 'commit_seconds', GREEN),
-              ('重配', 'reweight_seconds', AMBER), ('保存', 'checkpoint_seconds', INK3))
+              ('重配', 'reweight_seconds', AMBER), ('保留', 'retention_seconds', TEAL),
+              ('保存', 'checkpoint_seconds', INK3))
 
     def note(self, ctx):
         return '最近一轮'

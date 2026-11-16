@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import ModuleType
 
@@ -44,6 +44,12 @@ class Archive:
             self.items.popitem(last=False)
         if staged:
             self.version += 1
+
+    def retained(self, candidates: Sequence[Candidate]) -> None:
+        """Replace live source references after persistence, preserving behavior/version."""
+        self.items = OrderedDict((candidate, BehaviorState(candidate, state.fingerprint, state.book,
+            state.returns, state.portfolio_version, state.snapshot))
+            for candidate, state in zip(candidates, self.items.values()))
 
     def duplicate(self, fingerprint: int, book: FloatArray, portfolio_version: str,
                   port: ResidentPort) -> bool:

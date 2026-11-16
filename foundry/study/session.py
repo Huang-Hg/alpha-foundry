@@ -87,11 +87,13 @@ class Ledger:
                 for source in part:
                     if source.snapshot != self.pipeline.context.id:
                         raise ContextConflict('candidate array belongs to a different research snapshot')
+                    resident = pipeline.inputs.read(source) if source.scope else None
                     if pipeline.has_array(source):
                         values.append(pipeline.cache.arrays[source])
                     else:
-                        batch = self.arrays.read(source)
-                        pipeline.validate_batch(batch)
+                        batch = resident if source.scope else self.arrays.read(source)
+                        if not source.scope:
+                            pipeline.validate_batch(batch)
                         values.append(pipeline.xp.asarray(batch.values[0]))
                         missing = True
                 if missing:
@@ -104,22 +106,48 @@ class Ledger:
         pipeline = self.pipeline
         with pipeline.resources.scope():
             pipeline.validate_batch(batch)
-            candidates = []
-            for lo in range(0, len(batch.ids), pipeline.candidate_batch):
-                hi = lo + pipeline.candidate_batch
-                # One owned device allocation also feeds the durable host mirror.
-                # Temporary staging never grows with the complete candidate count.
-                resident = pipeline.xp.array(batch.values[lo:hi], copy=True, order='C')
-                host = replace(batch, ids=batch.ids[lo:hi],
-                    values=pipeline.resources.stage_host(resident),
-                    observed_through=pipeline.resources.stage_host(batch.observed_through[lo:hi]),
-                    fit_through=pipeline.resources.stage_host(batch.fit_through[lo:hi]),
-                    complexity=None if batch.complexity is None else batch.complexity[lo:hi])
-                pipeline.resources.synchronize()
-                sources = self.arrays.put(host)
-                pipeline.register_arrays(sources, resident, owned=True)
-                candidates.extend(Candidate(identity, source) for identity, source in zip(host.ids, sources))
-            return tuple(candidates)
+            token, lease = pipeline.inputs.register(batch)
+            pipeline.register_arrays(lease.sources, lease.batch.values, owned=True)
+            candidates = tuple(Candidate(identity, source) for identity, source in zip(batch.ids, lease.sources))
+            return RegisteredBatch(self.context, candidates, token)
+
+    def release_batch(self, token: str) -> None:
+        with self.pipeline.resources.scope():
+            sources = self.pipeline.inputs.release(token)
+            self.pipeline.cache.arrays.drop(sources)
+
+    def retain(self, candidates: tuple[Candidate, ...], context_id: str) -> RegisteredBatch:
+        """Persist only explicitly selected live sources; query paths never write."""
+        self.require_context(context_id)
+        pipeline = self.pipeline
+        with pipeline.resources.scope():
+            for candidate in candidates:
+                if isinstance(candidate.source, ArraySource) and candidate.source.snapshot != pipeline.context.id:
+                    raise ContextConflict('candidate array belongs to a different research snapshot')
+            live = tuple(dict.fromkeys(c.source for c in candidates if isinstance(c.source, ArraySource) and c.source.scope))
+            for source in live:
+                pipeline.inputs.read(source)
+            pending = [source for source in live if source not in pipeline.inputs.retained]
+            groups = {}
+            for source in pending:
+                groups.setdefault((source.kind, source.producer), []).append(source)
+            for group in groups.values():
+                for part in pipeline.batches(group):
+                    batches = [pipeline.inputs.read(source) for source in part]
+                    values = pipeline.xp.concatenate([batch.values for batch in batches])
+                    observed = pipeline.xp.concatenate([pipeline.xp.asarray(batch.observed_through) for batch in batches])
+                    fitted = pipeline.xp.concatenate([pipeline.xp.asarray(batch.fit_through) for batch in batches])
+                    host = replace(batches[0], ids=tuple(source.digest for source in part),
+                        values=pipeline.resources.stage_host(values),
+                        observed_through=pipeline.resources.stage_host(observed),
+                        fit_through=pipeline.resources.stage_host(fitted), complexity=tuple(source.complexity for source in part))
+                    pipeline.resources.synchronize()
+                    saved = self.arrays.put(host)
+                    if saved != tuple(replace(source, scope='') for source in part):
+                        raise RuntimeError('device and durable array identities disagree')
+                    pipeline.inputs.retained.update(zip(part, saved))
+            return RegisteredBatch(self.context, tuple(Candidate(c.id, pipeline.inputs.retained[c.source])
+                if isinstance(c.source, ArraySource) and c.source.scope else c for c in candidates), '')
 
     @property
     def context(self):
@@ -184,6 +212,8 @@ class Ledger:
                     results.append(CandidateResult(candidate.id, report, verdict, verdict.passed,
                                                     verdict.proposal.weight if verdict.passed else 0.))
                     if verdict.passed:
+                        durable = self.retain((candidate,), before.id).candidates[0].source
+                        row = replace(row, source=durable)
                         self.pipeline.retain_member(row)
                         working = self._build_portfolio(working.accepted(row, verdict))
                         # An early acceptance invalidates speculative suffixes.
@@ -331,8 +361,13 @@ class LocalBackend:
 
     def register(self, batch, context):
         with self.runtime.resources.scope():
-            candidates = self.research.register_batch(batch, context)
-        return RegisteredBatch(self.research.context, candidates)
+            return self.research.register_batch(batch, context)
+
+    def retain(self, candidates, context):
+        return self.research.retain(candidates, context)
+
+    def release(self, lease):
+        self.research.release_batch(lease)
 
     def judge_family(self, families, context):
         self.research.require_context(context)
@@ -390,6 +425,7 @@ class Session:
         self._backend = backend
         self._context = backend.context()
         self.grid = backend.grid()
+        self._leases: set[str] = set()
 
     @property
     def context(self):
@@ -445,10 +481,23 @@ class Session:
     def register(self, values: FloatArray, *, kind: Literal['signals', 'target_weights', 'target_exposure'],
                  ids: Sequence[str], grid: DataGrid, producer: str, observed_through: IntArray,
                  fit_through: IntArray, complexity: Sequence[float] | None = None) -> RegisteredBatch:
-        """Register model outputs; coordinates and information cutoffs remain explicit."""
+        """Own a bounded resident batch until release; this command does not persist it."""
         batch = ArrayBatch(kind, tuple(ids), values, grid.snapshot, producer, grid.dates, grid.assets,
                            observed_through, fit_through, None if complexity is None else tuple(complexity))
-        return self._backend.register(batch, self._context.id)
+        registered = self._backend.register(batch, self._context.id)
+        self._leases.add(registered.lease)
+        return registered
+
+    def retain(self, inputs: CandidateInput) -> RegisteredBatch:
+        """Return durable candidate references; the original lease still needs release."""
+        return self._backend.retain(self._candidates(inputs), self._context.id)
+
+    def release(self, batch: RegisteredBatch) -> None:
+        """End a resident lease; retained references remain usable after release."""
+        if not isinstance(batch, RegisteredBatch) or not batch.lease:
+            raise ValueError('release requires a registered resident batch lease')
+        self._backend.release(batch.lease)
+        self._leases.discard(batch.lease)
 
     def diagnose(self) -> Diagnostics:
         """Inspect portfolio gaps without changing its context or membership."""
@@ -496,7 +545,12 @@ class Session:
         return self._backend.resident()
 
     def close(self):
-        self._backend.close()
+        try:
+            for lease in tuple(self._leases):
+                self._backend.release(lease)
+                self._leases.remove(lease)
+        finally:
+            self._backend.close()
 
     def __enter__(self):
         return self

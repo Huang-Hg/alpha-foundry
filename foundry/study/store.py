@@ -22,6 +22,7 @@ from foundry.config import Settings
 from foundry.numeric.semantics import MOMENTS_SEMANTIC_VERSION
 from foundry.ops.registry import OPS_SEMANTIC_VERSION
 from foundry.types import LoadedStudy, PrecisionPlan, StudySnapshot
+from foundry.study.identity import FORMAT, canonical_json, digest_for, host_leaves, metadata_for, source_for
 
 
 def publish(path: Path, content: bytes) -> None:
@@ -36,19 +37,12 @@ def publish(path: Path, content: bytes) -> None:
         temp.unlink(missing_ok=True)
 
 
-FORMAT = 'candidate-array-v2'
-
-
 ARRAY_KEYS = {'metadata', 'values', 'observed_through', 'fit_through'}
-
-
-def _json(record):
-    return json.dumps(record, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
 
 
 def encode_archive(metadata, values, observed, fitted):
     output = BytesIO()
-    np.savez(output, metadata=np.asarray(_json(metadata)), values=values,
+    np.savez(output, metadata=np.asarray(canonical_json(metadata)), values=values,
              observed_through=observed, fit_through=fitted)
     return output.getvalue()
 
@@ -61,23 +55,12 @@ def decode_archive(payload):
                 archive['observed_through'], archive['fit_through'])
 
 
-def _digest(metadata, arrays):
-    digest = hashlib.sha256(_json(metadata).encode())
-    for array in arrays:
-        digest.update(str((array.dtype.str, array.shape)).encode())
-        digest.update(memoryview(np.ascontiguousarray(array)).cast('B'))
-    return digest.hexdigest()
-
-
 def _record(batch: ArrayBatch, index: int):
-    metadata = dict(format=FORMAT, kind=batch.kind, snapshot=batch.snapshot,
-                    producer=batch.producer, dates=batch.dates, assets=batch.assets)
-    complexity = 0. if batch.complexity is None else batch.complexity[index]
-    metadata['complexity'] = complexity
+    metadata = metadata_for(batch, index)
     arrays = (np.ascontiguousarray(batch.values[index]),
               np.ascontiguousarray(batch.observed_through[index], dtype=np.int64),
               np.ascontiguousarray(batch.fit_through[index], dtype=np.int64))
-    source = ArraySource(batch.kind, _digest(metadata, arrays), batch.snapshot, batch.producer, complexity)
+    source = source_for(metadata, digest_for(metadata, arrays, tuple(host_leaves(a[None])[0] for a in arrays)))
     return source, metadata, arrays
 
 
@@ -87,7 +70,7 @@ def publish_archive(path: Path, metadata: dict, arrays: tuple[np.ndarray, ...]) 
     temp = Path(name)
     try:
         with os.fdopen(fd, 'wb') as stream:
-            np.savez(stream, metadata=np.asarray(_json(metadata)), values=arrays[0],
+            np.savez(stream, metadata=np.asarray(canonical_json(metadata)), values=arrays[0],
                      observed_through=arrays[1], fit_through=arrays[2])
         os.replace(temp, path)
     finally:
@@ -98,8 +81,8 @@ def _read(payload, source):
     metadata, values, observed, fitted = decode_archive(payload)
     if metadata['format'] != FORMAT:
         raise ValueError('array artifact protocol differs; register a current bundle')
-    actual = ArraySource(metadata['kind'], _digest(metadata, (values, observed, fitted)),
-                         metadata['snapshot'], metadata['producer'], metadata['complexity'])
+    arrays = (values, observed, fitted)
+    actual = source_for(metadata, digest_for(metadata, arrays, tuple(host_leaves(a[None])[0] for a in arrays)))
     if actual != source:
         raise ValueError('array artifact digest or provenance differs from its source')
     for array in (values, observed, fitted):
@@ -114,6 +97,8 @@ class FileArrayStore:
         self.root = root
 
     def path_for(self, source: ArraySource):
+        if source.scope:
+            raise ValueError('resident source must be retained before file access')
         if re.fullmatch('[0-9a-f]{64}', source.digest) is None:
             raise ValueError('array digest must be a SHA-256 hex value')
         return self.root / (source.digest + '.npz')
@@ -176,6 +161,8 @@ class FileLibraryStore:
         return Library(tuple(member_from_json(m) for m in record['members']), study)
 
     def commit(self, expected, replacement):
+        if any(isinstance(m.source, ArraySource) and m.source.scope for m in replacement.members):
+            raise ValueError('portfolio publication requires retained array sources')
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = self.path.with_suffix('.lock')
         try:
@@ -203,6 +190,8 @@ class MemoryLibraryStore:
         return self.library
 
     def commit(self, expected, replacement):
+        if any(isinstance(m.source, ArraySource) and m.source.scope for m in replacement.members):
+            raise ValueError('portfolio publication requires retained array sources')
         if self.library.version != expected.version:
             raise ContextConflict('portfolio changed')
         self.library = replacement

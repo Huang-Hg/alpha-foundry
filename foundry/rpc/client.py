@@ -254,6 +254,12 @@ class RemoteBackend:
         payload = encode_bundle(batch)
         return self._call('research.register_batch', dict(context=context, bytes=len(payload)), RegisteredBatch, payload)
 
+    def retain(self, candidates: tuple[Candidate, ...], context: str) -> RegisteredBatch:
+        return self._call('research.retain', dict(context=context, candidates=[asdict(c) for c in candidates]), RegisteredBatch)
+
+    def release(self, lease: str) -> None:
+        self._call('research.release_batch', dict(lease=lease), type(None))
+
     def diagnose(self, context: str) -> Diagnostics:
         return self._call('research.diagnose', dict(context=context), Diagnostics)
 

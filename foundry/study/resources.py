@@ -27,6 +27,7 @@ from foundry.ops.evaluate import evaluate
 from foundry.numeric.parallel import HostWorkers
 from foundry.study.pipeline import DeviceResources, Pipeline
 from foundry.study.store import study_snapshot
+from foundry.study.identity import DeviceHasher, host_leaves
 from foundry.types import (
     ComputeDevice,
     Array,
@@ -127,6 +128,9 @@ class HostResources:
     def stage_host(self, values: Array) -> HostArray:
         return np.ascontiguousarray(values)
 
+    def content_leaves(self, values: Array) -> HostArray:
+        return host_leaves(values)
+
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
         return self.cfg.candidate_batch, self.cfg.workers
 
@@ -147,6 +151,7 @@ class CudaResources:
         self.device = cp.cuda.Device()
         self.placement = ComputeDevice('cuda', self.device.id)
         self.pool = cp.cuda.MemoryPool()
+        self.hasher = DeviceHasher(cp)
         self.streams = tuple(cp.cuda.Stream(non_blocking=True) for _ in range(stream_count))
 
     def formulas(self, roots: Sequence[Node], fields: Mapping[str, FloatArray],
@@ -193,6 +198,9 @@ class CudaResources:
         values.get(out=host, blocking=False)
         return host
 
+    def content_leaves(self, values: Array) -> HostArray:
+        return self.hasher.leaves(values)
+
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
         free, _ = self.cp.cuda.runtime.memGetInfo()
         T, S = shape
@@ -215,6 +223,7 @@ class CudaResources:
             self.finish_batch()
             self.device.synchronize()
             self.streams = ()
+            del self.hasher
             self.pool.free_all_blocks()
 
 

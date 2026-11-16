@@ -17,12 +17,12 @@ Admission never schedules a second simulation in a different precision.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from foundry.numeric import metrics as M
 from foundry.portfolio.reference import Reference
 from foundry.types import (
-    Array, BoolArray, ConstraintCheck, EvaluationRow, FloatArray, HostArray,
+    Array, ArraySource, BoolArray, ConstraintCheck, EvaluationRow, FloatArray, HostArray,
     IntArray, Proposal, SimulationResult, Verdict, WeightMetrics,
 )
 
@@ -116,7 +116,8 @@ def proposals(rows: Sequence[EvaluationRow], ref: Reference, trials: TrialPlan,
     ws, sh, cagr, growth, dd = measured.wsharpe, measured.sharpe, measured.cagr, measured.recent_growth, measured.maxdd
     delta, required, checks, utility = measured.delta, measured.required, measured.checks, measured.utility
     valid = measured.valid & unique
-    new = xp.asarray([r.source not in ref.keys for r in rows])
+    identities = (replace(r.source, scope='') if isinstance(r.source, ArraySource) else r.source for r in rows)
+    new = xp.asarray([source not in ref.keys for source in identities])
     capacity = xp.broadcast_to(~((ref.n >= cfg.max_members) & new)[:, None], weights.shape)
     feasible = checks.all(2) & valid & capacity
     passed = feasible.any(1)
