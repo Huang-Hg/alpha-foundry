@@ -201,6 +201,37 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
 
 不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
 
+### 非 GFN GPU 模型和非公式因子示例
+
+下面的可执行客户端位于验证套件，可直接替换其中的模型或张量程序；它不使用 GFN，也不把输出转换成公式。
+
+```python
+from validation.benchmarks.tensor_programs import TensorProposer
+
+with foundry.open(
+    backend="cuda",
+    search=foundry.Search(epochs=4, batch_size=64),
+    cuda=foundry.CUDA(candidate_batch=64, measurement_cache_mib=32),
+) as session:
+    proposer = TensorProposer(session, mode="mlp")
+    foundry.mine("var/runs/mlp-example", session=session, proposers=[proposer])
+```
+
+`mode="mlp"` 每 64 日用历史前缀拟合一批 8→16→1 的 FP32 网络，训练标签为 20 日收益，标签终点严格早于预测段。网络生成 `target_weights`；另一个 GPU 奖励代理网络从驻留反馈学习，指导下一批超参选择。它不会把研究期反馈更新后的预测器回填到过去。
+
+`mode="factor"` 用 GPU 张量、交互特征和横截面排序生成 `signals`，GPU CEM 根据同一奖励向量更新参数分布。示例还通过 `CandidateGrid` 执行九点邻域和延迟双生子检查。两者共用注册、归档、硬准入和有序提交接口；模型参数、拟合过程和学习规则由客户端持有。
+
+数组注册仍包含主机哈希和 NPZ 落盘；只有学习反馈是事件同步的驻留零拷贝，不能据此宣称端到端没有传输。输出及拟合截止点通过 `session.register` 显式声明。因果预测拟合不等于独立样本外选模：超参和因子搜索使用研究窗口反馈，报告中的收益仅供样本内研究。
+
+统一测速入口：
+
+```bash
+python -m foundry --parameters '{"search":{"epochs":4,"batch_size":64},"cuda":{"candidate_batch":64,"measurement_cache_mib":32}}' \
+  benchmark var/runs/nonformula-example --suite nonformula --backends cuda
+```
+
+耗时、误差和准入结果见 [L4 接入验收报告](benchmarks/nonformula-l4-20261116/README.zh-CN.md)。该短数据窗口的延迟双生子为空，邻域结果只作为接口验收，不能证明因子稳健。
+
 ### 不限于公式的稳健性检验
 
 公式可调用 `session.judge_family({"trend": "gt(ma_dist_20,0)"}, hypothesis="trend")`，由算子注册表派生参数与字段邻域。

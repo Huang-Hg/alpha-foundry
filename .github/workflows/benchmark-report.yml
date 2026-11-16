@@ -32,6 +32,9 @@ jobs:
       - name: Verify discovery evidence
         working-directory: guides/benchmarks/api-boundary-l4-20261116
         run: sha256sum -c SHA256SUMS
+      - name: Verify non-formula evidence
+        working-directory: guides/benchmarks/nonformula-l4-20261116
+        run: sha256sum -c SHA256SUMS
       - name: Verify selected data snapshots
         run: sha256sum -c data/SHA256SUMS
       - name: Bind evidence to the proposed source
@@ -77,8 +80,11 @@ jobs:
                      for p in Path(folder).rglob('*') if p.suffix in suffixes}
           recorded = {name for name in manifest if name.startswith(('foundry/', 'validation/'))}
           removed = {'foundry/search/proposer/src/gfn.cpp'}
+          clients = {'validation/benchmarks/nonformula.py', 'validation/benchmarks/tensor_programs.py',
+              'validation/test_tensor_programs.py'}
+          routing = {'foundry/api.py', 'foundry/__main__.py'}
           added = {'validation/benchmarks/discovery.py', 'foundry/search/proposer/model.py', 'foundry/search/proposer/sampling.py',
-              'foundry/search/proposer/device_sampling.py', 'foundry/search/proposer/batch.py', 'foundry/study/feedback.py'}
+              'foundry/search/proposer/device_sampling.py', 'foundry/search/proposer/batch.py', 'foundry/study/feedback.py'} | clients
           migration = removed | added | {'foundry/api.py', 'foundry/__main__.py', 'foundry/search/driver.py',
               'foundry/search/proposer/gfn.py', 'foundry/search/proposer/random.py',
               'validation/test_policy.py', 'validation/test_architecture.py', 'build.sh', 'requirements.txt',
@@ -99,7 +105,7 @@ jobs:
           discovery = Path('guides/benchmarks/api-boundary-l4-20261116')
           latest = json.loads((discovery / 'measured/plan.json').read_text())['source_sha256']
           smoke = json.loads((discovery / 'smoke/plan.json').read_text())['source_sha256']
-          if tracked != set(latest) or smoke != latest:
+          if tracked != set(latest) | clients or smoke != latest:
               raise SystemExit('Discovery source coverage or smoke identity differs')
           for stage, epochs, batch in (('smoke', 1, 32), ('measured', 8, 512)):
               result = json.loads((discovery / stage / 'summary.json').read_text())
@@ -114,8 +120,42 @@ jobs:
           with tarfile.open(discovery / 'source.tar.gz') as archive:
               for name, digest in latest.items():
                   measured = archive.extractfile(name).read()
-                  if hashlib.sha256(measured).hexdigest() != digest or canonical(Path(name).read_bytes()) != canonical(measured):
+                  if hashlib.sha256(measured).hexdigest() != digest:
+                      raise SystemExit(f'Discovery evidence checksum failed: {name}')
+                  if name not in routing and canonical(Path(name).read_bytes()) != canonical(measured):
                       raise SystemExit(f'Discovery evidence is stale for: {name}')
+          nonformula = Path('guides/benchmarks/nonformula-l4-20261116')
+          current = json.loads((nonformula / 'measured/plan.json').read_text())['source_sha256']
+          smoke = json.loads((nonformula / 'smoke/plan.json').read_text())['source_sha256']
+          if tracked != set(current) or smoke != current:
+              raise SystemExit('Non-formula source coverage or smoke identity differs')
+          differences = {name for name in current.keys() | latest.keys() if current.get(name) != latest.get(name)}
+          audit = json.loads((nonformula / 'source-audit.json').read_text())
+          if differences != clients | routing or differences != set(audit['changes']):
+              raise SystemExit('Non-formula integration changed the reviewed compute core')
+          with tarfile.open(nonformula / 'source.tar.gz') as archive:
+              for name, digest in current.items():
+                  measured = archive.extractfile(name).read()
+                  if hashlib.sha256(measured).hexdigest() != digest or canonical(Path(name).read_bytes()) != canonical(measured):
+                      raise SystemExit(f'Non-formula evidence is stale for: {name}')
+          for stage, count in (('smoke', 8), ('measured', 256)):
+              result = json.loads((nonformula / stage / 'summary.json').read_text())
+              if not result['passed'] or set(result['cases']) != {'mlp', 'factor'}:
+                  raise SystemExit('Non-formula workload coverage is incomplete')
+              for case in result['cases'].values():
+                  if not all(case[k] for k in ('passed', 'feedback_zero_copy', 'artifacts_pit_valid', 'resources_released')):
+                      raise SystemExit('Non-formula feedback or lifecycle contract failed')
+                  if case['candidates'] != count or case['formula_calls'] or case['gfn_calls'] or case['parameter_change'] <= 0:
+                      raise SystemExit('Non-formula learning trajectory is incomplete')
+          analysis = json.loads((nonformula / 'analysis.json').read_text())
+          submissions = json.loads((nonformula / 'submission.json').read_text())
+          for mode, passed in (('mlp', 47), ('factor', 74)):
+              case = analysis['cases'][mode]
+              contract = submissions[mode]
+              if case['counters']['g2'] != passed or case['accepted'] != 0 or case['rho_range'][0] <= .9:
+                  raise SystemExit('Hard admission and search selection evidence disagree')
+              if not all(contract[k] for k in ('passed', 'accepted', 'cas_conflict_rejected', 'query_readonly')) or contract['batch_vs_single_max_absolute_error'] != 0:
+                  raise SystemExit('Independent array submission contract failed')
           allowed = {'foundry/api.py', 'foundry/__main__.py', 'foundry/__init__.py', 'foundry/config.py',
               'foundry/backtest/cpu.py', 'foundry/backtest/perpetual_cpu.py', 'foundry/ops/src/module.cpp',
               'foundry/numeric/parallel.py', 'foundry/study/pipeline.py', 'foundry/study/resources.py',
@@ -153,6 +193,10 @@ jobs:
               discovery_report = Path('guides/benchmarks/api-boundary-l4-20261116/README.md').read_text()
               discovery_report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + discovery_base + match[1] + ')', discovery_report)
               output.write('\n\n' + discovery_report)
+              nonformula_base = base.replace('parallel-cpu-20261116', 'nonformula-l4-20261116')
+              nonformula_report = Path('guides/benchmarks/nonformula-l4-20261116/README.md').read_text()
+              nonformula_report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + nonformula_base + match[1] + ')', nonformula_report)
+              output.write('\n\n' + nonformula_report)
       - name: Preserve benchmark evidence
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -160,6 +204,7 @@ jobs:
           path: |
             guides/benchmarks/parallel-cpu-20261116/
             guides/benchmarks/api-boundary-l4-20261116/
+            guides/benchmarks/nonformula-l4-20261116/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

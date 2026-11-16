@@ -201,6 +201,37 @@ Custom proposers implement an `open(device)` context manager yielding a producer
 
 Without a supplied proposer, `foundry.mine(output, ...)` uses the configured built-in GFN or random formula proposer. The default `Search(accept=False)` still evolves an in-memory research portfolio through ordered admission and scheduled reweighting; it prevents persistent library publication. To publish, use `Search(accept=True, seed_portfolio="current")`. A supplied persistent session requires that publication setting; it is rejected with `accept=False`. `Discovery`, mining and walk-forward need an in-process session; their device-resident work is not a remote callback protocol.
 
+### Non-GFN GPU models and non-formula factors
+
+This executable validation client can be adapted to your own models or tensor programs. It uses neither GFN nor formula conversion.
+
+```python
+from validation.benchmarks.tensor_programs import TensorProposer
+
+with foundry.open(
+    backend="cuda",
+    search=foundry.Search(epochs=4, batch_size=64),
+    cuda=foundry.CUDA(candidate_batch=64, measurement_cache_mib=32),
+) as session:
+    proposer = TensorProposer(session, mode="mlp")
+    foundry.mine("var/runs/mlp-example", session=session, proposers=[proposer])
+```
+
+`mode="mlp"` fits a batch of 8→16→1 FP32 networks on historical prefixes every 64 days. The 20-day return labels end strictly before each prediction segment. Predictors emit `target_weights`; a separate GPU reward surrogate learns from resident feedback to guide the next hyperparameter batch. Research feedback never updates a predictor that is then backfilled into past decisions.
+
+`mode="factor"` uses GPU tensors, feature interactions and cross-sectional sorting to emit `signals`. GPU CEM updates its parameter distribution from the same reward vector. The example also evaluates a nine-point neighborhood and delayed twins through `CandidateGrid`. Both clients share registration, archives, hard admission and ordered commit; model parameters, causal fitting and learning rules remain client-owned.
+
+Array registration includes host hashing and NPZ persistence. Only learning feedback is event-ordered, resident and zero-copy; the complete workflow still transfers data. Outputs and fitting cutoffs are declared through `session.register`. Causal prediction fitting does not establish unbiased out-of-sample model selection: hyperparameter/factor search uses research-window feedback, and reported returns are in-sample research results.
+
+Unified measurement entry point:
+
+```bash
+python -m foundry --parameters '{"search":{"epochs":4,"batch_size":64},"cuda":{"candidate_batch":64,"measurement_cache_mib":32}}' \
+  benchmark var/runs/nonformula-example --suite nonformula --backends cuda
+```
+
+See the [L4 integration report](benchmarks/nonformula-l4-20261116/README.md) for timings, numerical checks and admission results. Its short data window produces empty delayed twins, so the family result is interface evidence, not a robustness claim.
+
 ### Test robustness without a formula restriction
 
 For formulas, `session.judge_family({"trend": "gt(ma_dist_20,0)"}, hypothesis="trend")` derives parameter and field neighbours from the operator registry.
