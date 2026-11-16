@@ -76,6 +76,19 @@ class ExprConfig:
 
 
 @dataclass(frozen=True)
+class CpuConfig:
+    workers: int = 8
+    candidate_batch: int = 32
+    measurement_cache_mib: int = 32
+
+    def __post_init__(self):
+        if any(type(x) is not int or x < 1 for x in (self.workers, self.candidate_batch)):
+            raise ValueError('CPU workers and candidate_batch must be positive integers')
+        if type(self.measurement_cache_mib) is not int or self.measurement_cache_mib < 0:
+            raise ValueError('CPU measurement_cache_mib must be a nonnegative integer')
+
+
+@dataclass(frozen=True)
 class CudaConfig:
     streams: int = 8
     candidate_batch: int = 256
@@ -200,6 +213,7 @@ class Settings:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     expr: ExprConfig = field(default_factory=ExprConfig)
     cuda: CudaConfig = field(default_factory=CudaConfig)
+    cpu: CpuConfig = field(default_factory=CpuConfig)
     portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     single: SingleConfig = field(default_factory=SingleConfig)
@@ -224,6 +238,7 @@ class Parameters(TypedDict, total=False):
     maintenance_rate: float
     liquidation_fee: float
     cuda: CudaConfig
+    cpu: CpuConfig
     admission: PortfolioConfig
     operators: ExprConfig
     search: SearchConfig
@@ -231,7 +246,7 @@ class Parameters(TypedDict, total=False):
     monitor: MonitorConfig
 
 
-PARAMETER_GROUPS = dict(cuda=('cuda', CudaConfig), admission=('portfolio', PortfolioConfig),
+PARAMETER_GROUPS = dict(cuda=('cuda', CudaConfig), cpu=('cpu', CpuConfig), admission=('portfolio', PortfolioConfig),
                         operators=('expr', ExprConfig), search=('search', SearchConfig),
                         single=('single', SingleConfig), monitor=('monitor', MonitorConfig))
 

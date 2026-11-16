@@ -1,0 +1,199 @@
+{
+  "schema": "foundry-parallel-cpu-v1",
+  "passed": true,
+  "flows": [
+    {
+      "device": "CPU 1 worker",
+      "candidates": 64,
+      "open_s": 0.13740083200002573,
+      "evaluate_s": 1.6867256909999924,
+      "commit_s": 2.4262988230000246,
+      "portfolio_report_s": 0.00010936000001038337,
+      "close_s": 0.00038492999999562016,
+      "evaluate_cpu_s": 1.6680299639999987,
+      "commit_cpu_s": 2.3803327000000003,
+      "evaluate_commit_s": 4.113024514000017,
+      "lifecycle_s": 4.250919636000049,
+      "valid": 64,
+      "accepted": 11,
+      "average_cores": 0.9842787589084576
+    },
+    {
+      "device": "CPU 1 worker",
+      "candidates": 4096,
+      "open_s": 0.1478959250000571,
+      "evaluate_s": 107.636748324,
+      "commit_s": 108.02331808300005,
+      "portfolio_report_s": 0.00016750999998293992,
+      "close_s": 0.002731699999912962,
+      "evaluate_cpu_s": 106.13671935799997,
+      "commit_cpu_s": 106.45951854600003,
+      "evaluate_commit_s": 215.66006640700004,
+      "lifecycle_s": 215.810861542,
+      "valid": 4058,
+      "accepted": 28,
+      "average_cores": 0.9857932506743371
+    },
+    {
+      "device": "CPU 8 worker",
+      "candidates": 64,
+      "open_s": 0.14626838599997427,
+      "evaluate_s": 0.869723227999998,
+      "commit_s": 1.2278798119999692,
+      "portfolio_report_s": 0.00011501900007715449,
+      "close_s": 0.0008171199999651435,
+      "evaluate_cpu_s": 3.115919431,
+      "commit_cpu_s": 4.409052707000001,
+      "evaluate_commit_s": 2.0976030399999672,
+      "lifecycle_s": 2.244803564999984,
+      "valid": 64,
+      "accepted": 11,
+      "average_cores": 3.5874147751045014
+    },
+    {
+      "device": "CPU 8 worker",
+      "candidates": 4096,
+      "open_s": 0.13460264500008634,
+      "evaluate_s": 54.99726375499995,
+      "commit_s": 51.647824894999985,
+      "portfolio_report_s": 0.00016698000001724722,
+      "close_s": 0.0030717500000037035,
+      "evaluate_cpu_s": 187.36127681199997,
+      "commit_cpu_s": 185.42670975,
+      "evaluate_commit_s": 106.64508864999993,
+      "lifecycle_s": 106.78293002500004,
+      "valid": 4058,
+      "accepted": 28,
+      "average_cores": 3.4955945114871465
+    },
+    {
+      "device": "A100",
+      "candidates": 64,
+      "open_s": 0.2127781619999496,
+      "evaluate_s": 0.07729865900000732,
+      "commit_s": 0.3435140710000155,
+      "portfolio_report_s": 9.575799998629009e-05,
+      "close_s": 0.010363590999986627,
+      "evaluate_commit_s": 0.42081273000002284,
+      "lifecycle_s": 0.6440502409999453,
+      "valid": 64,
+      "accepted": 11,
+      "average_cores": null
+    },
+    {
+      "device": "A100",
+      "candidates": 4096,
+      "open_s": 0.19996736199999532,
+      "evaluate_s": 2.931202075999977,
+      "commit_s": 3.7599163759999783,
+      "portfolio_report_s": 0.00018959900000936614,
+      "close_s": 0.042766367000012906,
+      "evaluate_commit_s": 6.691118451999955,
+      "lifecycle_s": 6.934041779999973,
+      "valid": 4058,
+      "accepted": 28,
+      "average_cores": null
+    },
+    {
+      "device": "L4",
+      "candidates": 64,
+      "open_s": 0.20651431900000716,
+      "evaluate_s": 0.0791050620000533,
+      "commit_s": 0.32395982100001675,
+      "portfolio_report_s": 8.910099995773635e-05,
+      "close_s": 0.019889077000016187,
+      "evaluate_commit_s": 0.40306488300007004,
+      "lifecycle_s": 0.6295573800000511,
+      "valid": 64,
+      "accepted": 11,
+      "average_cores": null
+    },
+    {
+      "device": "L4",
+      "candidates": 4096,
+      "open_s": 0.1966430139999602,
+      "evaluate_s": 3.709662613999967,
+      "commit_s": 4.099565606000056,
+      "portfolio_report_s": 0.00018353099994783406,
+      "close_s": 0.09157895199996346,
+      "evaluate_commit_s": 7.809228220000023,
+      "lifecycle_s": 8.097633716999894,
+      "valid": 4058,
+      "accepted": 28,
+      "average_cores": null
+    }
+  ],
+  "devices": {
+    "a100": {
+      "gpu": "NVIDIA A100-SXM4-40GB, 40960 MiB, 580.82.07",
+      "reviewed_source_changes": [
+        "foundry/__init__.py",
+        "foundry/__main__.py",
+        "foundry/api.py",
+        "foundry/backtest/cpu.py",
+        "foundry/backtest/perpetual_cpu.py",
+        "foundry/config.py",
+        "foundry/numeric/parallel.py",
+        "foundry/ops/src/module.cpp",
+        "foundry/study/pipeline.py",
+        "foundry/study/resources.py",
+        "validation/bench_workloads.py",
+        "validation/benchmarks/report.py",
+        "validation/benchmarks/run.py",
+        "validation/conftest.py",
+        "validation/test_cpu_parallel.py",
+        "validation/test_runtime.py"
+      ],
+      "gpu_benchmark_sha256": "50764f99caf2bc3ba5690ddb018537ac7d6797b25170151d0e7fd95a54d31f72"
+    },
+    "l4": {
+      "gpu": "NVIDIA L4, 23034 MiB, 580.82.07",
+      "reviewed_source_changes": [
+        "foundry/__init__.py",
+        "foundry/__main__.py",
+        "foundry/api.py",
+        "foundry/backtest/cpu.py",
+        "foundry/backtest/perpetual_cpu.py",
+        "foundry/config.py",
+        "foundry/numeric/parallel.py",
+        "foundry/ops/src/module.cpp",
+        "foundry/study/pipeline.py",
+        "foundry/study/resources.py",
+        "validation/bench_workloads.py",
+        "validation/benchmarks/report.py",
+        "validation/benchmarks/run.py",
+        "validation/conftest.py",
+        "validation/test_cpu_parallel.py",
+        "validation/test_runtime.py"
+      ],
+      "gpu_benchmark_sha256": "d643e2ad34cdd0bcac3125da0f7651d30cf325345c4182f2dcbbfdb3fb0d06a9"
+    }
+  },
+  "cpu": {
+    "runtime": "Colab CPU high-RAM",
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "cgroup_limits": {
+      "/sys/fs/cgroup/cpu.max": "max 100000"
+    },
+    "threads": 8,
+    "environment": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "MKL_NUM_THREADS": "1",
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_MAX_ACTIVE_LEVELS": "1"
+    }
+  },
+  "max_scaled_error": 7.409835669773838e-07,
+  "worker_max_abs_error": 0.0,
+  "decision_mismatches": 0
+}

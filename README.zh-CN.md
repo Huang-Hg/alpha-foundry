@@ -126,16 +126,17 @@ with foundry.open(
 
 `foundry.schema()` 为 Agent 提供参数和 RPC schema；`session.describe()` 返回当前研究的字段、算子与实际参数。比较其他设置时，打开新的会话即可。
 
-## 性能依据
+## 性能实测
 
-在 RTX PRO 6000 Blackwell Server 上，4096 条公式的公开 API 完整用例耗时为 **CUDA 2.879 秒、CPU 93.724 秒，加速 32.55 倍**。面板包含 500 只美股和 269 行日线，CPU 使用两个 OpenMP 线程。两端均接纳 28 个候选，实测流程没有决策不一致或数值误差超限。
+4096 条公式、269 日×500 美股的评价＋有序提交。CPU 固定为独立 Colab CPU 类型运行时（EPYC 7B12），不随显卡更换。
 
-| 公式数量 | CPU | CUDA | 加速倍数 |
-| --- | --- | --- | --- |
-| 1 | 0.0874 秒 | 0.0868 秒 | 1.01× |
-| 64 | 1.443 秒 | 0.231 秒 | 6.25× |
-| 4096 | 93.724 秒 | 2.879 秒 | 32.55× |
+| 设备 | 耗时 |
+| --- | ---: |
+| CPU 1 worker | 215.660 s |
+| CPU 8 worker | 106.645 s |
+| A100 | 6.691 s |
+| L4 | 7.809 s |
 
-完整用例包含打开、评价、有序提交、组合检查和关闭。以上为源码 `fa2acfd` 预热后单次测量的墙钟时间，不是多次重复的统计估计。[2026-11-15 报告](guides/benchmarks/arch-v2-pro6000-20261115/report.zh-CN.md) 给出全部 66 个算子及误差。公开回归通过；独立私有生产基线因原有旧格式工件未通过，原文件未改动，详见[验收范围](guides/benchmarks/arch-v2-pro6000-20261115/README.zh-CN.md)。此前 `current/` 报告继续作为历史记录保留。
+CPU 实际候选/试算并行带来 2.02 倍提速，两个 worker 配置的报告数值完全一致；四组均接纳 28 条。CPU 本轮实测，GPU 复用同数据与规则的已有测量；每个条件一次预热、一次测量。完整阶段、误差、空间界限和适用范围见[基准报告](guides/benchmarks/parallel-cpu-20261116/README.zh-CN.md)。
 
 [研究与程序接入](guides/research.zh-CN.md) · [可用数据](data/README.md) · [基准报告](guides/benchmarks/README.md)

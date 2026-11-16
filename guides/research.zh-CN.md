@@ -46,7 +46,7 @@ with foundry.open(
 
 ### 参数与自描述
 
-`market`、`backend`、`data_dir`、`start`、`end` 和市场费用直接传入。高级参数组包括 `foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single` 与 `Monitor`。参数在会话打开时固定；比较其他设置时另开会话。
+`market`、`backend`、`data_dir`、`start`、`end` 和市场费用直接传入。高级参数组包括 `foundry.CPU`、`foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single` 与 `Monitor`。参数在会话打开时固定；比较其他设置时另开会话。
 
 `foundry.schema()` 无需打开研究即可返回参数 schema、市场默认值与 RPC 契约。`session.describe()` 返回当前字段、66 个算子和实际参数。`foundry.mine(...)` 与 `foundry.serve(...)` 使用相同参数组；向挖掘器传入已有会话时，不再重复传参数。
 
@@ -289,4 +289,17 @@ CUDA 批量和精度显式配置。双 FP32 用两个分量在支持的账户与
 
 在获得授权的计算环境中，`python -m foundry benchmark OUTPUT` 是统一验证和基准入口，分别记录准备、驻留评价与完整查询/有序提交耗时，并报告数值误差和决策一致性。实现位于 [`validation/benchmarks`](../validation/benchmarks)，架构检查位于 [`validation/test_architecture.py`](../validation/test_architecture.py)。
 
-使用 `--backends cpu` 或 `foundry.benchmark(output, backends=("cpu",))` 可独立测量 CPU 基线，不初始化 CUDA。此模式运行基准契约检查与性能测量，不运行完整多设备回归。OpenMP/BLAS 线程数应匹配实际 CPU 配额并随结果保存；GPU 加速比必须注明所采用的固定 CPU 基线。
+使用 `--backends cpu` 或 `foundry.benchmark(output, backends=("cpu",))` 可独立测量 CPU 基线，不初始化 CUDA。此模式运行基准契约检查与性能测量，不运行完整多设备回归。将 OpenMP/BLAS 内层线程数设为 1，用 `cpu.workers` 匹配实际 CPU 配额并随结果保存；GPU 加速比必须注明所采用的固定 CPU 基线。
+
+### CPU 并行参数
+
+```python
+with foundry.open(backend="cpu", cpu=foundry.CPU(workers=8, candidate_batch=32,
+                                               measurement_cache_mib=32)) as session:
+    report = session.evaluate(formulas)
+    committed = session.commit(report)
+```
+
+独立候选和权重试算共享只读行情，在工作线程上并行执行；原生算子释放 GIL，每个 worker 内的 OpenMP 使用一个线程。最多同时挂起 `workers` 个任务，结果按输入顺序返回，组合仍由单写者按顺序提交。CPU 参数只影响执行资源，不改变研究快照身份或交易规则。
+
+公式的中间数组在单个候选完成后释放；权重试算只为正在运行的 worker 展开持仓，临时持仓空间为 `O(workers × T × S)`，而非 `O(试算总数 × T × S)`。收益和事件明细是调用所需输出，另按输出规模占用内存。运行基准时设置 `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`，通过 `cpu.workers` 控制候选并发，避免线程池叠加。

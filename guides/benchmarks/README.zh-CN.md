@@ -4,7 +4,7 @@
 
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
 
-A100/L4 的对比统一使用[固定 Colab CPU 基线](fixed-cpu-20261116/README.zh-CN.md)：独立 CPU 类型运行时，启用实际获配的全部 8 个 vCPU，不使用某张 GPU 附带的主机作为 CPU 基准。
+A100/L4 的对比统一使用[固定 Colab CPU 基线](parallel-cpu-20261116/README.zh-CN.md)：固定同一台独立 CPU 类型运行时，比较 1/8 个实际执行候选和试算的 worker；不使用某张 GPU 附带的主机作为 CPU 基准。此前 fixed-cpu 报告只有算子内部线程，保留为历史记录。
 
 [小缓存与多 GPU 对比](compact-multigpu-20261116/README.zh-CN.md) 将此前的完整持仓缓存改为 32 MiB 收益/报告预算，让成员持仓空间独立于候选总数，并以相同输入比较各 GPU 的耗时、显存和决策。
 
@@ -21,10 +21,10 @@ A100/L4 的对比统一使用[固定 Colab CPU 基线](fixed-cpu-20261116/README
 ```bash
 python -m pip install -r requirements-benchmark.txt
 bash build.sh
-OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 python -m foundry benchmark var/runs/benchmark-new --backends cpu
+OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m foundry benchmark var/runs/benchmark-new --backends cpu
 ```
 
-示例使用 8 vCPU 的 CPU 类型运行时，线程数应匹配实际 CPU affinity 与配额，并记录 OpenMP/BLAS 设置。`--backends cpu` 不需要 CuPy 或显卡，只运行基准契约检查与测量。省略 `--backends` 则在授权 GPU 上执行完整回归与 CPU/CUDA 双端测量，此时才需要匹配 CUDA 的 CuPy。计算在选定的云端实例执行；GitHub Actions 只展示和归档已测结果。
+示例使用 8 vCPU 的 CPU 类型运行时，`cpu.workers` 应匹配实际 CPU affinity 与配额，OpenMP/BLAS 内层线程设为 1。`--backends cpu` 不需要 CuPy 或显卡，只运行基准契约检查与测量。省略 `--backends` 则在授权 GPU 上执行完整回归与 CPU/CUDA 双端测量，此时才需要匹配 CUDA 的 CuPy。计算在选定的云端实例执行；GitHub Actions 只展示和归档已测结果。
 
 执行、计时和 HTML 验证报告分别使用 [pytest](https://docs.pytest.org/en/stable/how-to/unittest.html)、[pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/latest/pedantic.html) 与 pytest-html。原有回归检查迁入 `validation/`，删除旧 `tests/` 和 `scripts/` 目录。
 

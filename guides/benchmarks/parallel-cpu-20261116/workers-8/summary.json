@@ -1,0 +1,22 @@
+{
+  "schema": "foundry-benchmark-v2",
+  "passed": true,
+  "mode": "single_backend",
+  "backend": "cpu",
+  "validation": {
+    "tests": 6818,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "validation_scope": "benchmark_contracts",
+  "operator_cases": {
+    "expected": 124,
+    "observed": 124,
+    "missing": [],
+    "unexpected": []
+  },
+  "incomplete": [],
+  "missing_flows": [],
+  "cross_backend_comparison": false
+}

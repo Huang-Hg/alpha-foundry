@@ -128,14 +128,15 @@ with foundry.open(
 
 ## Performance evidence
 
-On an RTX PRO 6000 Blackwell Server, the 4096-formula public API case took **2.879 s on CUDA versus 93.724 s on CPU — 32.55× faster**. The panel contained 500 US equities and 269 daily rows; CPU used two OpenMP threads. Both admitted 28 candidates, with no decision mismatches or numerical tolerance exceedances in the measured workflow.
+Evaluation + ordered commit for 4096 formulas over 269 days × 500 US equities. The CPU reference is one fixed, independent Colab CPU runtime (EPYC 7B12).
 
-| Formula count | CPU | CUDA | Speedup |
-| --- | --- | --- | --- |
-| 1 | 0.0874 s | 0.0868 s | 1.01× |
-| 64 | 1.443 s | 0.231 s | 6.25× |
-| 4096 | 93.724 s | 2.879 s | 32.55× |
+| Backend | Time |
+| --- | ---: |
+| CPU 1 worker | 215.660 s |
+| CPU 8 worker | 106.645 s |
+| A100 | 6.691 s |
+| L4 | 7.809 s |
 
-Complete cases include open, evaluate, ordered commit, portfolio inspection and close. These are wall times from one measured round after warm-up on source `fa2acfd`, not repeated statistical estimates. See the [2026-11-15 report](guides/benchmarks/arch-v2-pro6000-20261115/report.md) for all 66 operators and errors. Public regression checks passed; the separate private production baseline audit failed on its unchanged legacy artifact, as detailed in the [validation scope](guides/benchmarks/arch-v2-pro6000-20261115/README.md). Earlier `current/` reports remain historical.
+Actual CPU candidate/trial parallelism improves throughput 2.02× with identical worker reports; all four runs admit 28 candidates. CPU was measured in this run; GPU measurements reuse the same data and rules. One warm-up and one measured round per condition. See the [benchmark report](guides/benchmarks/parallel-cpu-20261116/README.md) for stages, errors, memory bounds and scope.
 
 [Research and integration](guides/research.md) · [Available data](data/README.md) · [Benchmark reports](guides/benchmarks/README.md)

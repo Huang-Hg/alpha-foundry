@@ -46,7 +46,7 @@ Admission reports expose each constraint's raw `delta` and `required` threshold;
 
 ### Parameters and discovery
 
-Pass `market`, `backend`, `data_dir`, `start`, `end` and market costs directly. Advanced groups are `foundry.CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`. All settings are fixed when a session opens; open another session to compare them.
+Pass `market`, `backend`, `data_dir`, `start`, `end` and market costs directly. Advanced groups are `foundry.CPU`, `foundry.CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`. All settings are fixed when a session opens; open another session to compare them.
 
 `foundry.schema()` returns the parameter schema, market defaults and RPC contract without opening a study. `session.describe()` supplies available fields, the 66 operators and resolved parameters. `foundry.mine(...)` and `foundry.serve(...)` accept the same parameter groups. A supplied mining session already owns its parameters.
 
@@ -289,4 +289,17 @@ The separate private production audit failed: its preserved baseline lacks proto
 
 For an authorized compute environment, `python -m foundry benchmark OUTPUT` is the unified validation/benchmark entry point. It separates preparation from resident evaluation and complete query/ordered-commit timing, and reports numerical errors and decision consistency. The source is in [`validation/benchmarks`](../validation/benchmarks); architecture checks are in [`validation/test_architecture.py`](../validation/test_architecture.py).
 
-Use `--backends cpu` or `foundry.benchmark(output, backends=("cpu",))` to measure an independent CPU baseline without initializing CUDA. This selects benchmark contracts and measurements, not the full multi-device regression suite. Set OpenMP/BLAS threads to the allocated CPU capacity and retain that configuration with the result; GPU speedups must name the fixed CPU reference they use.
+Use `--backends cpu` or `foundry.benchmark(output, backends=("cpu",))` to measure an independent CPU baseline without initializing CUDA. This selects benchmark contracts and measurements, not the full multi-device regression suite. Set OpenMP/BLAS threads to one and set `cpu.workers` to the allocated CPU capacity and retain that configuration with the result; GPU speedups must name the fixed CPU reference they use.
+
+### CPU parallelism
+
+```python
+with foundry.open(backend="cpu", cpu=foundry.CPU(workers=8, candidate_batch=32,
+                                               measurement_cache_mib=32)) as session:
+    report = session.evaluate(formulas)
+    committed = session.commit(report)
+```
+
+Independent candidates and weight trials share read-only market panels across workers. Native operators release the GIL; each worker uses one OpenMP lane. At most `workers` tasks are outstanding, results retain input order, and the portfolio has one ordered writer. CPU settings affect execution resources, not snapshot identity or trading semantics.
+
+Expression intermediates expire after each candidate. Weight trials materialize books only for active workers: temporary book space is `O(workers * T * S)`, rather than `O(total_trials * T * S)`. Required return/event outputs occupy their own output-sized storage. Use `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` for benchmarking and control candidate concurrency through `cpu.workers` to avoid nested thread pools.

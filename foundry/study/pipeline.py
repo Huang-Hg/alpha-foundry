@@ -23,7 +23,6 @@ from foundry.numeric.allocation import cap_book
 
 from foundry.config import CudaConfig, Settings
 from foundry.numeric import metrics as M
-from foundry.ops.evaluate import evaluate
 from foundry.ops.parse import validate
 from foundry.portfolio.allocation import signal_to_book
 from foundry.study.cache import CandidateCache, MeasurementKey, MemberKey
@@ -52,6 +51,7 @@ from foundry.types import (
 )
 
 if TYPE_CHECKING:
+    from foundry.ops.ast import Node
     from cupy.cuda import Stream
 
     from foundry.backtest.cpu import Executor as CashHostExecutor
@@ -78,6 +78,9 @@ INVALID = 'G1 数值无效:含无穷值或全为缺失'
 class DeviceResources(Protocol):
     """Explicit host/device ownership needed by candidate computation."""
     streams: tuple[nullcontext[None] | Stream, ...]
+
+    def formulas(self, roots: Sequence[Node], fields: Mapping[str, FloatArray],
+                 backend: Backend, universe: BoolArray) -> list[FloatArray]: ...
 
     def scope(self) -> AbstractContextManager[None]: ...
     def start_batch(self) -> None: ...
@@ -211,10 +214,7 @@ class Pipeline:
                            saved: Mapping[Source, EvaluationRow]) -> list[EvaluationRow]:
         """Evaluate candidates without publishing state; device books/returns belong to this runtime."""
         xp, precision = self.xp, self.precision
-        self.resources.start_batch()
-        streams = self.resources.streams
-        caches = [{} for _ in streams]
-        rows, ids, values = [], [], []
+        rows, ids = [], []
         for expr in exprs:
             text = expr.strip()
             parsed = validate(text, self.vocabulary, self.expr_cfg.max_cost)
@@ -226,14 +226,11 @@ class Pipeline:
             why = self.backend.unsupported(row.tree)
             if why:
                 raise RuntimeError(f'{self.backend.name} operator implementation required: {why}: {text}')
-            k = len(ids) % len(streams)
-            with streams[k]:
-                values.append(evaluate(row.tree.root, self.fields, self.backend, caches[k], self.universe))
             ids.append(len(rows) - 1)
-        self.resources.finish_batch()
         if not ids:
             return rows
-        values = xp.stack(values)
+        values = xp.stack(self.resources.formulas([rows[i].tree.root for i in ids],
+                          self.fields, self.backend, self.universe))
         if delayed:
             values = delay_shift(values, [rows[i].source.expression for i in ids], xp, xp.nan)
         finite = (~xp.isinf(values).any(axis=(1, 2))) & xp.isfinite(values).any(axis=(1, 2))

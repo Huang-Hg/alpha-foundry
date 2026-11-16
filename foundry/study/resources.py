@@ -1,7 +1,7 @@
 """Explicit startup assembly. Each runtime owns its compute resources and study."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType, TracebackType
@@ -12,6 +12,7 @@ import numpy as np
 from foundry.config import (
     AShareConfig,
     CryptoSpotConfig,
+    CpuConfig,
     CudaConfig,
     Settings,
     UsEquityConfig,
@@ -22,10 +23,14 @@ from foundry.market.data import load_data
 from foundry.market.perpetual import CryptoPerpetual
 from foundry.market.us_equity import UsEquity
 from foundry.ops.registry import MAX_WINDOW
+from foundry.ops.evaluate import evaluate
+from foundry.numeric.parallel import HostWorkers
 from foundry.study.pipeline import DeviceResources, Pipeline
 from foundry.study.store import study_snapshot
 from foundry.types import (
     Backend,
+    BoolArray,
+    FloatArray,
     ExecutionSpec,
     ParsedFormula,
     PerpetualSpec,
@@ -36,6 +41,7 @@ from foundry.types import (
 )
 
 if TYPE_CHECKING:
+    from foundry.ops.ast import Node
     from foundry.market.panel import Panel
     from foundry.study.pipeline import ExecutionBackend, StudyData
 
@@ -93,8 +99,14 @@ def load_study(settings: Settings, study: Study, backend: Backend) -> StudyData:
 
 
 class HostResources:
-    def __init__(self) -> None:
+    def __init__(self, cfg: CpuConfig, initializer: Callable[[], None] | None = None) -> None:
+        self.cfg = cfg
+        self.workers = HostWorkers(cfg.workers, initializer)
         self.streams = (nullcontext(),)
+
+    def formulas(self, roots: Sequence[Node], fields: Mapping[str, FloatArray],
+                 backend: Backend, universe: BoolArray) -> list[FloatArray]:
+        return list(self.workers.map(lambda root: evaluate(root, fields, backend, {}, universe), roots))
 
     def scope(self) -> nullcontext[None]:
         return nullcontext()
@@ -109,15 +121,16 @@ class HostResources:
         pass
 
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
-        return cfg.candidate_batch, cfg.trial_batch
+        return self.cfg.candidate_batch, self.cfg.workers
 
     def measurement_budget(self, cfg: CudaConfig) -> int:
-        return cfg.measurement_cache_mib * 1048576
+        return self.cfg.measurement_cache_mib * 1048576
 
     def status(self) -> ResourceStatus:
         return ResourceStatus('CPU', 0)
 
     def close(self) -> None:
+        self.workers.close()
         self.streams = ()
 
 
@@ -127,6 +140,18 @@ class CudaResources:
         self.device = cp.cuda.Device()
         self.pool = cp.cuda.MemoryPool()
         self.streams = tuple(cp.cuda.Stream(non_blocking=True) for _ in range(stream_count))
+
+    def formulas(self, roots: Sequence[Node], fields: Mapping[str, FloatArray],
+                 backend: Backend, universe: BoolArray) -> list[FloatArray]:
+        self.start_batch()
+        caches = [{} for _ in self.streams]
+        values = []
+        for i, root in enumerate(roots):
+            k = i % len(self.streams)
+            with self.streams[k]:
+                values.append(evaluate(root, fields, backend, caches[k], universe))
+        self.finish_batch()
+        return values
 
     @contextmanager
     def scope(self) -> Iterator[None]:
@@ -238,11 +263,12 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
                 prepare_execution = lambda: perpetual_cuda.prepare(perpetual_cpu.prepare(), settings.cuda.perpetual_host_cells)
         elif name in ('cpu', 'portable'):
             from foundry.backtest import cpu
-            resources = HostResources()
-            prepare_execution = cpu.prepare
+            from foundry.ops import _ops
+            resources = HostResources(settings.cpu, _ops.worker_init)
+            prepare_execution = lambda: cpu.prepare(resources.workers)
             if study.market == 'crypto_perpetual':
                 from foundry.backtest import perpetual_cpu
-                prepare_execution = perpetual_cpu.prepare
+                prepare_execution = lambda: perpetual_cpu.prepare(resources.workers)
         else:
             raise ValueError(f'Unknown execution backend: {name}')
         cleanup.callback(resources.close)
