@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Hashable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
 from foundry.types import ArraySource, EvaluationRow, FloatArray, Source
@@ -55,16 +55,16 @@ class MemberKey:
 
 
 class MeasurementCache:
-    """Evict complete allocations, since row views retain their whole device batch.
+    """Retain only (T,) returns and compact reports, never (T,S) candidate books.
 
-    The budget reserves a full (T,S) book and (T,) return per entry, plus 4 KiB
-    for report metadata. Invalid entries consume the same reservation. Allocation
-    groups stay intact even when only one row is recently used.
+    Reserve full-grid returns and 4 KiB of report metadata per entry. Evict
+    complete return allocations because row views share their batch buffer.
+    Invalid entries consume the same reservation. Working books are regenerated
+    in bounded batches; the cache footprint is independent of asset count.
     """
 
-    def __init__(self, budget: int, shape: tuple[int, int]):
-        days, assets = shape
-        self.entry_bytes = days * (assets + 1) * 8 + 4096
+    def __init__(self, budget: int, days: int):
+        self.entry_bytes = days * 8 + 4096
         self.capacity = budget // self.entry_bytes
         self.capacity_bytes = budget
         self._groups: OrderedDict[MeasurementKey, tuple[MeasurementKey, ...]] = OrderedDict()
@@ -94,7 +94,7 @@ class MeasurementCache:
                 del self._rows[key]
         group = keys[0]
         self._groups[group] = tuple(keys)
-        self._rows.update((key, (group, row)) for key, row in zip(keys, rows))
+        self._rows.update((key, (group, replace(row, book=None, tree=None))) for key, row in zip(keys, rows))
 
     def clear(self) -> None:
         self._groups.clear()
@@ -102,13 +102,13 @@ class MeasurementCache:
 
 
 class CandidateCache:
-    """A runtime owns copied inputs and borrowed (T,S) books/(T,) returns."""
+    """Own bounded inputs/member books and compact snapshot measurements."""
 
-    def __init__(self, candidate_batch: int, max_members: int, budget: int, shape: tuple[int, int]):
+    def __init__(self, candidate_batch: int, max_members: int, budget: int, days: int):
         self.arrays: BoundedCache[ArraySource, FloatArray] = BoundedCache(candidate_batch)
-        self.reports = MeasurementCache(budget, shape)
+        self.reports = MeasurementCache(budget, days)
         self.members: BoundedCache[MemberKey, tuple[FloatArray, FloatArray]] = BoundedCache(
-            max(candidate_batch, 2 * (max_members + 1)))
+            2 * (max_members + 1))
 
     def close(self) -> None:
         self.members.clear()

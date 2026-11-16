@@ -6,7 +6,7 @@ The pipeline borrows resources and bounded caches, and never loads a market.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import replace
 from functools import wraps
@@ -135,7 +135,7 @@ class Pipeline:
         self.commit_batch = self.candidate_batch if executor.parallel_trials else 1
         self.precision = context.precision.effective
         self.cache = CandidateCache(self.candidate_batch, settings.portfolio.max_members,
-                                    resources.measurement_budget(settings.cuda), self.panel.shape)
+                                    resources.measurement_budget(settings.cuda), self.panel.shape[0])
 
     def batches(self, items: Sequence[Item]) -> Iterator[Sequence[Item]]:
         """Apply the runtime's resident candidate bound at every batch boundary."""
@@ -207,7 +207,8 @@ class Pipeline:
         """Evaluate formula batches through the same bounded source pipeline."""
         return self.evaluate_sources([Formula(text) for text in exprs], report, delayed=delayed)
 
-    def _evaluate_formulas(self, exprs: Sequence[str], report: bool, delayed: bool) -> list[EvaluationRow]:
+    def _evaluate_formulas(self, exprs: Sequence[str], report: bool, delayed: bool,
+                           saved: Mapping[Source, EvaluationRow]) -> list[EvaluationRow]:
         """Evaluate candidates without publishing state; device books/returns belong to this runtime."""
         xp, precision = self.xp, self.precision
         self.resources.start_batch()
@@ -237,13 +238,28 @@ class Pipeline:
             values = delay_shift(values, [rows[i].source.expression for i in ids], xp, xp.nan)
         finite = (~xp.isinf(values).any(axis=(1, 2))) & xp.isfinite(values).any(axis=(1, 2))
         books = self.signal_to_book(values)
-        return self._measure(rows, ids, books, finite, report, precision)
+        return self._measure(rows, ids, books, finite, report, saved)
 
     def _measure(self, rows: list[EvaluationRow], ids: Sequence[int], books: FloatArray,
-                 finite: BoolArray, report: bool, precision: str) -> list[EvaluationRow]:
+                 finite: BoolArray, report: bool, saved: Mapping[Source, EvaluationRow]) -> list[EvaluationRow]:
         xp = self.xp
         if report:
-            for i, stats, good in zip(ids, self.metrics(books), self.to_host(finite).tolist()):
+            # These books are owned by this batch; match the execution prefix
+            # even when cached returns avoid another account simulation.
+            books[:, :self.start] = 0
+            pending = []
+            for j, i in enumerate(ids):
+                row = rows[i]
+                if row.source in saved:
+                    rows[i] = replace(saved[row.source], tree=row.tree, book=books[j])
+                else:
+                    pending.append((j, i))
+            if not pending:
+                return rows
+            positions, indices = zip(*pending)
+            selected = books if len(pending) == len(ids) else books[list(positions)]
+            good_rows = self.to_host(finite[list(positions)]).tolist()
+            for i, stats, good in zip(indices, self.metrics(selected), good_rows):
                 row = rows[i]
                 row.ok, row.error = good, None if good else INVALID
                 row.book, row.returns = stats.book, stats.returns
@@ -273,23 +289,24 @@ class Pipeline:
     def _evaluate_batch(self, sources: Sequence[Source], report: bool, delayed: bool) -> list[EvaluationRow]:
         precision = self.precision
         if not report:
-            return self._compute_sources(sources, report, precision, delayed)
+            return self._compute_sources(sources, report, precision, delayed, {})
         keys = [MeasurementKey(self.context.id, source, precision, delayed) for source in sources]
-        found = {key: self.cache.reports[key] for key in keys if key in self.cache.reports}
-        missing = list(dict.fromkeys(key for key in keys if key not in found))
+        unique = list(dict.fromkeys(keys))
+        saved = {key.source: self.cache.reports[key] for key in unique if key in self.cache.reports}
+        computed = self._compute_sources([key.source for key in unique], True, precision, delayed, saved)
+        found = dict(zip(unique, computed))
+        missing = [key for key in unique if key.source not in saved]
         if missing:
-            computed = self._compute_sources([key.source for key in missing], True, precision, delayed)
-            found.update(zip(missing, computed))
-            self.cache.reports.put(missing, computed)
+            self.cache.reports.put(missing, [found[key] for key in missing])
         return [replace(found[key]) for key in keys]
 
     def _compute_sources(self, sources: Sequence[Source], report: bool, precision: str,
-                         delayed: bool) -> list[EvaluationRow]:
+                         delayed: bool, saved: Mapping[Source, EvaluationRow]) -> list[EvaluationRow]:
         """Every source becomes a book before the same execution/metrics path."""
         rows = [EvaluationRow(source, True, None, precision) for source in sources]
         formulas = [i for i, source in enumerate(sources) if isinstance(source, Formula)]
         if formulas:
-            computed = self._evaluate_formulas([sources[i].expression for i in formulas], report, delayed)
+            computed = self._evaluate_formulas([sources[i].expression for i in formulas], report, delayed, saved)
             for i, row in zip(formulas, computed):
                 rows[i] = row
         for kind in ('signals', 'target_weights', 'target_exposure'):
@@ -308,13 +325,14 @@ class Pipeline:
             else:
                 finite = self.xp.ones(len(ids), dtype=bool)
                 books = cap_book(self.xp.where(self.universe, values, 0.), self.allocation, self.xp)
-            self._measure(rows, ids, books, finite, report, precision)
+            self._measure(rows, ids, books, finite, report, saved)
         ids = [i for i, source in enumerate(sources) if isinstance(source, EqualWeight)]
         if ids:
             self._measure(rows, ids, self.xp.stack([self.equal_weight()] * len(ids)),
-                          self.xp.ones(len(ids), dtype=bool), report, precision)
+                          self.xp.ones(len(ids), dtype=bool), report, saved)
         return rows
 
+    @resource_scope
     def members(self, sources: Sequence[Source], *, delayed: bool = False) -> list[tuple[FloatArray, FloatArray]]:
         """Borrow books and returns within this pipeline's immutable study snapshot."""
         keys = [MemberKey(source, delayed) for source in sources]
@@ -325,14 +343,15 @@ class Pipeline:
                 source = key.source
                 if not row.ok:
                     raise ValueError(f'portfolio member cannot be evaluated: {source!r}: {row.error}')
-                found[key] = (row.book, row.returns)
+                found[key] = (row.book.copy(), row.returns.copy())
         for key in keys:
             self.cache.members[key] = found[key]
         return [found[key] for key in keys]
 
+    @resource_scope
     def retain_member(self, row: EvaluationRow, *, delayed: bool = False) -> None:
         """Keep an admitted book while its raw input can leave the bounded cache."""
-        self.cache.members[MemberKey(row.source, delayed)] = (row.book, row.returns)
+        self.cache.members[MemberKey(row.source, delayed)] = (row.book.copy(), row.returns.copy())
 
     @resource_scope
     def signal_to_book(self, values: FloatArray) -> FloatArray:

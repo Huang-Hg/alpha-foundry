@@ -1,0 +1,222 @@
+{
+  "passed": true,
+  "devices": {
+    "pro": "NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 580.82.07",
+    "a100": "NVIDIA A100-SXM4-40GB, 40960 MiB, 580.82.07",
+    "l4": "NVIDIA L4, 23034 MiB, 580.82.07"
+  },
+  "checks": {
+    "pro/smoke": {
+      "tests": 6754,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "pro/measured": {
+      "tests": 7750,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1
+    },
+    "a100/smoke": {
+      "tests": 6754,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "a100/measured": {
+      "tests": 252,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "l4/smoke": {
+      "tests": 6754,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "l4/measured": {
+      "tests": 252,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "flow": [
+    {
+      "device": "PRO 6000",
+      "candidates": 64,
+      "open_s": 0.06873130300004959,
+      "evaluate_s": 0.027945780999971248,
+      "commit_s": 0.13134575699996276,
+      "portfolio_report_s": 3.477000007023889e-05,
+      "close_s": 0.0066790900000341935,
+      "evaluate_commit_s": 0.159291537999934,
+      "lifecycle_s": 0.23473670100008803,
+      "sampled_device_peak_mib": 5828.1875,
+      "valid": 64,
+      "accepted": 11
+    },
+    {
+      "device": "PRO 6000",
+      "candidates": 256,
+      "open_s": 0.07125558300003831,
+      "evaluate_s": 0.08927334400004838,
+      "commit_s": 0.5451224759999604,
+      "portfolio_report_s": 4.4880000018565624e-05,
+      "close_s": 0.023902482000039527,
+      "evaluate_commit_s": 0.6343958200000088,
+      "lifecycle_s": 0.7295987650001052,
+      "sampled_device_peak_mib": 7668.1875,
+      "valid": 254,
+      "accepted": 17
+    },
+    {
+      "device": "PRO 6000",
+      "candidates": 1024,
+      "open_s": 0.07113701299999775,
+      "evaluate_s": 0.28435294399992017,
+      "commit_s": 0.49081415300008757,
+      "portfolio_report_s": 5.3429999979925924e-05,
+      "close_s": 0.027183610999941266,
+      "evaluate_commit_s": 0.7751670970000077,
+      "lifecycle_s": 0.8735411509999267,
+      "sampled_device_peak_mib": 8062.1875,
+      "valid": 1013,
+      "accepted": 21
+    },
+    {
+      "device": "PRO 6000",
+      "candidates": 4096,
+      "open_s": 0.07107122399997934,
+      "evaluate_s": 1.2521319300000187,
+      "commit_s": 1.5333821869999156,
+      "portfolio_report_s": 6.891000009545678e-05,
+      "close_s": 0.03118569799994475,
+      "evaluate_commit_s": 2.7855141169999342,
+      "lifecycle_s": 2.8878399489999538,
+      "sampled_device_peak_mib": 8156.1875,
+      "valid": 4058,
+      "accepted": 28
+    },
+    {
+      "device": "A100",
+      "candidates": 64,
+      "open_s": 0.2127781619999496,
+      "evaluate_s": 0.07729865900000732,
+      "commit_s": 0.3435140710000155,
+      "portfolio_report_s": 9.575799998629009e-05,
+      "close_s": 0.010363590999986627,
+      "evaluate_commit_s": 0.42081273000002284,
+      "lifecycle_s": 0.6440502409999453,
+      "sampled_device_peak_mib": 1249.9375,
+      "valid": 64,
+      "accepted": 11
+    },
+    {
+      "device": "A100",
+      "candidates": 256,
+      "open_s": 0.19921626600000764,
+      "evaluate_s": 0.2570371880000266,
+      "commit_s": 1.5734306519999564,
+      "portfolio_report_s": 0.00012225200003967984,
+      "close_s": 0.033985067000003255,
+      "evaluate_commit_s": 1.830467839999983,
+      "lifecycle_s": 2.0637914250000335,
+      "sampled_device_peak_mib": 3089.9375,
+      "valid": 254,
+      "accepted": 17
+    },
+    {
+      "device": "A100",
+      "candidates": 1024,
+      "open_s": 0.20025348299998313,
+      "evaluate_s": 0.7908445830000232,
+      "commit_s": 1.2227674559999855,
+      "portfolio_report_s": 0.00016133600001921877,
+      "close_s": 0.04053080799997133,
+      "evaluate_commit_s": 2.0136120390000087,
+      "lifecycle_s": 2.2545576659999824,
+      "sampled_device_peak_mib": 3521.9375,
+      "valid": 1013,
+      "accepted": 21
+    },
+    {
+      "device": "A100",
+      "candidates": 4096,
+      "open_s": 0.19996736199999532,
+      "evaluate_s": 2.931202075999977,
+      "commit_s": 3.7599163759999783,
+      "portfolio_report_s": 0.00018959900000936614,
+      "close_s": 0.042766367000012906,
+      "evaluate_commit_s": 6.691118451999955,
+      "lifecycle_s": 6.934041779999973,
+      "sampled_device_peak_mib": 3615.9375,
+      "valid": 4058,
+      "accepted": 28
+    },
+    {
+      "device": "L4",
+      "candidates": 64,
+      "open_s": 0.20651431900000716,
+      "evaluate_s": 0.0791050620000533,
+      "commit_s": 0.32395982100001675,
+      "portfolio_report_s": 8.910099995773635e-05,
+      "close_s": 0.019889077000016187,
+      "evaluate_commit_s": 0.40306488300007004,
+      "lifecycle_s": 0.6295573800000511,
+      "sampled_device_peak_mib": 1016.0,
+      "valid": 64,
+      "accepted": 11
+    },
+    {
+      "device": "L4",
+      "candidates": 256,
+      "open_s": 0.1957450490000383,
+      "evaluate_s": 0.3025466519999327,
+      "commit_s": 1.7908029830000487,
+      "portfolio_report_s": 0.00011458999995284103,
+      "close_s": 0.07388770900001873,
+      "evaluate_commit_s": 2.0933496349999814,
+      "lifecycle_s": 2.3630969829999913,
+      "sampled_device_peak_mib": 2856.0,
+      "valid": 254,
+      "accepted": 17
+    },
+    {
+      "device": "L4",
+      "candidates": 1024,
+      "open_s": 0.1965124690000266,
+      "evaluate_s": 0.9900235180000436,
+      "commit_s": 1.2270305009999447,
+      "portfolio_report_s": 0.00015274400004727795,
+      "close_s": 0.08384421099992778,
+      "evaluate_commit_s": 2.2170540189999883,
+      "lifecycle_s": 2.49756344299999,
+      "sampled_device_peak_mib": 3288.0,
+      "valid": 1013,
+      "accepted": 21
+    },
+    {
+      "device": "L4",
+      "candidates": 4096,
+      "open_s": 0.1966430139999602,
+      "evaluate_s": 3.709662613999967,
+      "commit_s": 4.099565606000056,
+      "portfolio_report_s": 0.00018353099994783406,
+      "close_s": 0.09157895199996346,
+      "evaluate_commit_s": 7.809228220000023,
+      "lifecycle_s": 8.097633716999894,
+      "sampled_device_peak_mib": 3382.0,
+      "valid": 4058,
+      "accepted": 28
+    }
+  ],
+  "maximum_cross_gpu_error": 7.275957614183426e-12,
+  "maximum_cpu_scaled_error": 7.409835669773838e-07,
+  "precision_budget": {
+    "evaluated": false,
+    "reason": "Arithmetic was unchanged; no single-precision control was rerun."
+  }
+}

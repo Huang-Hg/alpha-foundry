@@ -4,6 +4,8 @@
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
 
+The [compact-cache GPU comparison](compact-multigpu-20261116/README.md) replaces the earlier full-book cache with a 32 MiB return/report budget, bounds member storage independently of candidate count, and compares GPU latency, memory and decisions on identical inputs.
+
 The [2026-11-16 TMA and measurement-reuse report](history-pro6000-20261116/README.md) measures faster `ts_slope` and `ts_av_diff`, bounded query-to-commit reuse, and unchanged 4096-formula decisions. It includes the memory tradeoff and actual Blackwell bulk-copy instruction evidence.
 
 The [CUDA operator optimization](ops-pro6000-20261115/README.md) compares before/after measurements on the same PRO 6000. Recurrence, backfill and shift operators improve while the 4096-formula reports, weights and decisions remain identical. The report also identifies cases where CUDA still trails CPU.

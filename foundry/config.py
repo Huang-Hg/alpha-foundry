@@ -83,7 +83,7 @@ class CudaConfig:
     precision: str = 'paired'
     return_atol: float = 1e-06
     perpetual_host_cells: int = 100000
-    measurement_cache_mib: int = 8192
+    measurement_cache_mib: int = 32
 
     def __post_init__(self):
         if self.streams <= 0 or self.candidate_batch <= 0 or self.trial_batch <= 0:
