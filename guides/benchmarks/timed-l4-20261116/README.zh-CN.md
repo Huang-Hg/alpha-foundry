@@ -2,6 +2,8 @@
 
 [English](README.md) · [原始指标](summary.json) · [逐阶段耗时](stages.csv)
 
+本目录同时提供[源码清单](source-manifest.json)、[验收源码](source.tar.gz)、[原始 JUnit](junit.tar.gz)、日线对照和 CPU 审计摘要。GitHub 检查[校验和](SHA256SUMS)与[验收后的元数据变更](source-review.json)，再核验已记录的验收结论，不执行数值计算。依赖合并保持数值版本约束不变，计算源码与 R5 一致。
+
 **双 FP32 完整流程通过；轻量 FP32 对照未达标。** 同一张 NVIDIA L4（23034 MiB），8 个合成加密资产、2 天 5 分钟行情、192 个 15 分钟决策、576 个执行事件、48 个小时统计点。每条件一次，没有额外预热或三种随机种子重复。
 
 ## 完整规模结果

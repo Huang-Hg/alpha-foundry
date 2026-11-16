@@ -7,13 +7,15 @@ Open changes on a feature branch and review them in a pull request. Nothing in t
 | Required check | What it proves |
 | --- | --- |
 | Repository checks | pre-commit configuration/file checks, Ruff syntax and undefined-name checks, actionlint, dependency review on PRs, and CodeQL analysis complete successfully. |
-| Benchmark evidence | Published evidence and selected data pass their checksums; recorded operator and flow comparisons pass; the measured source, current report renderer and formula corpus match the proposed revision. |
+| Benchmark evidence | Historical evidence and selected data retain their checksums; R5 JUnit results, four-market daily parity, qualified full-scale measurements and exact reviewed source hashes pass the static verifier. |
 
 CodeQL scans Python, C/C++ and Actions definitions without building the project. It is a security analysis, not a CUDA compiler or a numerical correctness check. Dependency review blocks newly introduced high/critical vulnerabilities. CodeQL findings appear in the repository Security tab; successful analysis does not mean there are no findings.
 
-Numerical validation stays on the explicitly authorized cloud worker. Use the [benchmark guide](benchmarks/README.md) to produce fresh evidence when changing computation, validation, runtime dependencies or the measured corpus. The evidence check accepts line-ending and trailing-EOF-whitespace normalization, but does not treat a matching AST or an older successful run as validation of changed code. Report rendering has its own recorded hash because the final report can be rendered after measurement.
+Numerical validation stays on the explicitly authorized cloud worker. Use the [benchmark guide](benchmarks/README.md) to produce fresh evidence when changing computation, regression contracts, numerical dependency constraints or the measured corpus. The current gate binds every numerical source file to the recorded R5 bytes. The dependency-file consolidation and installation-text changes are separately listed with exact before/after hashes in [source-review.json](benchmarks/timed-l4-20261116/source-review.json); the verifier also proves that the numerical dependency constraints and pytest settings stayed unchanged. New files and further edits fail the binding instead of inheriting an open-ended exception.
 
-The Actions summary contains timings, errors, decisions and links to the checked-in reports. Each successful evidence job also retains a downloadable artifact for 30 days. Raw measurement and measured-source bundles remain versioned in `guides/benchmarks/current/`.
+The Actions summary presents the [R5 L4 report](benchmarks/timed-l4-20261116/README.md), including failed mixed-precision controls and the skipped private baseline. The gate checks 508 passing checks plus that explicit skip, the targeted smoke repairs, exact four-market daily comparisons, and the full 4096-array/256-program CPU correctness audits. It never converts the mixed control into a pass or treats a GPU host's CPU as a speed baseline.
+
+Each successful evidence job retains the public acceptance bundle for 30 days. Its validated source, original JUnit files, daily comparisons and numerical audit summaries are versioned in `guides/benchmarks/timed-l4-20261116/`. The complete raw archive stays local. Earlier report bundles remain historical evidence, with integrity checks; they do not claim to validate the current architecture.
 
 ## Local static checks
 
