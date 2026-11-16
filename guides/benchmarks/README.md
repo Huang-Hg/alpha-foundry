@@ -2,6 +2,8 @@
 
 [简体中文](README.zh-CN.md) · [2026-11-15 PRO 6000 report](arch-v2-pro6000-20261115/report.md) · [Pre-refactor public API report](current/report.md) · [Earlier operator experiments](archive/pro6000-operator66/operator66.md)
 
+The [existing GFlowNet discovery report](gfn-l4-20261116/README.md) measures actual sampling, rewards, learning, admission and reweighting: 4096 ordinary proposals take 5.032 s on an L4 runtime, or 6.186 s with session open/close. It explicitly separates native host learning from CUDA evaluation.
+
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
 
 Use the [fixed Colab CPU baseline](parallel-cpu-20261116/README.md) for A100/L4 comparisons. The comparison fixes one CPU-only runtime and measures 1/8 workers actually executing candidates and trials. The earlier fixed-cpu report only enabled inner native thread pools and remains historical.

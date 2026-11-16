@@ -303,3 +303,14 @@ with foundry.open(backend="cpu", cpu=foundry.CPU(workers=8, candidate_batch=32,
 独立候选和权重试算共享只读行情，在工作线程上并行执行；原生算子释放 GIL，每个 worker 内的 OpenMP 使用一个线程。最多同时挂起 `workers` 个任务，结果按输入顺序返回，组合仍由单写者按顺序提交。CPU 参数只影响执行资源，不改变研究快照身份或交易规则。
 
 公式的中间数组在单个候选完成后释放；权重试算只为正在运行的 worker 展开持仓，临时持仓空间为 `O(workers × T × S)`，而非 `O(试算总数 × T × S)`。收益和事件明细是调用所需输出，另按输出规模占用内存。运行基准时设置 `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`，通过 `cpu.workers` 控制候选并发，避免线程池叠加。
+
+### 测量现有 GFlowNet 挖掘流程
+
+```bash
+python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512}}' \
+  benchmark var/runs/discovery-new --suite discovery --backends cuda
+```
+
+直接调用现有 `foundry.mine()`，测量采样、CUDA 候选评价、奖励反馈、GFN 训练、有序准入、CEM 重配及 checkpoint 的完整流程。候选规模通过 `Search` 调整；报告同时列出阶段累计时间与端到端墙钟时间，训练与提交/重配的重叠不能重复相加。
+
+现有 GFN 是 C++ 主机神经策略核，使用 Trajectory Balance 和配对教师更新；行情张量与回测在 CUDA。`backend="cuda"` 不代表 GFN 参数训练也迁到了 GPU。该基准不启动独立 CPU 对照，不替换 GFN，也不把学习过程中同一历史窗口的准入结果称为样本外收益。

@@ -303,3 +303,14 @@ with foundry.open(backend="cpu", cpu=foundry.CPU(workers=8, candidate_batch=32,
 Independent candidates and weight trials share read-only market panels across workers. Native operators release the GIL; each worker uses one OpenMP lane. At most `workers` tasks are outstanding, results retain input order, and the portfolio has one ordered writer. CPU settings affect execution resources, not snapshot identity or trading semantics.
 
 Expression intermediates expire after each candidate. Weight trials materialize books only for active workers: temporary book space is `O(workers * T * S)`, rather than `O(total_trials * T * S)`. Required return/event outputs occupy their own output-sized storage. Use `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` for benchmarking and control candidate concurrency through `cpu.workers` to avoid nested thread pools.
+
+### Measure the existing GFlowNet discovery loop
+
+```bash
+python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512}}' \
+  benchmark var/runs/discovery-new --suite discovery --backends cuda
+```
+
+This directly calls the existing `foundry.mine()` workflow: sampling, CUDA candidate evaluation, rewards, GFN learning, ordered admission, CEM reweighting and checkpoints. Scale is controlled by `Search`. The report separates stage sums from wall time because learning overlaps commit/reweight.
+
+The existing GFN is a native C++ host neural policy trained with Trajectory Balance and paired teachers; market tensors and accounts use CUDA. `backend="cuda"` does not move policy learning to the GPU. This suite does not start an independent CPU baseline or replace GFN, and in-window adaptive admission is not out-of-sample performance.

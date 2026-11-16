@@ -105,6 +105,11 @@ def import_perpetual(output: str | Path, **parameters: Unpack[Parameters]):
 def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8, backends=('cpu', 'cuda'),
               spectre_python=None, **parameters: Unpack[Parameters]):
     """Run the selected native benchmark suite and generate its report bundle."""
+    if suite == 'discovery':
+        from validation.benchmarks.discovery import run
+        if tuple(backends) != ('cuda',) or sizes is not None or assets != 8 or spectre_python is not None:
+            raise ValueError('discovery requires backends=("cuda",); set scale through Search parameters')
+        return run(output, **parameters)
     if suite == 'frameworks':
         import sys
         from validation.benchmarks.competition.run import run
@@ -115,7 +120,7 @@ def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8, back
         return run(output, sizes=(1, 16, 64) if sizes is None else tuple(sizes), assets=assets,
                    spectre_python=sys.executable if spectre_python is None else spectre_python)
     if suite != 'foundry':
-        raise ValueError('benchmark suite must be foundry or frameworks')
+        raise ValueError('benchmark suite must be foundry, frameworks or discovery')
     if assets != 8 or spectre_python is not None:
         raise ValueError('assets and spectre_python apply only to the frameworks suite')
     from validation.benchmarks.run import run

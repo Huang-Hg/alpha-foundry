@@ -150,7 +150,7 @@ def main():
     s.add_argument('output')
     s = sub.add_parser('benchmark')
     s.add_argument('output')
-    s.add_argument('--suite', choices=('foundry', 'frameworks'), default='foundry')
+    s.add_argument('--suite', choices=('foundry', 'frameworks', 'discovery'), default='foundry')
     s.add_argument('--sizes', type=int, nargs='+')
     s.add_argument('--backends', nargs='+', choices=('cpu', 'cuda'), default=['cpu', 'cuda'])
     s.add_argument('--assets', type=int, default=8)

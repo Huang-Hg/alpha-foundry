@@ -2,6 +2,8 @@
 
 [English](README.md) · [2026-11-15 PRO 6000 报告](arch-v2-pro6000-20261115/report.zh-CN.md) · [重构前公开接口报告](current/report.zh-CN.md) · [更早的算子实验](archive/pro6000-operator66/operator66.md)
 
+现有 GFlowNet 的[端到端挖掘报告](gfn-l4-20261116/README.zh-CN.md)测量真实采样、奖励反馈、训练、准入和重配：L4 上 4096 个普通候选共 5.032 秒，含打开/关闭 6.186 秒；明确区分 C++ 主机学习与 CUDA 评价。
+
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
 
 A100/L4 的对比统一使用[固定 Colab CPU 基线](parallel-cpu-20261116/README.zh-CN.md)：固定同一台独立 CPU 类型运行时，比较 1/8 个实际执行候选和试算的 worker；不使用某张 GPU 附带的主机作为 CPU 基准。此前 fixed-cpu 报告只有算子内部线程，保留为历史记录。
