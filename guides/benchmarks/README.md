@@ -2,6 +2,8 @@
 
 [简体中文](README.zh-CN.md) · [2026-11-15 PRO 6000 report](arch-v2-pro6000-20261115/report.md) · [Pre-refactor public API report](current/report.md) · [Earlier operator experiments](archive/pro6000-operator66/operator66.md)
 
+The [timed-strategy L4 report](timed-l4-20261116/README.md) covers 4096 array candidates, 256 stateful programs and an independent Agent integration. Query plus ordered commit took 3.718 s and 41.886 s respectively; full-scale paired CPU/CUDA correctness matched within tolerance with no decision differences. Mixed FP32 controls failed qualification and remain visible. Use `--suite timed` for this workflow, including separate smoke qualification and full-scale evidence.
+
 The [resident GPU sampling report](gfn-resident-l4-20261116/README.md) measures device-side states, legality and draws, trace reuse and a persistent optimizer: the 4096-proposal loop falls from 7.889 to 6.168 s; preparation plus session lifecycle falls from 8.921 to 8.586 s. Numerical errors, increased peak memory and candidate-trajectory differences are disclosed. The [PyTorch migration report](gfn-torch-l4-20261116/README.md) remains the previous baseline.
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
@@ -18,7 +20,7 @@ The [native framework comparison](frameworks-pro6000-20261115/README.md) separat
 
 The [architecture-refactor run](arch-v2-pro6000-20261115/README.md) measured source `fa2acfd` on RTX PRO 6000 Blackwell Server (97887 MiB). Public regression results were 512 passed, 1 skipped and 7061 passed subtests in 247.05 s; the 7574 JUnit entries include subtests. All 124 window cases across 66 operators passed. The 4096-formula complete case took 2.879063 s on CUDA versus 93.723696 s on CPU (32.55×); 28 candidates were admitted on both, with zero decision mismatches or numerical tolerance exceedances. The private production audit failed separately on an unchanged legacy artifact, not on a newly recorded baseline.
 
-Run one command on the authorized GPU:
+Run the shared entry on the assigned runtime:
 
 ```bash
 python -m pip install -r requirements-benchmark.txt
@@ -26,7 +28,7 @@ bash build.sh
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m foundry benchmark var/runs/benchmark-new --backends cpu
 ```
 
-This example uses the eight-vCPU CPU runtime. Match `cpu.workers` to actual CPU affinity and quota; keep inner OpenMP and BLAS teams at one. `--backends cpu` needs neither CuPy nor a GPU and runs benchmark contracts plus measurements. Omit `--backends` to run the full regression suite and both CPU/CUDA measurements on an authorized GPU, with matching CuPy installed. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.
+This example uses the eight-vCPU CPU runtime. Match `cpu.workers` to actual CPU affinity and quota; keep inner OpenMP and BLAS teams at one. `--backends cpu` needs neither CuPy nor a GPU and runs benchmark contracts plus measurements. Use `--backends cuda` on the assigned GPU with matching CuPy installed. CPU speed comparisons use the fixed CPU-only runtime; GPU-host CPU correctness replays are not performance baselines. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.
 
 The runner uses [pytest](https://docs.pytest.org/en/stable/how-to/unittest.html), [pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/latest/pedantic.html) and pytest-html. Existing regression checks live in `validation/`; the old `tests/` and `scripts/` directories are removed.
 
@@ -37,7 +39,7 @@ The runner uses [pytest](https://docs.pytest.org/en/stable/how-to/unittest.html)
 | Correctness | Exact admission/reason/constraint decisions; per-metric errors and weight tolerances |
 | Regression | PIT, A-share rules, spot, perpetual funding/liquidation, resources and RPC parity |
 
-Each performance condition has one warm-up and one measured round. Warm-up uses a fresh portfolio; timed rounds never reuse its query cache or mutated portfolio. Both CPU and CUDA use host wall time, with explicit CUDA synchronization. Small timings are observations, not statistical rankings.
+The default formula/operator suite uses one warm-up and one measured round per condition. Warm-up uses a fresh portfolio; measured rounds never reuse its query cache or mutated portfolio. The timed-strategy suite instead measures each complete lifecycle once, including initialization, without an extra warm-up. Both CPU and CUDA use host wall time, with explicit CUDA synchronization. Small timings are observations, not statistical rankings.
 
 The output directory contains bilingual Markdown summaries, detailed CSVs, the standard pytest-benchmark JSON, JUnit XML, a standalone HTML check report, raw formula reports, source/data/corpus identities and the run log. A failing correctness check or incomplete benchmark fails the command while preserving its report.
 

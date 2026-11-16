@@ -33,7 +33,8 @@ from foundry.types import ArrayBatch, Formula
 from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
                                    FamilySeed, RegisteredBatch, WeightReport)
 from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport, ExecutionSchedule
-from foundry.types import ProgramPlan, ProgramSimulation, StrategyProgram, ProgramReference, ProgramSource, ProgramCatalog, SimulationResult
+from foundry.types import ProgramPlan, ProgramSimulation, StrategyProgram, ProgramReference, ProgramSource, ProgramCatalog, ProgramCheckpoint, SimulationResult
+from foundry.types import ResidentEvaluation
 from foundry.study import programs
 from foundry.study.program_registry import ProgramRegistry
 from foundry.study.replay_evaluation import ReplayEvaluation
@@ -475,11 +476,12 @@ class LocalBackend:
                 program = self.research.programs.resolve(program)
             return programs.plan(self.runtime, program)
 
-    def simulate(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramSimulation:
+    def simulate(self, program: StrategyProgram | ProgramReference, context: str, *, until: int | None = None,
+                 checkpoint: ProgramCheckpoint | None = None) -> ProgramSimulation:
         self.research.require_context(context)
         if isinstance(program, ProgramReference):
             program = self.research.programs.resolve(program)
-        return programs.simulate(self.runtime, self.research.context, program)
+        return programs.simulate(self.runtime, self.research.context, program, until=until, checkpoint=checkpoint)
 
     def register_program(self, program: StrategyProgram | ProgramReference, context: str) -> RegisteredBatch:
         with self.runtime.resources.scope():
@@ -612,18 +614,36 @@ class Session:
         """Inspect devices, bounded state and order latency before simulation."""
         return self._backend.plan_program(program, self._context.id)
 
-    def simulate(self, program: StrategyProgram | ProgramReference) -> ProgramSimulation:
+    def simulate(self, program: StrategyProgram | ProgramReference, *, until: int | None = None,
+                 checkpoint: ProgramCheckpoint | None = None) -> ProgramSimulation:
         """Audit a fresh actual account; portfolio admission requires replay."""
-        return self._backend.simulate(program, self._context.id)
+        return self._backend.simulate(program, self._context.id, until=until, checkpoint=checkpoint)
 
-    def evaluate_device(self, inputs: CandidateInput) -> DeviceBatch:
-        """Return resident arrays in an in-process session, without report serialization."""
-        return self._backend.evaluate_device(self._candidates(inputs), self._context.id)
+    def evaluate_device(self, inputs: CandidateInput | StrategyProgram | ProgramReference) -> ResidentEvaluation:
+        """Return resident arrays and their committable report from one query."""
+        if isinstance(inputs, (StrategyProgram, ProgramReference)):
+            registered = self.register(inputs)
+            with ExitStack() as cleanup:
+                cleanup.callback(self.release, registered)
+                result = self._evaluate_resident(registered.candidates)
+                cleanup.pop_all()
+            return replace(result, report=replace(result.report, lease=registered.lease))
+        return self._evaluate_resident(self._candidates(inputs))
 
-    def commit(self, report: EvaluationReport | DiscoveryReport) -> CommitReport:
+    def _evaluate_resident(self, candidates: tuple[Candidate, ...]) -> ResidentEvaluation:
+        context = self._context
+        batch = self._backend.evaluate_device(candidates, context.id)
+        result = EvaluationResult(context, tuple(CandidateResult(candidate.id, row, verdict)
+            for candidate, row, verdict in zip(candidates, batch.rows, batch.verdicts)))
+        report = EvaluationReport(context, tuple(candidate_report(row) for row in result.rows))
+        return ResidentEvaluation(report, batch)
+
+    def commit(self, report: EvaluationReport | DiscoveryReport | ResidentEvaluation) -> CommitReport:
         """Submit the reviewed candidates against exactly the reviewed portfolio."""
+        if isinstance(report, ResidentEvaluation):
+            report = report.report
         if not isinstance(report, (EvaluationReport, DiscoveryReport)):
-            raise TypeError('commit requires an EvaluationReport or DiscoveryReport with portfolio admission')
+            raise TypeError('commit requires an EvaluationReport, ResidentEvaluation or DiscoveryReport with portfolio admission')
         if isinstance(report, DiscoveryReport) and report.delayed:
             raise ValueError('delayed noise-control reports cannot be submitted; evaluate the actual candidates first')
         candidates = (tuple(row.candidate for row in report.rows) if isinstance(report, DiscoveryReport)
@@ -658,8 +678,10 @@ class Session:
         """Return durable candidate references; the original lease still needs release."""
         return self._backend.retain(self._candidates(inputs), self._context.id)
 
-    def release(self, batch: RegisteredBatch | EvaluationReport) -> None:
+    def release(self, batch: RegisteredBatch | EvaluationReport | ResidentEvaluation) -> None:
         """End a resident lease; retained references remain usable after release."""
+        if isinstance(batch, ResidentEvaluation):
+            batch = batch.report
         if not isinstance(batch, (RegisteredBatch, EvaluationReport)) or not batch.lease:
             raise ValueError('release requires a registered resident batch lease')
         self._backend.release(batch.lease)
@@ -858,9 +880,15 @@ class ResidentPort:
         return self._readonly(self.__ledger.pipeline.universe)
 
     @property
-    def features(self):
-        self.context
-        return MappingProxyType({name: self._readonly(value) for name, value in self.__ledger.pipeline.fields.items()})
+    def features(self) -> Mapping[str, Array]:
+        """Borrow causal decision-aligned fields, including completed OHLCV.
+
+        Formula eligibility is a separate grammar restriction. The market
+        panel contains observed inputs only, never future execution labels.
+        """
+        with self.scope():
+            panel = self.__ledger.pipeline.panel
+            return MappingProxyType({name: self._readonly(value) for name, value in panel.values().items()})
 
     @property
     def categories(self):

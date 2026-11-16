@@ -1,6 +1,7 @@
 """Bounded streaming order accounts; native resources are supplied at explicit open."""
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, fields
 from types import ModuleType
 
@@ -9,7 +10,8 @@ import numpy as np
 from foundry.config import Account, Execution
 from foundry.numeric.semantics import ORDER_SEMANTIC_VERSION
 from foundry.types import (
-    AccountSnapshot, Array, BarExecution, ExecutionFeedback, ExecutionRiskBatch, FloatArray, OrderCommands, OrderSnapshot,
+    AccountCheckpoint, AccountSnapshot, Array, BarExecution, ExecutionFeedback, ExecutionRiskBatch, FloatArray,
+    HostArray, OrderCommands, OrderSnapshot,
 )
 
 
@@ -19,6 +21,16 @@ PANEL_FIELDS = ('trade_open', 'trade_high', 'trade_low', 'trade_close', 'volume'
 RULE_FIELDS = ('buy_allowed', 'sell_allowed', 'quote_valid')
 COMMAND_INTS = ('action', 'owner', 'id', 'asset', 'side', 'type', 'valid_until', 'reduce_only')
 COMMAND_VALUES = ('quantity', 'price', 'reservation_price')
+CHECKPOINT_BUFFERS = (
+    ('assets', '_assets'), ('cash', '_cash'), ('meta', '_meta'), ('orders', '_oi'),
+    ('order_values', '_ov'), ('owners', '_owners'), ('highwater', '_highwater'),
+    ('targets', '_targets'), ('units', '_units'), ('coefficients', '_coefficients'),
+    ('pending_targets', '_pending_targets'), ('target_dirty', '_target_dirty'),
+    ('activity', '_activity'), ('digest', '_digest'), ('returns', '_returns'),
+    ('equity', '_equity'), ('active', '_active'), ('risk_flows', '_risk_flows'),
+    ('risk_counts', '_risk_counts'), ('risk_previous', '_risk_previous'),
+)
+CHECKPOINT_PREFIX = frozenset(('returns', 'equity', 'active', 'risk_flows', 'risk_counts'))
 
 
 @dataclass(frozen=True)
@@ -88,6 +100,7 @@ class OrderRuntime:
         self.feedback_capacity = (self.command_capacity + owner_count*self.assets + 4*self.capacity
                                   + (owner_count+1)*(self.capacity+self.assets))
         self.cursor, self.closed = start_event, False
+        self._origin_start_event = start_event
         self._panels, self._rules = prepared_data.panels, prepared_data.rules
         self._event_times = prepared_data.event_ns
         self._assets = xp.zeros((batch, self.assets, 4), dtype=xp.float64)
@@ -325,6 +338,72 @@ class OrderRuntime:
         self._finish_digest(state)
         host = np.asarray(state[:, :8]) if self.backend == 'cpu' else self.xp.asnumpy(state[:, :8])
         return tuple(''.join(f'{int(word):08x}' for word in row) for row in host)
+
+    def _checkpoint_identity(self) -> str:
+        identity = (ORDER_SEMANTIC_VERSION, self.spec.snapshot, self.account, self.execution,
+                    self.batch, self.precision, self.owner_count, self._origin_start_event, self.backend)
+        return hashlib.sha256(repr(identity).encode()).hexdigest()
+
+    def _measurement_prefix(self, cursor: int) -> int:
+        if cursor == 0:
+            return 0
+        schedule = self.spec.schedule
+        previous = int(schedule.measurement_index[cursor-1])
+        completed = cursor == len(schedule.event_ns) or schedule.measurement_index[cursor] != previous
+        return previous + int(completed)
+
+    def _checkpoint_host(self, values: Array) -> HostArray:
+        owned = (np.array(values, copy=True, order='C') if self.backend == 'cpu'
+                 else self.xp.asnumpy(values))
+        owned.flags.writeable = False
+        return owned
+
+    def checkpoint(self) -> AccountCheckpoint:
+        """Detach bounded host state after a complete bar, including partial statistics state."""
+        self._ensure_open()
+        completed = self._measurement_prefix(self.cursor)
+        buffers = {}
+        for name, attribute in CHECKPOINT_BUFFERS:
+            values = getattr(self, attribute)
+            if name in CHECKPOINT_PREFIX:
+                values = values[:, :completed]
+            buffers[name] = self._checkpoint_host(values)
+        return AccountCheckpoint(snapshot=self._checkpoint_identity(), cursor=self.cursor, **buffers)
+
+    def restore(self, state: AccountCheckpoint) -> None:
+        """Validate and stage an exact execution snapshot before publishing any buffer."""
+        self._ensure_open()
+        if not isinstance(state, AccountCheckpoint):
+            raise TypeError('Order account restore requires an AccountCheckpoint')
+        if state.format != 'order-account-v1':
+            raise ValueError('Unsupported order account checkpoint format')
+        if state.snapshot != self._checkpoint_identity():
+            raise ValueError('Order account checkpoint belongs to a different execution snapshot')
+        if type(state.cursor) is not int or not self._origin_start_event <= state.cursor <= len(self.spec.schedule.event_ns):
+            raise ValueError('Order account checkpoint cursor must lie on the opened execution clock')
+        completed = self._measurement_prefix(state.cursor)
+        for name, attribute in CHECKPOINT_BUFFERS:
+            values, destination = getattr(state, name), getattr(self, attribute)
+            shape = ((self.batch, completed, *destination.shape[2:])
+                     if name in CHECKPOINT_PREFIX else destination.shape)
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f'Order account checkpoint {name} must be a host NumPy array')
+            if values.dtype != destination.dtype or values.shape != shape:
+                raise ValueError(f'Order account checkpoint {name} has an invalid dtype or shape')
+        # Allocate and copy every replacement before publishing. Invalid input or
+        # a staging allocation failure leaves the live account completely intact.
+        staged = {}
+        for name, attribute in CHECKPOINT_BUFFERS:
+            values = getattr(state, name)
+            if name in CHECKPOINT_PREFIX:
+                replacement = self.xp.zeros_like(getattr(self, attribute))
+                replacement[:, :completed] = self.xp.asarray(values)
+            else:
+                replacement = self.xp.array(values, copy=True, order='C')
+            staged[attribute] = replacement
+        for attribute, values in staged.items():
+            setattr(self, attribute, values)
+        self.cursor = state.cursor
 
     def close(self) -> None:
         if not self.closed:

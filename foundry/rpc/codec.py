@@ -1,19 +1,21 @@
 """Strict JSON and bounded NumPy wire codecs; device execution stays below RPC."""
 from collections.abc import Mapping
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from io import BytesIO
 import base64
+import hashlib
 import json
 import math
 from pathlib import Path
 import types
+import zlib
 from typing import get_args, get_origin, get_type_hints
 from zipfile import BadZipFile, ZipFile
 
 import numpy as np
 
 from foundry.rpc.schema import (
-    BUNDLE, CHECKPOINT_FORMAT, MAX_ARRAY_BYTES, parameter_values, schema_for,
+    BUNDLE, CHECKPOINT_FORMAT, MAX_ARRAY_BYTES, MAX_REQUEST_BYTES, parameter_values, schema_for,
 )
 from foundry.ops.registry import OPS, ARITY, COST, MIN_WINDOW, MAX_WINDOW
 from foundry.portfolio.library import PROTOCOL
@@ -24,7 +26,14 @@ from foundry.numeric.semantics import BACKTEST_SEMANTIC_VERSION, ORDER_SEMANTIC_
 from foundry.types import (
     ArrayBatch, Candidate, Metrics, MiningCheckpoint, MiningEpoch, MiningStatus,
     RiskSummary, Source, ArraySource, ProgramSource, ProgramReference,
+    AccountCheckpoint, ProgramCheckpoint, ProgramDescriptor, ProgramPlan, ResearchContext, StateTensor,
 )
+
+
+PROGRAM_CHECKPOINT_FORMAT = 'program-checkpoint-v1'
+ACCOUNT_CHECKPOINT_FORMAT = 'order-account-v1'
+ACCOUNT_CHECKPOINT_ARRAYS = tuple(item.name for item in fields(AccountCheckpoint)
+                                if item.name not in ('snapshot', 'cursor', 'format'))
 
 
 def candidate_from_json(record):
@@ -143,7 +152,8 @@ def describe(research):
             capacity='All active array and program leases together fit batch_size candidates. Split larger batches and release completed batches; no spill or automatic persistence.'),
         programs=dict(reference=schema_for(ProgramReference), source=schema_for(ProgramSource),
             registration='Local StrategyProgram or caller-deployed ProgramReference; every query opens fresh private run state.',
-            persistence='retain/commit reconstructs through the explicitly supplied artifact catalog and verifies the complete descriptor; libraries/checkpoints never contain Python models or run state.',
+            persistence='retain/commit reconstructs through the explicitly supplied artifact catalog and verifies the complete descriptor; library and discovery checkpoint references contain no Python models or run state.',
+            execution_checkpoint='In-process simulate(until=base_bar_close_ns) explicitly captures account, pending orders, cursor and declared private tensors. export/load_program_checkpoint uses bounded versioned NPZ without executable objects. Resume requires the same context, descriptor and execution plan.',
             convenience='evaluate(program) owns a bounded EvaluationReport.lease. release(report) frees it; successful commit(report) consumes it. Explicit register leases remain caller-owned.',
             integrity='Artifact identity binds immutable payload bytes and explicit implementation semantics; parameters are canonical finite JSON objects bounded to 64KiB. No source execution or pickle transport.'),
         execution_risk=dict(report=schema_for(RiskSummary),
@@ -258,3 +268,172 @@ def load_bundle(path: Path) -> ArrayBatch:
     if path.stat().st_size > MAX_ARRAY_BYTES:
         raise ValueError('array bundle exceeds the 1GiB transport limit')
     return decode_bundle(path.read_bytes())
+
+
+def _program_checkpoint_schema():
+    tensor = dict(type='object', properties=dict(name=dict(type='string', minLength=1),
+        array=dict(type='string', pattern='^state_[0-9]{4,}$')),
+        required=['name', 'array'], additionalProperties=False)
+    array = dict(type='object', properties=dict(dtype=dict(type='string'),
+        shape=dict(type='array', items=dict(type='integer', minimum=0)),
+        sha256=dict(type='string', pattern='^[0-9a-f]{64}$')),
+        required=['dtype', 'shape', 'sha256'], additionalProperties=False)
+    properties = dict(format=dict(const=PROGRAM_CHECKPOINT_FORMAT),
+        context=schema_for(ResearchContext), descriptor=schema_for(ProgramDescriptor), plan=schema_for(ProgramPlan),
+        account=dict(type='object', properties=dict(format=dict(const=ACCOUNT_CHECKPOINT_FORMAT),
+            snapshot=dict(type='string', minLength=1), cursor=dict(type='integer', minimum=0)),
+            required=['format', 'snapshot', 'cursor'], additionalProperties=False),
+        state=dict(type='array', items=tensor), arrays=dict(type='object', additionalProperties=array))
+    return dict(type='object', properties=properties, required=list(properties), additionalProperties=False)
+
+
+def _checkpoint_record(record):
+    from jsonschema import ValidationError, validate
+
+    try:
+        validate(record, _program_checkpoint_schema())
+    except ValidationError as error:
+        raise ValueError(f'Invalid program checkpoint metadata: {error.message}') from error
+    descriptor = from_json(ProgramDescriptor, record['descriptor'])
+    plan = from_json(ProgramPlan, record['plan'])
+    if type(plan.batch_size) is not int or plan.batch_size < 1:
+        raise ValueError('Program checkpoint batch_size must be positive')
+    expected = {f'account_{name}' for name in ACCOUNT_CHECKPOINT_ARRAYS}
+    expected.update(f'state_{index:04d}' for index in range(len(descriptor.state_schema)))
+    if set(record['arrays']) != expected:
+        raise ValueError('Program checkpoint array fields differ from the declared format')
+    declared = [dict(name=item.name, array=f'state_{index:04d}') for index, item in enumerate(descriptor.state_schema)]
+    if record['state'] != declared:
+        raise ValueError('Program checkpoint state names differ from the descriptor schema')
+    return descriptor, plan
+
+
+def _checkpoint_state(descriptor: ProgramDescriptor, plan: ProgramPlan, state: tuple[StateTensor, ...]) -> None:
+    if tuple(item.name for item in state) != tuple(item.name for item in descriptor.state_schema):
+        raise ValueError('Program checkpoint state names differ from the descriptor schema')
+    for item, declaration in zip(state, descriptor.state_schema):
+        value = item.values
+        if (not isinstance(value, np.ndarray) or value.dtype != np.dtype(declaration.dtype)
+                or value.shape != (plan.batch_size, *declaration.shape)):
+            raise ValueError(f'Program checkpoint state {item.name} has an invalid dtype or shape')
+
+
+def program_checkpoint_bytes(checkpoint: ProgramCheckpoint) -> bytes:
+    """Encode detached host state with content integrity, never executable serialization."""
+    if not isinstance(checkpoint, ProgramCheckpoint):
+        raise TypeError('Program checkpoint export requires a ProgramCheckpoint')
+    if (not isinstance(checkpoint.context, ResearchContext) or not isinstance(checkpoint.descriptor, ProgramDescriptor)
+            or not isinstance(checkpoint.plan, ProgramPlan) or not isinstance(checkpoint.account, AccountCheckpoint)
+            or not isinstance(checkpoint.state, tuple) or any(not isinstance(item, StateTensor) for item in checkpoint.state)):
+        raise TypeError('Program checkpoints require typed context, descriptor, plan, account and private state')
+    _checkpoint_state(checkpoint.descriptor, checkpoint.plan, checkpoint.state)
+    arrays = {f'account_{name}': getattr(checkpoint.account, name) for name in ACCOUNT_CHECKPOINT_ARRAYS}
+    arrays.update((f'state_{index:04d}', item.values) for index, item in enumerate(checkpoint.state))
+    for name, value in arrays.items():
+        if not isinstance(value, np.ndarray) or value.dtype.kind not in 'biuf' or value.dtype.hasobject:
+            raise ValueError('Program checkpoints require non-object numeric host arrays')
+    if sum(value.nbytes for value in arrays.values()) > MAX_ARRAY_BYTES:
+        raise ValueError('Decoded program checkpoint exceeds the 1GiB limit')
+    owned = {name: np.array(value, copy=True, order='C') for name, value in arrays.items()}
+    record = dict(format=checkpoint.format, context=asdict(checkpoint.context),
+        descriptor=asdict(checkpoint.descriptor), plan=asdict(checkpoint.plan),
+        account=dict(format=checkpoint.account.format, snapshot=checkpoint.account.snapshot, cursor=checkpoint.account.cursor),
+        state=[dict(name=item.name, array=f'state_{index:04d}') for index, item in enumerate(checkpoint.state)],
+        arrays={name: dict(dtype=value.dtype.str, shape=list(value.shape),
+            sha256=hashlib.sha256(value.tobytes(order='C')).hexdigest()) for name, value in owned.items()})
+    encoded = json.dumps(record, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode('utf-8')
+    if len(encoded) > MAX_REQUEST_BYTES:
+        raise ValueError('Program checkpoint JSON metadata exceeds the 1MiB limit')
+    _checkpoint_record(json.loads(encoded))
+    output = BytesIO()
+    np.savez(output, metadata=np.frombuffer(encoded, dtype=np.uint8), **owned)
+    payload = output.getvalue()
+    _checkpoint_archive(payload)
+    return payload
+
+
+def _checkpoint_archive(payload: bytes):
+    """Check every uncompressed NPY size before allocating checkpoint buffers."""
+    if not 0 < len(payload) <= MAX_ARRAY_BYTES:
+        raise ValueError('Program checkpoint exceeds the 1GiB transport limit')
+    headers = {}
+    try:
+        with ZipFile(BytesIO(payload)) as archive:
+            entries = archive.infolist()
+            if len(entries) != len({entry.filename for entry in entries}) or 'metadata.npy' not in archive.namelist():
+                raise ValueError('Program checkpoint has duplicate or missing metadata fields')
+            if sum(entry.file_size for entry in entries) > MAX_ARRAY_BYTES:
+                raise ValueError('Decoded program checkpoint exceeds the 1GiB limit')
+            for entry in entries:
+                if (not entry.filename.endswith('.npy') or '/' in entry.filename or '\\' in entry.filename
+                        or entry.compress_type not in (0, 8) or entry.flag_bits & 1):
+                    raise ValueError('Program checkpoint ZIP fields differ from the declared format')
+                with archive.open(entry) as stream:
+                    version = np.lib.format.read_magic(stream)
+                    if version == (1, 0):
+                        shape, _, dtype = np.lib.format.read_array_header_1_0(stream)
+                    elif version == (2, 0):
+                        shape, _, dtype = np.lib.format.read_array_header_2_0(stream)
+                    else:
+                        raise ValueError('Unsupported NPY header version in program checkpoint')
+                    if dtype.hasobject or dtype.kind not in 'biuf' or any(size < 0 for size in shape):
+                        raise ValueError('Program checkpoints require non-object numeric arrays')
+                    size = math.prod(shape) * dtype.itemsize
+                    if size > MAX_ARRAY_BYTES or stream.tell() + size != entry.file_size:
+                        raise ValueError('Program checkpoint NPY shape differs from its bounded ZIP entry')
+                    if entry.filename == 'metadata.npy' and (dtype != np.dtype('uint8') or len(shape) != 1
+                            or size > MAX_REQUEST_BYTES):
+                        raise ValueError('Program checkpoint metadata must be bounded UTF-8 JSON bytes')
+                    headers[entry.filename[:-4]] = (shape, dtype.str)
+    except (BadZipFile, EOFError, zlib.error) as error:
+        raise ValueError('Invalid NumPy program checkpoint archive') from error
+    return headers
+
+
+def _checkpoint_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('Program checkpoint JSON contains a duplicate field')
+        result[key] = value
+    return result
+
+
+def _checkpoint_constant(value):
+    raise ValueError(f'Program checkpoint JSON contains invalid constant {value}')
+
+
+def program_checkpoint_from_bytes(payload: bytes) -> ProgramCheckpoint:
+    """Decode owned read-only host arrays after bounded ZIP, schema and hash checks."""
+    headers = _checkpoint_archive(payload)
+    try:
+        with np.load(BytesIO(payload), allow_pickle=False) as archive:
+            record = json.loads(archive['metadata'].tobytes().decode('utf-8'),
+                object_pairs_hook=_checkpoint_pairs, parse_constant=_checkpoint_constant)
+            descriptor, plan = _checkpoint_record(record)
+            if set(headers) != {'metadata', *record['arrays']}:
+                raise ValueError('Program checkpoint archive has extra or missing array fields')
+            arrays = {}
+            for name, contract in record['arrays'].items():
+                shape, dtype = headers[name]
+                if list(shape) != contract['shape'] or dtype != contract['dtype']:
+                    raise ValueError('Program checkpoint array dtype or shape differs from metadata')
+                value = np.array(archive[name], copy=True, order='C')
+                if hashlib.sha256(value.tobytes(order='C')).hexdigest() != contract['sha256']:
+                    raise ValueError('Program checkpoint array SHA256 differs')
+                value.flags.writeable = False
+                arrays[name] = value
+    except (BadZipFile, EOFError, UnicodeDecodeError, zlib.error) as error:
+        raise ValueError('Invalid NumPy program checkpoint payload') from error
+    state = tuple(StateTensor(item['name'], arrays[item['array']]) for item in record['state'])
+    _checkpoint_state(descriptor, plan, state)
+    account = AccountCheckpoint(**record['account'], **{name: arrays[f'account_{name}'] for name in ACCOUNT_CHECKPOINT_ARRAYS})
+    return ProgramCheckpoint(from_json(ResearchContext, record['context']), descriptor, plan, account, state, record['format'])
+
+
+def load_program_checkpoint(path: Path) -> ProgramCheckpoint:
+    if path.stat().st_size > MAX_ARRAY_BYTES:
+        raise ValueError('Program checkpoint exceeds the 1GiB transport limit')
+    with path.open('rb') as stream:
+        payload = stream.read(MAX_ARRAY_BYTES + 1)
+    return program_checkpoint_from_bytes(payload)

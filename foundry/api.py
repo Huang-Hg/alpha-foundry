@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Unpack
 
 from foundry.config import Parameters, configure
-from foundry.types import ProgramCatalog
+from foundry.types import ProgramCatalog, ProgramCheckpoint, ResidentEvaluation
 
 
 def open(portfolio: str | Path | None = None, *, programs: ProgramCatalog | None = None, **parameters: Unpack[Parameters]):
@@ -37,15 +37,25 @@ def serve(portfolio: str | Path = 'production/library.json', *, programs: Progra
 
 
 def export(report, output: str | Path):
-    """Write a structured report as strict JSON at an explicit output path."""
+    """Atomically export a public report or a bounded binary program checkpoint."""
     from dataclasses import asdict
     import json
     from foundry.study.store import publish
-    from foundry.rpc.codec import json_value
+    from foundry.rpc.codec import json_value, program_checkpoint_bytes
+    if isinstance(report, ResidentEvaluation):
+        report = report.report
+    content = (program_checkpoint_bytes(report) if isinstance(report, ProgramCheckpoint)
+               else json.dumps(json_value(asdict(report)), ensure_ascii=False, allow_nan=False,
+                               indent=2).encode('utf-8'))
     target = Path(output)
     target.parent.mkdir(parents=True, exist_ok=True)
-    publish(target, json.dumps(json_value(asdict(report)), ensure_ascii=False, allow_nan=False,
-                                    indent=2).encode('utf-8'))
+    publish(target, content)
+
+
+def load_program_checkpoint(path: str | Path) -> ProgramCheckpoint:
+    """Read one versioned, integrity-checked host checkpoint without opening compute."""
+    from foundry.rpc.codec import load_program_checkpoint as load
+    return load(Path(path))
 
 
 def schema():
@@ -106,8 +116,17 @@ def import_perpetual(output: str | Path, **parameters: Unpack[Parameters]):
 
 
 def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8, backends=('cpu', 'cuda'),
-              spectre_python=None, **parameters: Unpack[Parameters]):
+              spectre_python=None, qualification: str | Path | None = None, **parameters: Unpack[Parameters]):
     """Run the selected native benchmark suite and generate its report bundle."""
+    if suite == 'timed':
+        from validation.benchmarks.timed import run
+        if tuple(backends) != ('cuda',) or spectre_python is not None:
+            raise ValueError('timed requires backends=("cuda",) and does not use spectre_python')
+        defaults = (4096,) if qualification is not None else (64, 4096)
+        return run(output, sizes=defaults if sizes is None else tuple(sizes), assets=assets,
+                   qualification=qualification, **parameters)
+    if qualification is not None:
+        raise ValueError('qualification applies only to the timed benchmark suite')
     if suite == 'nonformula':
         from validation.benchmarks.nonformula import run
         if tuple(backends) != ('cuda',) or sizes is not None or assets != 8 or spectre_python is not None:
@@ -128,7 +147,7 @@ def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8, back
         return run(output, sizes=(1, 16, 64) if sizes is None else tuple(sizes), assets=assets,
                    spectre_python=sys.executable if spectre_python is None else spectre_python)
     if suite != 'foundry':
-        raise ValueError('benchmark suite must be foundry, frameworks, discovery or nonformula')
+        raise ValueError('benchmark suite must be foundry, frameworks, discovery, nonformula or timed')
     if assets != 8 or spectre_python is not None:
         raise ValueError('assets and spectre_python apply only to the frameworks suite')
     from validation.benchmarks.run import run

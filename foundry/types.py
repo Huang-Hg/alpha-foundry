@@ -431,6 +431,7 @@ class Metrics:
     Exposure uses actual account positions.
     margin_bps uses the reported turnover denominator. Yearly attendance measures
     exposure-active periods; derivative cashflows are reported separately in risk.
+    fills counts actual fill events for executed_fills; target_book leaves it None.
     """
     sharpe: float
     ann_ret: float
@@ -446,6 +447,7 @@ class Metrics:
     span: str
     n_periods: int
     activity_basis: Literal['target_book', 'executed_fills'] = 'target_book'
+    fills: int | None = None
 
 
 @dataclass(frozen=True)
@@ -585,6 +587,18 @@ class EvaluationReport:
     context: ResearchContext
     rows: tuple[CandidateReport, ...]
     lease: str = ''
+
+
+@dataclass(frozen=True)
+class ResidentEvaluation:
+    """One query's committable report and borrowed in-process device batch.
+
+    Candidate IDs and context belong to report; batch preserves the same row
+    order and exposes resident arrays without repeating evaluation. Direct
+    program evaluation owns report.lease until commit, release or session close.
+    """
+    report: EvaluationReport
+    batch: DeviceBatch
 
 
 @dataclass(frozen=True)
@@ -757,7 +771,8 @@ class SessionBackend(Protocol[ResidentValue]):
     def grid(self) -> DataGrid: ...
     def describe(self) -> dict: ...
     def plan_program(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramPlan: ...
-    def simulate(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramSimulation: ...
+    def simulate(self, program: StrategyProgram | ProgramReference, context: str, *, until: int | None = None,
+                 checkpoint: ProgramCheckpoint | None = None) -> ProgramSimulation: ...
     def evaluate(self, candidates: tuple[Candidate, ...], context: str) -> EvaluationReport: ...
     def evaluate_device(self, candidates: tuple[Candidate, ...], context: str) -> DeviceBatch: ...
     def commit(self, candidates: tuple[Candidate, ...], context: str) -> CommitReport: ...
@@ -1423,6 +1438,39 @@ class ExecutionFeedback:
     available_ns: int
 
 
+@dataclass(frozen=True)
+class AccountCheckpoint:
+    """Detached host account state at a completed base-bar boundary.
+
+    Asset/owner/order state is bounded by B,S,M,Q. Measurement arrays hold only
+    completed statistics columns; commands, audit buffers and market history
+    are not checkpointed. restore validates shapes against the opened executor.
+    """
+    snapshot: str
+    cursor: int
+    assets: HostArray
+    cash: HostArray
+    meta: HostArray
+    orders: HostArray
+    order_values: HostArray
+    owners: HostArray
+    highwater: HostArray
+    targets: HostArray
+    units: HostArray
+    coefficients: HostArray
+    pending_targets: HostArray
+    target_dirty: HostArray
+    activity: HostArray
+    digest: HostArray
+    returns: HostArray
+    equity: HostArray
+    active: HostArray
+    risk_flows: HostArray
+    risk_counts: HostArray
+    risk_previous: HostArray
+    format: str = 'order-account-v1'
+
+
 class AccountExecutionPort(Protocol):
     """Owned native account replacement point for bounded chronological replay.
 
@@ -1444,6 +1492,8 @@ class AccountExecutionPort(Protocol):
     def equity(self) -> FloatArray: ...
     def active(self) -> Array: ...
     def behavior_digests(self) -> tuple[str, ...]: ...
+    def checkpoint(self) -> AccountCheckpoint: ...
+    def restore(self, state: AccountCheckpoint) -> None: ...
     def close(self) -> None: ...
 
 
@@ -1558,12 +1608,12 @@ class BarExecution:
 class TensorState:
     """Declared private tensor name, dtype and shape, excluding the batch axis."""
     name: str
-    dtype: Literal['float32', 'float64', 'int32', 'int64', 'bool']
+    dtype: Literal['float32', 'float64', 'int32', 'int64', 'uint8', 'bool']
     shape: tuple[int, ...]
 
     def __post_init__(self) -> None:
         if (not isinstance(self.name, str) or not self.name
-                or self.dtype not in ('float32', 'float64', 'int32', 'int64', 'bool')):
+                or self.dtype not in ('float32', 'float64', 'int32', 'int64', 'uint8', 'bool')):
             raise ValueError('Tensor state requires a name and a supported explicit dtype')
         if not isinstance(self.shape, tuple) or any(type(size) is not int or size < 1 for size in self.shape):
             raise ValueError('Tensor state dimensions must be positive integers')
@@ -1588,14 +1638,17 @@ class ProgramDescriptor:
     devices: tuple[Literal['cpu', 'cuda'], ...] = ('cpu',)
     seed: int = 0
     fit_at: int = NO_INFORMATION
-    protocol: int = 2
+    checkpointable: bool = False
+    protocol: int = 3
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id:
             raise ValueError('Programs require a nonempty stable ID')
         ProgramReference(self.artifact_digest, self.parameters)
-        if self.protocol != 2:
+        if self.protocol != 3:
             raise ValueError('Unsupported program protocol')
+        if type(self.checkpointable) is not bool:
+            raise TypeError('Program checkpoint capability must be explicit bool')
         if any(not isinstance(value, tuple) for value in (self.state_schema, self.features, self.devices)):
             raise TypeError('Program schemas, features and devices require immutable tuples')
         if any(type(value) is not int or value < 1 for value in (self.history, self.batch_size)):
@@ -1637,6 +1690,7 @@ class ProgramPlan:
     decision_latency: str
     quote_policy: str
     snapshot: str
+    checkpointable: bool = False
 
 
 @dataclass(frozen=True)
@@ -1698,6 +1752,20 @@ class ProgramRun(Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class StateTensor:
+    """A named private (B,*shape) state tensor, including declared RNG state."""
+    name: str
+    values: Array
+
+
+@runtime_checkable
+class CheckpointableRun(ProgramRun, Protocol):
+    """Explicit complete private-state transfer; hidden mutable state is invalid."""
+    def snapshot(self) -> tuple[StateTensor, ...]: ...
+    def restore(self, state: tuple[StateTensor, ...]) -> None: ...
+
+
 @runtime_checkable
 class StrategyProgram(Protocol):
     @property
@@ -1739,6 +1807,17 @@ class ProgramCatalog(Protocol):
 
 
 @dataclass(frozen=True)
+class ProgramCheckpoint:
+    """An explicit host checkpoint; no market panels or event histories are stored."""
+    context: ResearchContext
+    descriptor: ProgramDescriptor
+    plan: ProgramPlan
+    account: AccountCheckpoint
+    state: tuple[StateTensor, ...]
+    format: str = 'program-checkpoint-v1'
+
+
+@dataclass(frozen=True)
 class ProgramSimulation:
     """Standalone actual-account audit; admission requires portfolio replay.
 
@@ -1753,3 +1832,4 @@ class ProgramSimulation:
     returns: FloatArray
     equity: FloatArray
     final_account: AccountSnapshot
+    checkpoint: ProgramCheckpoint | None = None

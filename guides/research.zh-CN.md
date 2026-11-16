@@ -1,12 +1,10 @@
 # 研究与程序接入
 
-[项目介绍](../README.zh-CN.md) · [English](research.md)
+[项目介绍](../README.zh-CN.md) · [English](research.md) · [数据格式](data.zh-CN.md) · [策略程序](programs.zh-CN.md)
 
-Foundry 用同一个会话评价公式、模型信号和目标持仓。人工研究、AI Agent、公式挖掘器与外部模型搜索共用市场规则和组合准入结论。
+一个 Foundry 会话在固定市场研究上评价公式、模型输出和有状态程序。候选评价与组合发布分开进行：人工、Agent 和自动发现共用同一套硬准入规则。
 
-候选由谁提出，与它如何表示是两个独立维度。人类、Agent 和机器学习程序都可以提供公式，也都可以提供任意 Python/CUDA 程序生成的数值数组；非公式因子无需改写成 Foundry 的公式语法。
-
-## 公开 Python 接口
+## 打开研究并审阅结果
 
 ```python
 import foundry
@@ -25,291 +23,177 @@ with foundry.open(
     foundry.export(decision, "var/runs/decision.json")
 ```
 
-`evaluate` 接受公式字符串、公式序列、ID 到公式的映射、`Candidate`、候选序列或已注册批次。报告包含指标、账户风险和结构化准入结论；某个候选被拒绝不会中断整个批次。
+省略组合路径时，修改只保留在内存。提供路径后，入选成员可原子发布到持久库。数组工件使用 `Admission.artifact_dir`，默认 `var/candidates`；持久程序通过调用方提供的工件目录重建。
 
-评价成功时，`row.ok` 为 true，`row.metrics` 包含 `sharpe`、`exposure` 等指标。准入要单独查看 `row.decision.passed`、`reason` 和 `stopped_at`；`ok=True` 不代表 `passed=True`。`foundry.export` 用于导出强类型报告；`foundry.schema()` 和 `session.describe()` 已返回字典，使用 `json.dumps` 序列化即可。
+`evaluate` 接受公式字符串、公式序列、名称到公式的映射、`Candidate`、候选序列、已注册批次、本地 `StrategyProgram` 或已部署 `ProgramReference`。程序输入要求 `Execution(model="orders")`。`row.ok` 表示评价成功；准入需检查 `row.decision.passed`、`reason`、`stopped_at` 与各约束裕度。候选业务拒绝返回报告行；输入错误抛出 `ValueError`/`TypeError`，资源失败直接传播。
 
-| 操作 | 用途 | 对组合的影响 |
-| --- | --- | --- |
-| `evaluate(inputs)` | 评价候选与准入方案 | 只读 |
-| `plan_program(program)` | 查看设备、内存边界与订单延迟 | 只读 |
-| `simulate(program)` | 审计全新实际账户上的程序运行 | 只读，不执行准入 |
-| `diagnose()` | 描述组合缺口与发现上下文 | 只读 |
-| `judge_family(inputs, hypothesis="")` | 检验邻域或显式参数网格 | 只读 |
-| `portfolio()` | 获取成员来源、权重、指标与基线状态 | 只读 |
-| `trial_weights(matrix)` | 比较组合成员权重方案 | 只读 |
-| `commit(report)` | 按报告顺序提交候选 | 通过准入后原子发布 |
-| `commit_weights(trials, index)` | 提交已审阅的权重方案 | 通过准入后原子发布 |
-| `reweight(iterations=3, count=32, seed=1)` | 搜索并提交满足准入规则的权重改进 | 可能发布新组合 |
+| 调用 | 结果与影响 |
+| --- | --- |
+| `evaluate(inputs)` | 指标、风险与准入结论，不改组合 |
+| `evaluate_device(inputs)` | 进程内驻留数组与同一次查询的可提交报告 |
+| `register(values, ...)` / `register(program)` | 有界候选引用和调用方拥有的租约 |
+| `retain(inputs)` | 持久引用，不释放原租约 |
+| `release(batch_or_report)` | 结束指定临时租约 |
+| `plan_program(program_or_reference)` | 运行前查看设备、状态容量、订单能力和时延 |
+| `simulate(program_or_reference)` | 独立新账户审计，不是准入报告 |
+| `diagnose()` / `judge_family(...)` | 组合缺口或邻域诊断，只读 |
+| `portfolio()` / `trial_weights(matrix)` | 当前成员或新的权重比较，只读 |
+| `commit(report)` | 有序准入与组合原子发布 |
+| `commit_weights(trials, index)` / `reweight(...)` | 提交已审阅或求解得到的可行权重 |
 
-权重试验的形状为 `(试验数, 成员数)`，成员顺序与 `portfolio()` 一致。权重必须有限且非负，全零表示现金。这些是组合成员权重，不是逐资产目标持仓。
+报告同时绑定研究快照与准确的组合版本。其他写入者改变组合后，提交会抛出 `ContextConflict`。此时调用 `refresh()`，重新评价和审阅；刷新不会让旧报告自动变新。发布失败不留下部分组合变更。查询不会自动保留所有候选或发布组合。
 
-省略组合路径时，组合库保存在内存中。注册数组暂存于计算设备，仅入选、检查点引用或明确要求保留的候选写入 `Admission.artifact_dir`，默认是 `var/candidates`。传入组合路径后启用组合持久化和原子发布。退出 `with` 释放候选租约及本地计算资源；关闭远程客户端不会停止共享服务。
+`foundry.schema()` 无需打开数据或设备就能返回参数/RPC schema；`session.describe()` 给出字段、66 个算子、实际时钟、执行计划、容量和解析后的设置。市场成本及 `Clock`、`Sizing`、`Account`、`Execution`、`CPU`、`CUDA`、`Admission`、`Search` 等组直接传入 `open`/`serve`；修改设置时打开新的会话。相对配置路径从仓库根目录解析。
 
-报告绑定研究快照和组合版本。其他写入者改变上下文后，旧报告会触发 `ContextConflict`；显式调用 `session.refresh()` 后重新评价，不会自动重试旧决策。
+### 准入试算规模
 
-准入报告保留每个约束的原始变化量 `delta` 和阈值 `required`，空阈值表示无法达到的要求。搜索层独立归一化这些裕度；修改四个 `Search.violation_scale_*` 只改变发现奖励，不再改变研究快照、数组身份或硬准入。被拒候选的展示试探点使用组合层自有尺度。本次修正会让旧快照 ID 一次性变化，旧快照绑定的数组需要显式重新注册，不能继续复用旧句柄。
-
-### 参数与自描述
-
-`market`、`backend`、`data_dir`、`start`、`end` 和市场费用直接传入。高级参数组包括 `foundry.Clock`、`Sizing`、`Account`、`Execution`、`CPU`、`CUDA`、`Admission`、`Operators`、`Search`、`Single` 与 `Monitor`。参数在会话打开时固定；比较其他设置时另开会话。
-
-`foundry.schema()` 无需打开研究即可返回参数 schema、市场默认值与 RPC 契约。`session.describe()` 返回当前字段、66 个算子和实际参数。`foundry.mine(...)` 与 `foundry.serve(...)` 使用相同参数组；向挖掘器传入已有会话时，不再重复传参数。
-
-唯一 CLI 是 `python -m foundry`，例如：
-
-```bash
-python -m foundry --parameters '{"market":"a_share","backend":"cuda"}' fields
-python -m foundry schema var/runs/schema.json
-```
-
-不需要 INI 文件或环境变量覆盖。参数中的相对路径基于仓库根目录解析，也可以传绝对路径。
-
-## 接入自己的数据
-
-仓库快照可以替换。把 CSV、数据库或 API 导出转换为以下文件，再通过 `foundry.open(data_dir=..., market=..., start=..., end=...)` 选择数据。
-
-### 日线文件
-
-`panel.parquet` 采用长表，每行包含 `date`、`symbol`、`open`、`high`、`low`、`close` 和 `volume`。日期使用不带时区的午夜时间表示交易所交易日；现货使用 UTC 日历日。证券代码保存为字符串，保留 A 股代码的前导零。
-
-| 市场 | 额外行情列 | 其他必需文件 |
-| --- | --- | --- |
-| `us_equity` | `adj_factor` | `membership.parquet` |
-| `a_share` | `published`、`exec_open`、`exec_close` | `membership.parquet`、`manifest.json` |
-| `crypto_spot` | 布尔值 `eligible` | `manifest.json` |
-
-- **美股：** OHLC 乘以 `adj_factor`，成交量不调整。可提供原始价格与因子，或已复权价格与全 1 因子，避免重复复权。记录复权方法及缺失的历史版本。
-- **A 股：** 原始 OHLCV 产生信号，`exec_open` 和 `exec_close` 提供历史复权执行价格。读取器按每根行情收盘时已发布的最新版本冻结该根行情；后续修订不替换早期决策使用的记录。`published` 是交易日口径，不是日内公告时钟。
-- **股票资格：** `membership.parquet` 包含 `symbol`、`start`、`end`；起点包含、终点不包含，空终点表示仍有效。假定这些区间在相应收盘时已知。资格区间外也应保留报价，以便已有持仓继续估值。
-- **现货资格：** 每个日线行声明，缺失资格视为 false。
-- **历史长度：** 保留研究起点之前的数据以计算滚动特征。除 A 股显式发布版本外，每个日期/资产只有一行。缺失报价保持缺失，不使用当前成分倒推历史资格。
-
-CSV 转换示例：
+`Admission(weight_steps=N)` 设置 N 个正混合系数网格点 `1/N, 2/N, ..., 1`，另加解析切线建议，重复点跳过；默认 20。订单模型每个试算都重放实际账户，因此它会明显影响查询成本。探索时可使用较小网格：
 
 ```python
-from pathlib import Path
-import pandas as pd
-
-folder = Path("/datasets/my_us_equity")
-folder.mkdir(parents=True)
-panel = pd.read_csv("ohlcv.csv", parse_dates=["date"], dtype={"symbol": str})
-members = pd.read_csv("membership.csv", parse_dates=["start", "end"],
-                      dtype={"symbol": str})
-panel.to_parquet(folder / "panel.parquet", index=False)
-members.to_parquet(folder / "membership.parquet", index=False)
-```
-
-随后在数据覆盖范围内选择研究日期：
-
-```python
-with foundry.open(market="us_equity", data_dir="/datasets/my_us_equity",
-                  start="2025-07-01", end="2025-12-31") as session:
+with foundry.open(admission=foundry.Admission(weight_steps=4)) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-### 来源记录与额外特征
+这只改变检查哪些混合系数，不改变硬约束；较小网格可能漏掉可行改进。`min_sharpe_gain` 默认 0.01，`max_members` 默认 40。应查看报告实际试算数和约束裕度；`trial_weights` 则评价调用方显式给出的矩阵。这些参数在打开会话时固定并进入研究身份。
 
-A 股和现货 manifest 包含 `DataContract` 的七个字段：`schema`、`source`、`retrieved_at`、`features`、`execution_prices`、`publication`、`membership`。仓库 manifest 可作为格式参考，但应填写自己的实际来源与可得性限制；缺少公告时间或修订版本必须如实披露。
+## 执行与组合资金语义
 
-当前美股读取器使用固定的历史来源契约，仅新增 manifest 不会替换报告中的来源说明。请在数据目录旁保留实际来源记录；接入自定义美股来源契约需要扩展读取器。数值快照仍绑定实际加载的数据和执行规格。
+在打开会话时选择执行模型：
 
-新增 Parquet 列不会自动成为公式字段。模型输出可直接注册；若要扩展行情字段，在 [`market/data.py`](../foundry/market/data.py) 及对应市场编译器中接入，无需改写回测内核。历史 Quantiacs 数据仍可使用，不依赖已经退役的平台集成。
-
-### 永续数据
-
-保留的小时归档契约由 `trade.parquet`、`mark.parquet`、`funding.parquet` 和 `manifest.json` 组成，使用小时执行事件生成日线决策与统计。manifest 记录资产顺序、工件哈希，以及需要时的资金费间隔变更证据。仅有日线 OHLC 无法还原资金费和强平。
-
-```python
-foundry.import_perpetual(
-    "/datasets/my_perpetual",
-    symbols="BTCUSDT ETHUSDT SOLUSDT",
-    history_start="2025-01-01",
-    start="2025-07-01", end="2025-12-31",
-)
-```
-
-导入器获取公开 USD-M 归档、验证校验和并保存来源记录。读取时使用 `market="crypto_perpetual"`、对应目录与日期。已有数据的资产顺序由 manifest 决定；`symbols` 用于新数据采集。更细行情通过以下显式契约接入。
-
-### 加密货币日内文件
-
-现货与逐仓永续均可提供 `manifest.json` 和 `bars.parquet`，使用 `schema="crypto-bars-v1"`；永续还须提供 `funding.parquet`。读取器位于 [`market/intraday.py`](../foundry/market/intraday.py)，小时归档导入器不生成此格式。
-
-| 文件 | 必需列 |
+| 设置 | 含义 |
 | --- | --- |
-| `bars.parquet` | 字符串 `symbol`；int64 UTC 纳秒 `open_ns`、`close_ns`、`available_ns`；浮点 `open`、`high`、`low`、`close`、`volume`；布尔 `eligible` |
-| 永续 Bar 附加列 | 浮点 `mark_open`、`mark_high`、`mark_low`、`mark_close`，仅供执行 |
-| `funding.parquet` | 字符串 `symbol`；int64 UTC 纳秒 `settlement_ns`；浮点 `rate`、`mark` |
+| `Execution(model="targets")` | 默认四市场目标回测，接受公式和权益比例数组 |
+| `Execution(model="orders")` | 加密现货/USDT 逐仓 Bar 账户，公式、数组与程序共用实际执行 |
+| `Account(composition="shared")` | 一个实际账户，成员系数仅缩放一次意图 |
+| `Account(composition="independent")` | 仅订单模型；系数一次性分配各自初始现金 |
 
-Bar 是对齐的左闭右开基础区间 `[open_ns,close_ns)`；`available_ns >= close_ns` 表示包含资格信息的整行何时可见。同一 `(symbol,open_ns)` 可有不同可见时间的版本。读取器先按研究截止点截断 Bar 终点与可见时间，再仅用决策收盘前已可见的版本冻结每根决策 Bar。组成行情缺失或迟到时，该次决策的特征不可用；后来的发布不会改写过去决策。执行采用研究截止前可见的首个发布版本。现货报价缺失时可保留已有持仓；永续执行要求完整且有限的成交价和标记价基础 Bar。
+美股和 A 股当前支持日线。crypto 可使用日线、支持的小时永续归档，或带发布时间的基础 Bar，并独立配置决策/统计频率。股票程序订单所需的结算和公司行动能力尚未提供。
 
-以下是永续 manifest 示意。请用实际 parquet 字节的 `hashlib.sha256(file_bytes).hexdigest()` 替换摘要占位符，并填写真实来源与限制：
-
-```json
-{
-  "schema": "crypto-bars-v1",
-  "market": "crypto_perpetual",
-  "source": "Your archived feed and version",
-  "retrieved_at": "2026-11-16T00:00:00Z",
-  "features": "Completed trade OHLCV; mark and funding excluded",
-  "execution_prices": "First published trade and mark base bars",
-  "publication": "Per-row available_ns; describe missing historical vintages",
-  "membership": "Historical eligible values published with each bar",
-  "timezone": "UTC",
-  "interval": "5min",
-  "history_start": "2025-01-01T00:00:00Z",
-  "end": "2025-02-01T00:00:00Z",
-  "symbols": ["BTCUSDT", "ETHUSDT"],
-  "artifacts": {
-    "bars": {"path": "bars.parquet", "sha256": "<bars file digest>"},
-    "funding": {"path": "funding.parquet", "sha256": "<funding file digest>"}
-  }
-}
-```
-
-现货将 `market` 设为 `crypto_spot`，省略资金费工件及标记价列。manifest 的历史边界须为显式 ISO UTC 时间戳，`end` 为排他边界。研究 `start`、`end` 可用 ISO UTC 时间戳；仅日期的 `end` 包含完整 UTC 当日。源历史起点、研究起点和截止点必须对齐完整统计周期。决策与统计时长须为基础周期的整数倍；固定时长单位为 `s`、`min`、`h`、`D`。
-
-资金费表须显式覆盖每个基础开盘时点与资产：`settlement_ns` 等于该基础开盘时间，`rate=0` 明确表示该时点无现金流，`mark` 为有限正数结算标记价。缺行会拒绝读取，不默认为零。结算发生于基础开盘之间时，需要更细的基础数据。资金费率与标记价不进入特征面板。
+显式 5 分钟 crypto 数据示例：
 
 ```python
 with foundry.open(
     market="crypto_perpetual", data_dir="/datasets/crypto_5m",
     start="2025-01-08", end="2025-01-31", backend="cuda",
     clock=foundry.Clock(decision="15min", statistics="1D"),
-    account=foundry.Account(margin="isolated", leverage=3., gross_limit=2.),
+    account=foundry.Account(margin="isolated", leverage=3., gross_limit=2.,
+                            composition="shared"),
+    execution=foundry.Execution(model="orders", participation=0.1),
 ) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-此处特征及注册的 `(B,D,S)` 数组使用已完成的 15 分钟决策 Bar。`Execution(fill="next_open")` 在决策完成后的下一个 5 分钟基础开盘执行，允许收盘与开盘共用边界，不等待下一次决策。没有新目标的基础 Bar 保持实际数量。公式窗口按决策 Bar 数计数，因此 `ma_dist_20` 使用 20 条观测。
+完成的 15 分钟决策最早在接下来的 5 分钟基础开盘生效，包括相邻周期共用的边界，不必等到下一次 15 分钟决策。公式窗口以决策 Bar 计数。两次决策之间，实际持仓、挂单、资金费和强平仍持续演进。统计使用独立周期收盘；crypto 年化系数为 `365 * 86400 / statistics_seconds`。
 
-### 有状态程序与订单审计
+**共享账户**中，所有成员看到总现金、权益与净持仓，并另外收到自身有符号 `owner_quantity`。系数缩放目标值和程序订单数量，不划出独立现金。程序返回系数为一时的未缩放数量。若要关闭已实现的成员持仓，先将其绝对数量除以 `context.intent_coefficients`，因为重放会再应用一次系数。[程序仓位语义](programs.zh-CN.md#仓位与成员持仓)给出准确约定和 reduce-only 限制。
 
-`session.plan_program(program)` 在打开运行实例前给出设备、精度、Bar 内路径、成交量参与上限和有界状态。`session.simulate(program)` 创建全新策略状态及空仓账户，以 `Account.initial_cash` 注资，回调失败时也关闭私有资源。目前覆盖明确选择的 CPU/CUDA 后端上的 crypto 现金与 USDT 逐仓账户；股票程序订单所需的公司行动和结算能力尚未接入。
+**独立账户**中，系数之和不得大于一，即使只超出很小正值也会拒绝。每个账户起始现金为 `Account.initial_cash * coefficient`，未分配资金保持现金。意图不二次缩放，运行上下文中的意图系数为一。账户依赖策略根据实际分配的资金重放；固定数量策略仍须自行满足资本约束，资金系数不会自动把它改成权益比例策略。
 
-将以下示例保存为 Python 文件，使工件摘要绑定实际源码，并选择自己的数据目录和覆盖日期。程序只向第一个合格资产提交一次固定数量订单。预留价格用于估算资金占用，不是成交限价。
+权重矩阵为 `(trials, members)`，成员顺序对应 `portfolio().sources`。系数必须有限且非负，全零表示现金。在订单模型中，每个候选、变化的权重向量和有序准入都创建新的程序状态并重放实际账户，不能把曾实现的持仓路径当作账户状态不变时的静态混合捷径。
 
-计划会披露报价口径：OHLC 缺失或含非正价格时不可成交订单；现货沿用最后有效收盘价估值，首次有效上市报价前为零。源数据保持不变，既有目标账户模型仍使用原来的估值契约。
+Bar 模型使用明确的 `bar_path`、参与率、价格/数量步长、预留资金和市场规则；缺失报价可能阻止成交。它不模拟订单簿排队，也不会在任意 Bar 内成交瞬间调用用户程序。根据反馈追加的保护单最早只能在下一次配置的决策时提交。
 
-```python
-import hashlib
-from pathlib import Path
-import foundry
+## 数组与模型输出
 
+`session.grid` 给出有序资产、标准 UTC `decision_times`、对应 int64 UTC 纳秒 `time_ns` 和研究快照。数值数组为 float32/float64 `(B,D,S)`：候选、决策、资产。观测与拟合截止点为 int64 UTC 纳秒 `(B,D)`，不能晚于对应决策。`NO_INFORMATION` 仅表示没有使用相应观测或拟合信息，不表示来源不明。
 
-class BuyOnce:
-    descriptor = foundry.ProgramDescriptor(
-        "buy-once",
-        artifact_digest=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        parameter_digest=hashlib.sha256(b"quantity=0.001").hexdigest(),
-        state_schema=(foundry.TensorState("sent", "bool", (1,)),),
-        features=("close",), devices=("cpu", "cuda"),
-    )
-
-    def open(self, context):
-        return BuyOnceRun(context)
-
-
-class BuyOnceRun:
-    def __init__(self, context):
-        self.xp = context.xp
-        self.sent = self.xp.zeros((1, 1), dtype=self.xp.bool_)
-
-    def on_event(self, event):
-        xp = self.xp
-        integer = lambda value: xp.full((1, 1), value, dtype=xp.int64)
-        number = lambda value: xp.full((1, 1), value, dtype=xp.float32)
-        new = (~self.sent) & event.eligibility[-1:, :1]
-        self.sent |= new
-        return foundry.OrderCommands(
-            action=xp.where(new, int(foundry.OrderAction.NEW), 0),
-            owner=integer(0), id=integer(1), asset=integer(0), side=integer(1),
-            quantity=number(.001), type=integer(int(foundry.OrderType.MARKET)),
-            price=number(0), reservation_price=event.features["close"][-1:, :1],
-            valid_until=integer(-1), reduce_only=xp.zeros((1, 1), dtype=xp.bool_),
-        )
-
-    def on_feedback(self, feedback):
-        pass  # Consume or stream actual fills here; this hook cannot submit orders.
-
-    def close(self):
-        del self.sent
-
-
-with foundry.open(
-    market="crypto_spot", data_dir="/datasets/crypto_5m", backend="cuda",
-    start="2025-01-08", end="2025-01-31",
-    clock=foundry.Clock(decision="5min", statistics="1D"),
-    account=foundry.Account(initial_cash=1000.),
-    execution=foundry.Execution(
-        precision="paired", bar_path="open_low_high_close", participation=.1,
-        order_capacity=32, command_capacity=32,
-    ),
-) as session:
-    program = BuyOnce()
-    print(session.plan_program(program))
-    audit = session.simulate(program)
-
-```
-
-`on_event` 接收此前已完成 Bar 的实际账户及独立复制的因果特征窗口，历史长度受描述符的 `history` 限制。返回的命令列为 `(B,K)`；`action=0` 表示该槽无命令。每个账户的新订单 ID 必须递增，`(owner,id)` 标识订单；修改替换剩余数量和条件并重置优先级。`valid_until` 必须为 `-1` 或已编译的基础 Bar 开盘时间。只减仓数量超过实际未预留持仓时拒绝，不自动裁剪。
-
-命令最早在编译日程中的下一根基础 Bar 开盘生效。所选路径明确 OHLC 的处理顺序，`participation` 按基础 Bar 报告成交量限制成交。每根基础 Bar 完成后，`on_feedback` 接收部分成交、正常业务拒绝和实际账户，必须返回 `None`。依赖新成交的保护单只能在下一次决策提交：5 分钟基础行情配 15 分钟决策时，中间 Bar 可能没有保护；设为 5 分钟决策可在每根已完成的 5 分钟 Bar 后响应，但仍不提供同一根 Bar 内的成交响应。
-
-框架只保留有界活动订单、命令、单 Bar 反馈和统计收益/权益，不自动累积完整成交轨迹；需要完整审计时从 `on_feedback` 流式保存。CUDA 张量保持设备驻留，跨框架调用须使用运行上下文提供的 CUDA stream。不可变工件/参数身份与 `state_schema` 描述运行实例，`open` 必须创建独立状态，共享模型参数保持不变。回调从研究期首次可执行决策开始，更早的空账户事件跳过，历史输入由声明的特征窗口提供。
-
-`simulate` 返回独立审计 `ProgramSimulation`，`commit` 会拒绝该类型。程序候选注册、发现和组合准入仍待共享账户重放集成。远程会话拒绝 Python 程序实例；远程执行须显式部署版本化工件，研究 RPC 不传源码字符串或 pickle。
-
-## 数值因子、模型信号与目标持仓
-
-`session.grid` 提供规范 ISO UTC `decision_times`、等价的 int64 UTC 纳秒 `time_ns`、有序资产和快照身份。数组维度为 `(B,D,S)`：候选、决策、资产。四市场日线预设保留原有口径，crypto Bar 工件还支持独立的决策与统计频率。股票决策为交易所时段收盘（包含夏令时和提前收盘），crypto 为已完成决策 Bar 的右端点。日历坐标不补造缺失的历史发布时间。
-
-以下示例注册三个常量零评分候选，没有使用观测或拟合。接入实际策略时替换数值和因果声明：
+下面使用公开驻留特征生成一个因果数值评分：
 
 ```python
 import numpy as np
 import foundry
 
-with foundry.open() as session:
-    grid = session.grid
-    decisions, assets = len(grid.decision_times), len(grid.assets)
-    values = np.zeros((3, decisions, assets), dtype=np.float32)
-    unused = np.full((3, decisions), foundry.NO_INFORMATION, dtype=np.int64)
+with foundry.open(backend="cuda") as session:
+    port, grid = session.resident, session.grid
+    xp = port.xp
+    scores = xp.where(port.eligibility, port.features["ma_dist_20"], xp.nan)[None]
+    observed = np.broadcast_to(grid.time_ns, (1, len(grid.time_ns))).copy()
+    fitted = np.full(observed.shape, foundry.NO_INFORMATION, dtype=np.int64)
     registered = session.register(
-        values, kind="scores", unit="score", ids=("model-small", "model-base", "model-large"),
-        grid=grid, producer="external-program-v1",
-        observed_at=unused, fit_at=unused,
-        complexity=(0.2, 0.5, 0.8),
+        scores, kind="scores", unit="score", ids=("custom-trend",),
+        grid=grid, producer="custom-trend-v1", observed_at=observed, fit_at=fitted,
     )
-    report = session.evaluate(registered)
+    try:
+        report = session.evaluate(registered)
+        saved = session.retain(registered.candidates[:1])
+        print(report.rows[0].metrics, saved.candidates)
+    finally:
+        session.release(registered)
 ```
 
-| 类型与单位 | 含义 | 约束 |
-| --- | --- | --- |
-| `scores`, `score` | 由会话 `Sizing` 规则转换的评分 | Float32/float64；NaN 为缺失，映射成零目标 |
-| `targets`, `equity_fraction` | 带符号名义金额/账户权益比例 | 有限；现金账户非负；总绝对敞口不超过 `Account.gross_limit`；不具资格资产为零 |
+`session.resident` 是进程内只读视图。远程客户端在自己的程序中生成 NumPy 数组，并对齐远程网格注册。注册拥有独立驻留副本；返回后修改原缓冲区不会改变候选。
 
-`Sizing(rule="equal_slots")` 保留日线预设：现金市场使用 `clip(score, 0, 1) / N`，可做空市场使用 `clip(score, -1, 1) / N`，`N` 为当日具资格资产数量。`Sizing(rule="independent", scale=0.1)` 使用截断评分乘显式尺度，不除以资产数量；增加零评分资产不会稀释已有资产目标。独立规则超总敞口预算时返回候选拒绝并继续批次，不自动归一化到满仓。
+| 输入 | 语义 |
+| --- | --- |
+| `scores`，单位 `score` | NaN 表示缺失，由 `Sizing` 定义目标映射 |
+| `Sizing(rule="equal_slots")` | 默认截断评分并除以合格资产数 |
+| `Sizing(rule="independent", scale=...)` | 逐资产映射，不受资产数稀释；超总敞口作为候选拒绝 |
+| `targets`，单位 `equity_fraction` | 有符号名义金额/账户权益，绕过评分映射 |
+| `targets`，单位 `quantity` | 资产数量，仅订单模型 |
+| `targets`，单位 `notional` | 报价币金额，仅订单模型 |
+| 目标 `update_mask=False` | 保留该成员先前目标，仅订单模型 |
+| 目标为零且 `update_mask=True` | 明确关闭该资产目标 |
 
-直接 `targets` 跳过评分映射，必须传入 `unit="equity_fraction"`；零表示明确清仓。当前目标契约接受省略 `update_mask` 或全真的布尔 `(B,D,S)` 掩码，两者具有相同规范身份。含 false 的掩码需要后续账户执行能力，当前明确拒绝；评分不接受掩码。数量或名义金额目标尚未支持。
+目标必须有限，符合市场方向规则，并在无资格资产上为零。权益比例在注册时检查总敞口预算；quantity/notional 在执行时按实际价格和账户资金换算，不可支付或超预算的订单可能被拒绝，不偷偷裁剪。评分不接受 mask。目标模型要求省略 mask 或全 True；省略与全 True 对应同一候选身份。
 
-`foundry.Account(margin="isolated", leverage=3., gross_limit=2.)` 将逐仓抵押杠杆与允许的总目标敞口分开。默认日线经济口径保留：现金 1 倍，逐仓永续杠杆与敞口上限均为 5 倍。评分校准若有拟合，必须计入 `fit_at`。
+`producer` 标明实现身份；可选归一化 `complexity` 只影响软发现评分，不改变硬准入。拟合截止点须覆盖训练标签、预处理和校准所用的全部信息。Foundry 检查声明是否引用未来，但不能证明外部预测的真实来源。
 
+## 一次查询取得驻留结果
 
+模型或 Agent 同时需要实际驻留收益和准入报告时，使用 `evaluate_device`：
 
-历史[独立 Agent 接入记录](integrations/agent-l4-20261116/README.zh-CN.md) 使用迁移前协议和真实数值因子和 GPU 岭回归模型跑通了这条路径，并根据返回的反馈调整候选。
+```python
+with foundry.open(backend="cuda") as session:
+    result = session.evaluate_device({"trend": "gt(ma_dist_20,0)"})
+    print(result.report.rows[0].metrics)
+    print(result.batch.rows[0].returns.shape)
+    session.commit(result)
+```
 
-数值必须为 float32 或 float64。观测和拟合声明为 `(B,D)` int64 UTC 纳秒数组，每项不得晚于对应的 `grid.time_ns`。只有未使用观测或拟合时才能使用 `foundry.NO_INFORMATION`（int64 最小值）。例如未拟合、决策时观测的评分使用 `observed_at=np.broadcast_to(grid.time_ns, (B,D))`，`fit_at` 填 `NO_INFORMATION`。训练模型必须如实声明训练数据和标签使用的最晚信息时点。日线收盘决策最早于下一开盘执行。
+不可变 `ResidentEvaluation` 中的 `.report` 与 `.batch` 按同一候选顺序对应，来自一次评价；无需再次 `evaluate`，也无需手工拼装报告行。输入也可为数组注册、本地程序或已部署引用，`commit(result)` 直接接受该封装。直接程序查询可用 `release(result)` 结束报告租约；显式注册则释放原注册批次。在所属会话内消费驻留数组，不修改借用缓冲区。该方法要求进程内会话，远程研究返回类型化报告，不返回客户端本地设备指针。
 
-`producer` 标识生成程序。可选的逐候选 `complexity` 范围为 `[0,1]`，仅影响发现流程的软评分，不改变硬准入。注册创建有界驻留副本，返回绑定内容身份的候选与租约。本地 CuPy 数据留在 GPU，只传回紧凑摘要；远程注册自动上传 NumPy 数组，无需服务器路径。
+CUDA 数组的执行顺序跟随包围评价调用的流。直接在该流使用，或显式转交其他流；返回 Python 封装不等于建立了任意跨流就绪关系。例如：
 
-用完调用 `session.release(registered)`；循环中通常放在 `finally` 内。退出会话也会释放其剩余租约。所有活动批次的总行数不得超过 `candidate_batch`，满额后须先释放再注册。释放后的驻留引用失效，即使内部仍有该候选的紧凑测量缓存也不能继续使用。
+```python
+with foundry.open(backend="cuda") as session:
+    port, xp = session.resident, session.resident.xp
+    with port.scope():
+        producer = xp.cuda.Stream(non_blocking=True)
+        consumer = xp.cuda.Stream(non_blocking=True)
+        with producer:
+            result = session.evaluate_device("gt(ma_dist_20,0)")
+            ready = xp.cuda.Event()
+            ready.record()
+        with consumer:
+            consumer.wait_event(ready)
+            mean_return = result.batch.rows[0].returns.mean()
+        consumer.synchronize()
+        print(float(mean_return))
+    session.commit(result)
+```
 
-需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v17`、`candidate-array-v4`、`candidate-discovery-v5`（二进制批次传输为 `candidate-batch-v3`），旧格式须显式重跑，不自动迁移。
+内部公式辅助流在使用其结果前已汇合。若由 PyTorch 消费批次，也要为它的流建立相应事件依赖。释放作用域资源前完成消费。提案奖励反馈是另一类对象，其 `borrow(stream_pointer)` 会自动传递跨线程的生产就绪关系，见下文。
+
+## 候选归属与复用
+
+所有活动数组和程序租约合计不超过 `candidate_batch`。注册下一批前先释放已完成批次；注册不会把每次试探都落盘，也不会隐式溢写。
+
+- 显式 `register(...)` 返回调用方拥有的批次。`evaluate(batch)` 和 `commit(report)` 不会释放它，使用后自己释放。
+- 便捷 `evaluate(program_or_reference)` 返回带 `report.lease` 的报告。`release(report)` 释放它，成功 `commit(report)` 消费它；失败或冲突保留租约，供重新评价或显式释放。
+- `retain(...)` 返回无临时 scope 的持久引用，原租约仍需释放。提交和发现会在发布/检查点前保留它们必需的引用。
+- 已释放的驻留引用失效。持久数组需要对应工件文件；持久程序在重新打开时需要相同部署目录和确定性 loader。
+
+在同一注册作用域内复用不可变模型；每次查询仍调用 `open(context)` 创建独立私有状态，并关闭该次运行。释放只移除会话持有的模型引用，不会销毁应用另外持有的引用。实际账户轨迹不会作为权重试算缓存复用。
+
+## 有状态程序与订单审计
+
+公开策略由 `ProgramDescriptor` 与 `open(context)` 构成，后者返回 `ProgramRun`。`on_event` 消费独立拥有的因果特征窗口和实际账户，返回有界 `OrderCommands`；每个基础 Bar 完成后收到实际 `on_feedback`。失败路径也会关闭运行。`context.batch_size` 是本次有效批量，驻留 `variant_indices` 表示原始候选变体；不要仅按 `descriptor.batch_size` 分配运行状态。
+
+程序可参与 `evaluate`、发现、家族检查、权重试算、重配与提交。部署引用包含经完整性校验的工件字节和规范 JSON 参数。向 `open` 或 `serve` 提供 `DeployedPrograms` 属于应用显式部署；研究 RPC 不传源码、不安装依赖、不反序列化 Python 模型。完整代码与远程部署见[程序指南](programs.zh-CN.md)。
+
+`simulate` 保留独立审计职责，返回驻留收益、权益与最终实际账户，不作准入判定，也不能直接提交；组合流程使用 `evaluate`。
 
 ## 策略发现
-
-### 为 Agent 或自定义循环评分
 
 ```python
 with foundry.open() as session:
@@ -317,195 +201,118 @@ with foundry.open() as session:
         foundry.Candidate("trend", foundry.Formula("gt(ma_dist_20,0)")),
         foundry.Candidate("momentum", foundry.Formula("cs_rank(ret_20)")),
     )
-    print(session.diagnose())
     discovery = foundry.Discovery(session)
     report = discovery.evaluate(candidates)
     for row in report.rows:
         print(row.candidate.id, row.log_reward, row.decision)
-    decision = session.commit(report)
+    session.commit(report)
 ```
 
-已注册批次的 `.candidates` 可放在同一位置。Discovery 将组合缺口、行为指纹、相关性和新颖度用于目标评分。奖励指导下一步生成什么候选，组合硬准入仍是最终依据。组合变化后重新创建 `Discovery`，使其参照上下文保持一致。
+已注册数组/程序的 `.candidates` 可放在同一位置。发现流程用行为身份、相关性和组合缺口指导提案，软奖励不能推翻硬准入。组合变化后重新创建 `Discovery`。延迟噪声对照报告不能提交，应先无延迟评价实际候选。
 
-`diagnose()` 只读，但计算量取决于目标。使用 `Search(objective="single")` 时，它会评价共用的确定性校准候选群，并返回校准门槛；`Single.calibration_sample` 默认是 8192。组合目标不执行这项校准。
+模型/程序参数家族可先注册变体，再调用 `CandidateGrid(seed, variants, parameter_coords, hypothesis)`。坐标为维数相同、互不重复的整数元组，种子恰好出现一次。`judge_family` 提供研究诊断，不发布组合，也不证明样本外稳健性。
 
-噪声控制报告带有 `delayed=True`，描述的是延迟候选行为，不能直接传给 `session.commit`。请先通过 `session.evaluate(...)` 无延迟评价实际候选，再审阅并提交新报告。
-
-### 接入外部提案器
+`ExternalProposer` 接受有限的候选或已注册批次：
 
 ```python
 with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
-    batch = (
-        foundry.Candidate("trend", foundry.Formula("gt(ma_dist_20,0)")),
-        foundry.Candidate("momentum", foundry.Formula("cs_rank(ret_20)")),
-    )
-    proposer = foundry.ExternalProposer([batch])
-    status = foundry.mine("var/runs/external-search", session=session,
-                          proposers=(proposer,))
+    candidates = (foundry.Candidate("trend", foundry.Formula("gt(ma_dist_20,0)")),)
+    proposer = foundry.ExternalProposer([candidates])
+    foundry.mine("var/runs/external", session=session, proposers=(proposer,))
 ```
 
-`ExternalProposer` 接受有限的候选或已注册批次。`foundry.mine(..., session=session, proposers=[proposer])` 自动打开、恢复和关闭提案器资源，不关闭调用者传入的会话。可选回调接收一个 `LearningFeedback`：`feedback.batch` 保留候选顺序及研究快照，`feedback.rewards` 是同设备的 FP32 向量。CPU 程序可显式调用 `to_host()`；CUDA 程序在自己的流上使用 `borrow(stream_pointer)`，再用 DLPack 零拷贝接入 PyTorch。借用范围内不得修改反馈或向外保留别名。反馈不借用行情/组合缓冲区，因此可与提交和重配重叠。
+自定义提案器实现 `open(device)`，在作用域中返回具备 `propose`、`learn`、`release`、`dump`、`load` 的生产者。反馈严格保持原提案批次顺序；驻留奖励支持显式传回主机，或遵循流依赖的 CUDA 借用。模型和拟合由提案器持有。驱动器在释放前保存所需引用，不缓存历史 GPU 批次。
 
-自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v5`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
+### 反馈与自定义生产者
 
-
-不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
-
-### 非 GFN GPU 模型和非公式因子示例
-
-下面的可执行客户端位于验证套件，可直接替换其中的模型或张量程序；它不使用 GFN，也不把输出转换成公式。
+固定批次适配器的准确构造器为 `ExternalProposer(batches, *, name="external", feedback=None)`。`batches` 每项可以是 `Candidate`、`RegisteredBatch` 或候选序列。可选回调接收一个 `LearningFeedback`，返回 `TrainingResult`，不能返回普通字典或 `None`：
 
 ```python
-from validation.benchmarks.tensor_programs import TensorProposer
+def learn(feedback: foundry.LearningFeedback) -> foundry.TrainingResult:
+    rewards = feedback.rewards.to_host()
+    print(feedback.batch.sequence, [candidate.id for candidate in feedback.batch.candidates])
+    return foundry.TrainingResult(metrics={"mean_reward": float(rewards.mean())})
 
-with foundry.open(
-    backend="cuda",
-    search=foundry.Search(epochs=4, batch_size=64),
-    cuda=foundry.CUDA(candidate_batch=64, measurement_cache_mib=32),
-) as session:
-    proposer = TensorProposer(session, mode="mlp")
-    foundry.mine("var/runs/mlp-example", session=session, proposers=[proposer])
+
+with foundry.open(search=foundry.Search(epochs=1, accept=False)) as session:
+    batch = (foundry.Candidate("trend", foundry.Formula("gt(ma_dist_20,0)")),)
+    proposer = foundry.ExternalProposer([batch], name="my-model", feedback=learn)
+    foundry.mine("var/runs/my-model", session=session, proposers=(proposer,))
 ```
 
-`mode="mlp"` 每 64 日用历史前缀拟合一批 8→16→1 的 FP32 网络，训练标签为 20 日收益，标签终点严格早于预测段。网络生成 `targets`；另一个 GPU 奖励代理网络从驻留反馈学习，指导下一批超参选择。它不会把研究期反馈更新后的预测器回填到过去。
+`feedback.batch` 是准确的提案句柄，包含 `owner`、`sequence`、`context`、`ordinary` 及有序 `.candidates`；`.auxiliary` 为总候选数减普通候选数。`.rewards` 是同样总行数的独立 FP32 向量，提供 `.shape`、`.device`。`to_host()` 显式返回独立 NumPy 副本，并在需要时等待 CUDA 生产完成。
 
-`mode="factor"` 用 GPU 张量、交互特征和横截面排序生成 `scores`，GPU CEM 根据同一奖励向量更新参数分布。示例还通过 `CandidateGrid` 执行九点邻域和延迟双生子检查。两者共用注册、归档、硬准入和有序提交接口；模型参数、拟合过程和学习规则由客户端持有。
-
-数组注册把 GPU 输出复制到有界驻留租约，并在 GPU 上计算分块摘要，仅将紧凑摘要传回主机。入选、检查点引用及明确保留的候选才传输完整数据并落盘。输出及拟合截止点通过 `session.register` 显式声明。因果预测拟合不等于独立样本外选模：超参和因子搜索使用研究窗口反馈，报告中的收益仅供样本内研究。
-
-`candidate_batch` 限制活动驻留输入总行数及持久化暂存。生产者在 `release(batch)` 中释放自己注册的批次；驱动器先等待学习完成并保存检查点最终引用。未选中数据直接释放，不写文件。明确保留复用注册时计算的内容身份，连续候选借用原切片，主机 PIT 截止数组保持在主机；使用有界暂存及原子文件，读取工件仍校验完整性。保留操作返回内容摘要相同、scope 为空的持久引用。组合和检查点禁止包含驻留 scope；不缓存历史 GPU 批次，也不自动归档每次试探。 注册、必要落盘和完整用时见[同卡保留路径优化对照](benchmarks/retention-l4-20261116/README.zh-CN.md)。
-
-统一测速入口：
-
-```bash
-python -m foundry --parameters '{"search":{"epochs":4,"batch_size":64},"cuda":{"candidate_batch":64,"measurement_cache_mib":32}}' \
-  benchmark var/runs/nonformula-example --suite nonformula --backends cuda
-```
-
-耗时、误差和准入结果见 [L4 接入验收报告](benchmarks/nonformula-l4-20261116/README.zh-CN.md)。该短数据窗口的延迟双生子为空，邻域结果只作为接口验收，不能证明因子稳健。
-
-### 不限于公式的稳健性检验
-
-公式可调用 `session.judge_family({"trend": "gt(ma_dist_20,0)"}, hypothesis="trend")`，由算子注册表派生参数与字段邻域。
-
-外部模型参数扫描使用显式候选网格。假设同一打开的会话内已注册三个模型变体：
+GPU 学习在指定设备初始化自己的模型/状态，无需主机传输即可消费反馈。进程内 CUDA 会话中的以下回调把摘要写入调用方自己的存储，可将该赋值换成优化器计算：
 
 ```python
-variants = registered.candidates
-family = foundry.CandidateGrid(
-    seed=variants[1], variants=variants,
-    parameter_coords=((0,), (1,), (2,)),
-    hypothesis="Performance persists across adjacent model sizes",
-)
-result = session.judge_family(family)
+xp = session.resident.xp
+consumer = xp.cuda.Stream(non_blocking=True)
+reward_summary = xp.empty((1,), dtype=xp.float32)
+
+
+def learn_gpu(feedback: foundry.LearningFeedback) -> foundry.TrainingResult:
+    with feedback.rewards.borrow(consumer.ptr) as rewards:
+        reward_summary[:] = rewards.mean()
+    return foundry.TrainingResult()
 ```
 
-种子必须在变体中恰好出现一次。坐标是维度一致、互不重复的整数阶梯位置；完整邻域才能使高原和双生子诊断有意义。家族结果用于研究，不发布组合，也不保证样本外收益。
+CUDA `borrow` 需要消费者流指针，会等待生产事件，并在退出作用域时记录消费完成。CPU 使用不带流的 `borrow()`，得到只读视图。不要修改奖励，也不要把别名/DLPack 张量带出借用范围。驱动器负责关闭反馈，等待学习与消费后再释放提案；这个小奖励租约不依赖可变组合状态。
+
+动态生成/训练的提案器实现以下公开生命周期：
+
+| 方法 | 签名与职责 |
+| --- | --- |
+| 配置 `open` | `open(device: foundry.ComputeDevice)` 返回上下文管理器，产生一个生产者；在此初始化/释放模型、优化器与流 |
+| 生产者 `propose` | `propose(request: foundry.ProposalRequest) -> foundry.ProposalBatch \| None`，None 表示该生产者结束提案 |
+| 生产者 `learn` | `learn(feedback: foundry.LearningFeedback) -> foundry.TrainingResult` |
+| 生产者 `release` | `release(batch: foundry.ProposalBatch) -> None`，结束准确的活动批次及其拥有的注册 |
+| 生产者 `dump` | `dump() -> bytes`，没有活动批次时导出明确版本、非 pickle 的提案器状态 |
+| 生产者 `load` | `load(payload: bytes) -> None`，校验并恢复匹配的提案器状态 |
+
+配置和生产者具有非空 `name`，同一挖掘运行内不同提案器名称唯一。`ProposalRequest` 包含 `.context`、请求 `.count` 及诊断 `.features` 元组。构造 `ProposalBatch(owner, sequence, context, ordinary, candidates)` 时，每个打开的生产者使用唯一 owner 和稳定批次序号，并将原句柄保留到 release。每个生产者最多一个未释放批次，反馈必须匹配其顺序、上下文和身份。`ExternalProposer` 接收已注册输入时只借用引用，调用方在挖掘期间保持租约有效，并在结束后释放；自定义生产者自行注册新输出时负责释放。库/检查点必需的候选会在释放前完成保留。
+
+内置挖掘使用选定的 GFlowNet 或随机公式提案器，CUDA GFlowNet 推理和训练在设备上使用 PyTorch。`Search(accept=False)` 只演进内存研究组合，不发布持久库；持久发布需要 `accept=True`。发现、挖掘和 walk-forward 需要进程内会话，远程会话提供候选研究调用，不传输 Python 学习回调。
+
+挖掘 checkpoint 恢复发现/提案器状态及持久候选引用，然后重新重放账户。另一套显式[程序审计 checkpoint](programs.zh-CN.md#独立审计与恢复状态)在完整基础 Bar 边界保存声明的私有张量及实际账户/订单状态，通过进程内 `simulate(..., until=..., checkpoint=...)`、`export` 和 `load_program_checkpoint` 使用。
 
 ## 因果 walk-forward 模型
 
-`foundry.walk_forward` 为拟合和预测回调提供独立持有的特征前缀。拟合看不到该折截止点之后的行；预测只收到截至当前决策行的前缀，以及对应资格掩码。下面使用仓库美股研究区间，拟合每个资产的参考水平：
+`foundry.walk_forward(session, fit, predict, folds=..., ids=..., kind=..., unit=..., producer=..., features=...)` 为 `fit` 提供独立拥有的历史特征区间，为 `predict` 提供直到当前决策的因果前缀。预测返回 `(B,S)` 数组，辅助器注册全部预测并填写观测/拟合截止点。
 
-```python
-with foundry.open(start="2025-07-01", end="2026-06-30") as session:
-    xp = session.resident.xp
-    times = session.grid.time_ns
-    first = next(i for i, time in enumerate(session.grid.decision_times)
-                 if time >= "2025-07-01T00:00:00Z")
-    middle = (first + len(times)) // 2
-    folds = (
-        foundry.Fold(int(times[0]), int(times[first]), int(times[first]), int(times[middle])),
-        foundry.Fold(int(times[0]), int(times[middle]), int(times[middle]), int(times[-1]) + 1),
-    )
+`Fold(fit_start, fit_stop, predict_start, predict_stop)` 使用整数 UTC 纳秒和左闭右开 `[start,stop)`。拟合先于预测，折按序且不重叠。若训练标签消耗后续观测，须将它们纳入拟合区间；未来标签不属于特征面板。后续模型切换要落在统计周期边界；周期内切换应选择更细统计频率。
 
-    def fit(view):
-        return xp.nanmean(view.features["ma_dist_20"], axis=0)
-
-    def predict(model, view):
-        score = view.features["ma_dist_20"][-1] - model
-        return xp.where(view.eligibility[-1], score, xp.nan)[None, :]
-
-    result = foundry.walk_forward(
-        session, fit, predict, folds=folds, ids=("fold-model",),
-        kind="scores", unit="score", producer="prefix-model-v1", features=("ma_dist_20",),
-    )
-    report = session.evaluate(result.registered)
-    print(result.sign_consistency)
-```
-
-`Fold(fit_start, fit_stop, predict_start, predict_stop)` 使用 int UTC 纳秒与左闭右开区间 `[start, stop)`。拟合结束后才能开始预测；预测折按序、互不重叠，且每折包含一次可执行决策。扩展窗口保持拟合起点，滚动窗口显式推进起点；最后一个排他边界可用 `int(grid.time_ns[-1]) + 1`。
-
-预测每次返回研究资产顺序下的 `(B,S)` 后端数组。`FoldView` 包含时间戳 `start`、排他时间戳 `stop`、`decision_times`、`assets`、`features` 和 `eligibility`；数组为独立拥有的因果前缀。输出通过同样的注册检查。执行器将当前决策写入 `observed_at`，将最后可见拟合决策写入 `fit_at`；拟合区间需包含训练标签使用的全部观测。外部回调仍须对独立读取的数据及预训练模型来源负责。
-
-折诊断根据模型在评价区间内首次实际基础 Bar 执行归属完整统计周期，直到下一模型首次执行所在周期；最后一折截至研究结束。评价决策偏移之前的目标保持空仓。首折可以归属其起始统计周期内此前的空仓前缀；后续模型切换必须落在统计周期的首个执行事件。周期内部切换或多折共享一个周期时，须使用更细的 `Clock.statistics`。`FoldResult.measurement_start` 和 `measurement_stop` 是统计周期的 UTC 纳秒左闭右开边界，独立于决策时间和成交时间；最终排他边界为最后周期起点加配置的统计周期时长。间隙中的退出费用、资金费和无法平仓的持仓继续归属前一模型。`sign_consistency` 为正折数与负折数的较大值除以总折数；零收益或无效折不进入分子。持续亏损模型也可能为 1，应同时检查符号和收益。操作仅注册并评价预测，不提交组合；使用后释放 `result.registered`，需要保留时先显式 retain。
+结果包含 `.registered` 及分折收益/符号诊断，可按普通候选评价，最后释放 `.registered`。仅有符号一致性不足以说明有效，持续亏损的折也可能同号。同一研究窗口上的自适应选模仍是样本内研究。
 
 ## 远程会话
 
-在 Linux/WSL2 计算主机运行 `python -m foundry serve`，用 `python -m foundry status` 查看地址。Windows 原生或 Linux Python 均可连接服务地址或隧道本地端口：
+计算主机运行明确的服务配置：
 
 ```python
-with foundry.connect(("127.0.0.1", port)) as session:
+import foundry
+foundry.serve("var/runs/library.json", backend="cuda")
+```
+
+在该主机用 `python -m foundry status` 查看端口。服务绑定 loopback；跨机器使用 `ssh -L LOCAL_PORT:127.0.0.1:REMOTE_PORT user@host` 转发。客户端检出匹配协议的代码，安装 Python 依赖后连接：
+
+```python
+import foundry
+with foundry.connect(("127.0.0.1", 9000)) as session:
+    print(session.describe()["execution_plan"])
     report = session.evaluate("gt(ma_dist_20,0)")
-    diagnostics = session.diagnose()
-    family = session.judge_family("gt(ma_dist_20,0)")
 ```
 
-诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
+把 `9000` 换成隧道本地端口。原生 Windows 客户端无需 Linux 扩展或本地 CUDA。模型数组通过有界 NumPy 二进制包上传，编码/解码均限制 1 GiB；程序查询使用已部署 `ProgramReference`，见[部署示例](programs.zh-CN.md#远程部署)。
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v17`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
+服务通过有界队列串行处理任务。断开客户端不会取消已接受命令，关闭客户端也不停止共享计算。上下文冲突要求显式刷新。旧组合、checkpoint、RPC 协议会明确拒绝；需要有意重跑，不猜测或自动迁移格式。
 
-输入契约错误抛出 `ValueError` 或 `TypeError`，旧上下文抛出 `ContextConflict`，资源或实现失败直接传播；候选业务拒绝保留为结构化结果。机器调用请读取 `foundry.schema()`，不要拼接未公开的协议字段。
+## 阅读指标与选择资源
 
-## 加密货币执行
+统计标签是周期起点，收益和报告回撤在统计收盘度量。两次统计采样之间，基础 Bar 强平检查仍执行。`risk.first_liquidation_ns` 是首次受影响基础 Bar 的起点，不是精确 Bar 内成交时间；`-1` 表示没有强平。
 
-现货使用连续 UTC 日历，支持保留的日线工件或显式基础 Bar。资格与报价分离；交易价格缺失可能阻止成交，使已有持仓继续保留。配置费用作用于实际执行的变化。
+`Metrics.activity_basis` 区分目标持仓指标与实际成交指标。`executed_fills` 的换手为各基础 Bar 的实际绝对成交名义金额，除以开盘标记/资金费/风险处理后、命令执行前的账户权益，累计后再除以研究决策数。独立账户先合计各自成交和开盘权益，并包含闲置现金，再计算每个比值。`margin_bps` 按决策频率年化这一换手分母。出勤率衡量有实际敞口的统计周期。`risk.gross_sampling` 中，共享账户使用账户事件采样，独立账户使用统计收盘的准确组合最大值，两者都不是 tick 级最大值。
 
-永续模拟 USDT 线性合约和逐仓抵押。目标是有符号名义金额/账户权益，总绝对敞口受 `Account.gross_limit` 限制；信号不会自动使用最大杠杆。每个基础事件依次处理标记价跳空、已有持仓资金费、调度到来的新目标、不利高低价强平检查和收盘标记。保留的 Binance 小时归档使用日线目标、小时事件，以及已披露的结算时间分桶与标记开盘价代理；`crypto-bars-v1` 使用所提供的基础频率和精确基础开盘资金费记录，不沿用该代理。
+`Metrics.fills` 是订单模型的原生成交事件数，部分成交各计一次。目标模型无法提供该计数时为 `None`，不能从目标换手推断成交笔数。
 
-当前使用固定维持保证金和费率，不还原历史档位、VIP 费用、ADL、订单簿或逐 tick 日内成交路径。`risk` 报告资金费、交易费用、强平费用、强平次数、破产状态和账户权益，单位以 schema 描述为准。
+CUDA 批量适合有规模的重复研究。通过 `CUDA(candidate_batch=..., trial_batch=..., measurement_cache_mib=...)` 或 `CPU(workers=..., candidate_batch=...)` 控制资源。目标永续路径可按 `perpetual_host_cells` 在执行前规划小批次 CPU；订单路径始终使用明确选择的设备。CUDA 程序须通过 `context.stream` 建立框架流依赖，并让声明的私有状态驻留设备；不支持的设备明确失败。
 
-账户估值独立于决策频率，复合归入 `Clock.statistics` 周期。crypto 年化系数为 `365 * 86400 / statistics_seconds`，日线预设保留原有口径。收益、Sharpe、报告回撤、`Metrics.n_periods` 和 `YearMetrics.periods` 均使用统计网格；周期标签为 UTC 起点，因此跨年收盘的周期归属其起点年份。报告回撤采样于统计收盘，基础 Bar 强平检查在两次统计收盘之间仍执行。`risk.first_liquidation_ns` 标识首次强平所在基础 Bar 的 UTC 起点，不表示精确 tick 或成交时点；`-1` 表示没有强平。
-
-`turnover` 是每次决策的目标绝对变化均值，`margin_bps` 用决策频率年化这一分母。`exposure` 与逐年出勤率在统计收盘采样最近目标，描述目标而非实际成交持仓；实际费用和账户杠杆见 `risk`。
-
-## 数值与性能
-
-`foundry.CUDA(measurement_cache_mib=32)` 只缓存收益序列和紧凑报告。候选持仓按 `candidate_batch` 限制的小批次重新生成；入选成员独立复制自身持仓，不保留原候选批次的大数组。设预算为 `C`、批量为 `b`、成员上限为 `M`、天数为 `T`、资产数为 `S`，除固定行情面板和调用方持有的输出外，持久缓存空间为 `O(C + (b + M)TS)`。临时表达式与权重试探工作区另受表达式代价上限和 `trial_batch` 限制，不随候选总数增长。缓存不含“候选数 × 天数 × 资产数”项。预算设为 `0` 可禁用复用。该性能参数不改变研究快照身份；提交仍校验预期上下文，并随组合变化重新判断准入。
-
-CUDA 批量和精度显式配置。双 FP32 用两个分量在支持的账户与统计路径保留残差精度。数值计划在会话启动时固定，不根据评价结果提高精度复算。小规模永续批次可通过 `CUDA.perpetual_host_cells` 在执行前规划为 CPU，不会因运行错误静默降级。
-
-通过 `session.describe()` 及报告的精度/后端字段查看实际计划。[2026-11-15 PRO 6000 报告](benchmarks/arch-v2-pro6000-20261115/report.zh-CN.md) 对应源码 `fa2acfd`：512 项公开测试通过、1 项私有基线测试跳过，覆盖 66 个算子的 124 个用例全部通过。4096 条公式流程两端均接纳 28 个候选，没有决策不一致或数值误差超限；完整用例 CPU/CUDA 墙钟耗时为 93.724/2.879 秒。以上均为单次测量，此前 `current/` 报告保留为历史记录。
-
-独立私有生产审计未通过：保留基线缺少 protocol/study 元数据，保存的组合仍含旧 BTC 特征公式。原文件没有改写或重录，不能宣称私有基线完全通过。CUDA 账户使用双 FP32，但未执行同卡单 FP32 对照，因此没有重新验收独立的 1.5 倍精度开销预算。详见[验收范围](benchmarks/arch-v2-pro6000-20261115/README.zh-CN.md)。
-
-在获得授权的计算环境中，`python -m foundry benchmark OUTPUT` 是统一验证和基准入口，分别记录准备、驻留评价与完整查询/有序提交耗时，并报告数值误差和决策一致性。实现位于 [`validation/benchmarks`](../validation/benchmarks)，架构检查位于 [`validation/test_architecture.py`](../validation/test_architecture.py)。
-
-使用 `--backends cpu` 或 `foundry.benchmark(output, backends=("cpu",))` 可独立测量 CPU 基线，不初始化 CUDA。此模式运行基准契约检查与性能测量，不运行完整多设备回归。将 OpenMP/BLAS 内层线程数设为 1，用 `cpu.workers` 匹配实际 CPU 配额并随结果保存；GPU 加速比必须注明所采用的固定 CPU 基线。
-
-### CPU 并行参数
-
-```python
-with foundry.open(backend="cpu", cpu=foundry.CPU(workers=8, candidate_batch=32,
-                                               measurement_cache_mib=32)) as session:
-    report = session.evaluate(formulas)
-    committed = session.commit(report)
-```
-
-独立候选和权重试算共享只读行情，在工作线程上并行执行；原生算子释放 GIL，每个 worker 内的 OpenMP 使用一个线程。最多同时挂起 `workers` 个任务，结果按输入顺序返回，组合仍由单写者按顺序提交。CPU 参数只影响执行资源，不改变研究快照身份或交易规则。
-
-公式的中间数组在单个候选完成后释放；权重试算只为正在运行的 worker 展开持仓，临时持仓空间为 `O(workers × T × S)`，而非 `O(试算总数 × T × S)`。收益和事件明细是调用所需输出，另按输出规模占用内存。运行基准时设置 `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`，通过 `cpu.workers` 控制候选并发，避免线程池叠加。
-
-### 测量现有 GFlowNet 挖掘流程
-
-```bash
-python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512}}' \
-  benchmark var/runs/discovery-new --suite discovery --backends cuda
-```
-
-直接调用现有 `foundry.mine()`，测量采样、CUDA 候选评价、奖励反馈、GFN 训练、有序准入、CEM 重配及 checkpoint 的完整流程。候选规模通过 `Search` 调整；报告同时列出阶段累计时间与端到端墙钟时间，训练与提交/重配的重叠不能重复相加。
-
-GFN 模型定义、Trajectory Balance、配对教师和带梯度裁剪的 SGD 均在 Python/PyTorch 中实现。使用 `backend="cuda"` 时，前缀状态、合法动作掩码、抽样、网络推理和 FP32 训练使用独立 CUDA 流；CPU 仅接收探针小批次结果和最终公式 token。训练复用本批次采样时保存的特征与掩码，SGD 优化器随模型只初始化一次。CPU/portable 会话明确选择 PyTorch CPU 设备。`GfnProposer(...)` 只保存配置；设备由会话显式确定，只有 `open(device)` 才创建模型、流和优化器，不静默回退。随机提案器不需要神经网络。
-
-32 单元 tanh 网络、初始字段/算子概率分配、奖励、探针门控和准入条件保持不变。设备上的 PyTorch 随机采样与 FP32 训练会改变旧原生学习器及主机采样版本的随机轨迹，同一 seed 不保证相同公式。检查点采用 `foundry-gfn-torch-v3`，只包含 JSON 和数值数组，不使用 pickle，明确拒绝旧版检查点；检查点包含设备随机状态，精确续跑要求相同设备类别；SGD 无动量状态。仅保留当前批次的前缀和合法动作掩码，空间为 `O(B × L × (F + A))`，不建立历史回放缓存。探针临时空间上限为四个前缀、每个四十次共同后缀尝试，只保留成功选中的探针。此基准不运行独立 CPU 对照，也不将同一历史窗口的自适应准入视为样本外收益。
-
-最新接口验收见 [L4 批次归属与驻留反馈报告](benchmarks/api-boundary-l4-20261116/README.zh-CN.md)：同一候选序列，数值与决策一致，附完整耗时和资源数据。
+数值计划在评价前固定，不根据结果提高精度重算。[基准报告](benchmarks/README.zh-CN.md)记录硬件、规模、准备/JIT、驻留工作、完整流程、误差与决策。可用 `foundry.benchmark(output, ...)` 或 `python -m foundry benchmark OUTPUT` 测量自己的范围。历史公式耗时不代表订单程序吞吐。

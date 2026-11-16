@@ -1,10 +1,10 @@
 # Foundry
 
-**面向研究者、AI Agent 和挖掘程序的 CUDA 加速策略发现与回测基础设施。**
+**CUDA 策略研究：从一个想法，到实际账户和经过审阅的组合。**
 
-[English](README.md) · [使用指南](guides/research.zh-CN.md) · [数据](data/README.md)
+[English](README.md) · [研究指南](guides/research.zh-CN.md) · [自备数据](guides/data.zh-CN.md) · [策略程序](guides/programs.zh-CN.md)
 
-输入一个公式、一批模型信号或目标持仓，获得可比较的回测结果和明确的组合准入结论。数据上下文、市场规则、批量计算与组合状态都由同一个 Python 接口管理。
+输入公式、模型生成的数组，或根据实际模拟成交作出下一步决策的程序。人工、AI Agent 和自动发现循环共用同一个会话、市场规则、报告与组合准入判据。
 
 ```python
 import foundry
@@ -18,51 +18,62 @@ with foundry.open(backend="cuda") as session:
         print(row.id, row.metrics, row.decision)
 ```
 
-示例使用随仓库提供的美股快照。换成自己的数据后，调用方式保持一致。
+示例使用仓库内的美股快照。更换 `data_dir` 和日期即可研究自己的市场历史。
 
-## Foundry 的优势
+## 用 GPU 扩展研究规模
 
-- **贯穿研究流程的 CUDA 批处理。** 候选批量评价、账户模拟和组合权重比较可以复用设备驻留数组。批量大小和精度均可调整，也支持 CPU 后端。
-- **在需要的计算中保留 FP32 残差精度。** 双 FP32 算术用于账户和统计计算；数值方案在会话启动时确定，不根据结果触发精度复算。
-- **不限于公式挖掘。** 可以使用 66 个算子的公式词汇，注册 Python/CUDA 或 ML 模型输出，也可以把外部候选生成器接入发现流程。Agent 闭环和人工想法使用同样的候选与报告。
-- **面向时点可得信息的研究。** 历史资格、观测和拟合截止点声明、次根行情执行与因果 walk-forward 折叠共同约束未来数据泄露；数据来源记录明确披露缺失的公告历史。
-- **从想法验证到组合接纳。** 诊断组合缺口、检验候选家族、比较权重方案，再通过统一准入规则提交改进。查询与组合变更是明确分开的操作。
+CUDA 批量执行公式算子、账户模拟、统计和组合权重试算，并让工作数组驻留设备。它适合在同一行情面板上反复探索大量候选。CUDA 策略程序也可将私有张量保留在设备上；普通 Python 回调不会自动编译成 GPU 内核。
 
-## 四类市场，同一套接口
+会话启动时固定设备与数值计划。支持的账户和统计路径使用双 FP32 保留残差精度。CPU 同样是正式后端，可显式控制 worker 和内存容量。
 
-| 市场 | 执行模型 |
-| --- | --- |
-| 美股 | 历史成分资格、复权价格、下一交易时段执行及成本 |
-| 中国 A 股 | 历史资格、停牌、涨跌停、卖出税费，以及分离的信号与执行价格 |
-| 加密货币现货 | 连续 UTC 日历、独立 Bar 时钟、交易资格与手续费 |
-| USDT 线性永续 | 多空敞口、逐仓保证金、基础 Bar 资金费事件与强平 |
+- **三种策略表达：**66 算子公式、数值评分或目标，以及有状态订单程序。
+- **明确的因果时钟：**源 Bar、决策时刻、下一基础开盘执行和统计周期相互独立，观测与拟合截止时间显式声明。
+- **实际账户反馈：**订单、部分成交、撤单、费用、现金、持仓和逐仓保证金共同驱动下一次决策。
+- **统一发现流程：**诊断组合缺口、评价提案、检验参数家族、重放权重试算，再通过硬准入提交候选。
+- **有界复用：**注册一次模型或数组批次，反复评价，保留选定引用，最后释放租约。
 
-Crypto 支持显式基础 Bar 与独立决策、统计频率，例如 5 分钟执行、15 分钟决策和日统计；已有日线预设与小时永续数据保留原有口径。有状态程序可通过 [`plan_program` 与 `simulate`](guides/research.zh-CN.md#有状态程序与订单审计) 读取实际账户和成交；这类程序的组合准入仍须后续重放集成。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
+## 选择需要的执行方式
+
+| 市场 | 目标持仓回测 | 实际订单账户 |
+| --- | --- | --- |
+| 美股 | 日线、历史资格、复权执行价和费用 | 当前不支持 |
+| A 股 | 日线、资格、停牌、涨跌停和卖出税 | 当前不支持 |
+| 加密现货 | 日线或显式基础 Bar、历史资格和费用 | 市价/限价/止损单、现金和成员持仓归属 |
+| USDT 线性永续 | 日线/小时归档或显式基础 Bar、资金费与逐仓保证金 | 有符号成员持仓、资金费、资金预留和强平 |
+
+公式和预计算权益比例目标默认使用 `Execution(model="targets")`。`Execution(model="orders")` 让公式、数组和程序共用 crypto Bar 实际账户与新的完整组合重放。可配置 5 分钟源 Bar、15 分钟决策和日统计。[执行与组合语义](guides/research.zh-CN.md#执行与组合资金语义)说明共享账户和独立资金账户的区别。
+
+这些是具有明确 OHLC 路径与成交量参与率的 Bar 模型，不模拟订单簿排队或逐 tick 成交。
+
+## 三种输入，一个会话
+
+```python
+report = session.evaluate("gt(ma_dist_20,0)")
+report = session.evaluate(registered_model_outputs)
+report = session.evaluate(strategy_program)
+```
+
+最后一种需要订单会话与符合公开协议的程序。程序只收到因果特征窗口和实际账户，每次查询创建独立私有状态。[完整程序示例](guides/programs.zh-CN.md)同时说明工件部署、远程引用和租约归属。
+
+评分通过显式仓位规则映射；直接目标声明 `equity_fraction`，订单会话还接受 `quantity`/`notional`。数组对齐 `session.grid`，并声明观测与拟合信息的实际可用时间，见[数组注册](guides/research.zh-CN.md#数组与模型输出)。
 
 ## 接入自己的数据
 
-CSV、数据库或数据供应商导出都可以成为行情来源。仓库快照用于示例和验证，并不绑定特定供应商。
+把 CSV、数据库或供应商导出转换为约定的 Parquet 文件：
 
 ```python
 with foundry.open(
-    market="us_equity",
-    data_dir="/datasets/my_us_equity",
-    start="2025-07-01",
-    end="2025-12-31",
-    backend="cuda",
+    market="us_equity", data_dir="/datasets/my_us_equity",
+    start="2025-07-01", end="2025-12-31", backend="cuda",
 ) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-美股需要包含 OHLCV 和复权因子的 `panel.parquet`，以及记录历史资格区间的 `membership.parquet`。保留研究起点之前的历史，以便计算滚动特征。其他市场同样有明确的数据契约；日内 crypto 接受声明发布时间的基础 Bar，永续还需标记价与资金费记录。详见[文件格式与转换示例](guides/research.zh-CN.md#接入自己的数据)。
+美股需要 `panel.parquet` 与历史 `membership.parquet`。加密日内数据提供带发布时间的基础 Bar 和 manifest；永续另需标记价及显式资金费记录。[数据格式与转换示例](guides/data.zh-CN.md)覆盖字段、单位、时间端点、资格和来源记录。[仓库内快照](data/README.md)可作参考，加载时无需在线下载行情。
 
-如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明 UTC 决策时间、资产坐标、显式单位和时间戳信息截止点。评分默认使用 `Sizing(rule="equal_slots")`；`Sizing(rule="independent", scale=...)` 避免资产数量稀释。直接目标使用 `kind="targets", unit="equity_fraction"`。临时 GPU 候选保持驻留，用完调用 `session.release(batch)`；只有入选、检查点引用或明确要求保留的候选才落盘。
+## Linux、WSL2 或远程 GPU
 
-## 在 Linux 或 Windows 上使用
-
-本地计算支持 Linux，以及 Windows 下的 WSL2。Windows 原生 Python 可以直接作为远程客户端，无需编译数值扩展。
-
-在 Linux/WSL2 中，准备 Python 3.12 或 3.13、对应开发头文件，以及支持 C++17/OpenMP 的 GCC，然后执行：
+计算运行在 Linux，包括 Windows 上的 WSL2。安装 Python 3.12 或 3.13、对应开发头文件和支持 C++17/OpenMP 的编译器，在仓库根目录执行：
 
 ```bash
 python3 -m venv .venv
@@ -72,40 +83,25 @@ bash build.sh
 python -m foundry --help
 ```
 
-CUDA 还需要 NVIDIA 驱动及匹配 CUDA 主版本的 CuPy。使用 `backend="cpu"` 可选择 CPU 计算。
+CUDA 需要合适的 NVIDIA 驱动，以及匹配计算主机 CUDA 主版本的 CuPy 发行包。GPU GFlowNet 挖掘还使用支持 CUDA 的 PyTorch。CPU 计算在打开会话时选择 `backend="cpu"`。
 
-连接已经运行的计算服务时，Windows 和 Linux 客户端使用同样的调用：
+原生 Windows Python 可直接作为客户端，不必编译数值扩展。计算主机上使用明确的组合路径启动服务：
+
+```python
+import foundry
+foundry.serve("var/runs/library.json", backend="cuda")
+```
+
+在该主机执行 `python -m foundry status` 查询端口。跨机器使用时通过 SSH 转发 loopback 端口，再从 Windows 或 Linux 连接：
 
 ```python
 with foundry.connect(("127.0.0.1", port)) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-`port` 是服务端口，或隧道的本地转发端口。详见[远程会话](guides/research.zh-CN.md#远程会话)。
+`port` 是服务端口或隧道本地端口。服务持有计算资源，关闭客户端不会停止服务。[远程会话](guides/research.zh-CN.md#远程会话)也支持已部署程序引用，不通过研究请求传输 Python 源码或 pickle 对象。
 
-## 少量接口，覆盖完整流程
-
-| 任务 | 调用 |
-| --- | --- |
-| 评价公式或已注册模型输出 | `session.evaluate(inputs)` |
-| 注册信号或持仓批次 | `session.register(values, ...)` |
-| 保存选定候选 / 释放临时批次 | `session.retain(inputs)` / `session.release(batch)` |
-| 诊断当前组合的不足 | `session.diagnose()` |
-| 检验公式邻域或模型参数网格 | `session.judge_family(inputs)` |
-| 查看组合或比较成员权重 | `session.portfolio()` / `session.trial_weights(matrix)` |
-| 提交候选或已审阅的权重方案 | `session.commit(report)` / `session.commit_weights(trials, index)` |
-| 优化并提交满足准入规则的组合权重 | `session.reweight(...)` |
-| 为发现流程评价候选提案 | `foundry.Discovery(session).evaluate(candidates)` |
-| 运行内置或外部提案器 | `foundry.mine(output, ...)` |
-| 因果分折拟合并注册预测 | `foundry.walk_forward(session, fit, predict, ...)` |
-
-`foundry.Candidate`、`ExternalProposer` 和 `CandidateGrid` 让自己的程序直接参与策略发现，无需先转换成公式。完整接入示例见[发现流程指南](guides/research.zh-CN.md#策略发现)。
-
-同一个 `foundry.mine` 调用负责提案器资源生命周期和批次反馈；外部模型可直接消费 GPU 驻留评分，无需了解底层回测组件。
-
-内置 GFlowNet 挖掘通过 Python/PyTorch 模型学习下一批应探索的公式。使用 `backend="cuda"` 时，策略网络推理、训练和策略评价都由 GPU 加速；生成的策略仍须通过相同的组合硬准入规则。
-
-评价不会修改组合。审阅结果后，可以单独提交：
+## 审阅后再修改组合
 
 ```python
 with foundry.open("var/runs/my_portfolio.json") as session:
@@ -114,35 +110,17 @@ with foundry.open("var/runs/my_portfolio.json") as session:
     foundry.export(decision, "var/runs/decision.json")
 ```
 
-## 调用简单，参数仍可微调
+评价只读。报告记录准确的研究与组合版本；过期提交需要显式刷新并重新评价。`ok=True` 表示评价成功，`row.decision.passed` 才是准入结论。
 
-市场成本、杠杆、CUDA 批量、准入和挖掘参数都通过调用参数传入，无需维护配置文件。
+| 研究任务 | 公开调用 |
+| --- | --- |
+| 查看数据、参数和执行计划 | `session.describe()` |
+| 一次查询同时取得驻留收益与可提交报告 | `session.evaluate_device(inputs)` |
+| 注册、保留或释放候选 | `register(...)`、`retain(...)`、`release(...)` |
+| 诊断缺口或检验相邻变体 | `diagnose()`、`judge_family(...)` |
+| 比较或提交组合权重 | `trial_weights(...)`、`commit_weights(...)`、`reweight(...)` |
+| 为候选提案评分 | `foundry.Discovery(session).evaluate(candidates)` |
+| 运行内置或外部提案循环 | `foundry.mine(output, ...)` |
+| 生成因果模型分折预测 | `foundry.walk_forward(session, fit, predict, ...)` |
 
-```python
-with foundry.open(
-    market="crypto_perpetual",
-    account=foundry.Account(margin="isolated", leverage=3.0, gross_limit=3.0),
-    cost_rate=0.0004,
-    cuda=foundry.CUDA(candidate_batch=64),
-    execution=foundry.Execution(precision="paired"),
-    admission=foundry.Admission(min_sharpe_gain=0.02),
-) as session:
-    report = session.evaluate("gt(ma_dist_20,0)")
-```
-
-`foundry.schema()` 为 Agent 提供参数和 RPC schema；`session.describe()` 返回当前研究的字段、算子与实际参数。比较其他设置时，打开新的会话即可。
-
-## 性能实测
-
-以下为 R1 协议迁移前的历史实测，不代表 R1 验收结果。4096 条公式、269 日×500 美股的评价＋有序提交。CPU 固定为独立 Colab CPU 类型运行时（EPYC 7B12），不随显卡更换。
-
-| 设备 | 耗时 |
-| --- | ---: |
-| CPU 1 worker | 215.660 s |
-| CPU 8 worker | 106.645 s |
-| A100 | 6.691 s |
-| L4 | 7.809 s |
-
-CPU 实际候选/试算并行带来 2.02 倍提速，两个 worker 配置的报告数值完全一致；四组均接纳 28 条。CPU 本轮实测，GPU 复用同数据与规则的已有测量；每个条件一次预热、一次测量。完整阶段、误差、空间界限和适用范围见[基准报告](guides/benchmarks/parallel-cpu-20261116/README.zh-CN.md)。
-
-[研究与程序接入](guides/research.zh-CN.md) · [可用数据](data/README.md) · [基准报告](guides/benchmarks/README.md)
+`foundry.schema()` 提供机器可读接口。[研究指南](guides/research.zh-CN.md)介绍完整流程；[基准报告](guides/benchmarks/README.zh-CN.md)区分实际测量的工作负载、硬件和数值适用范围。

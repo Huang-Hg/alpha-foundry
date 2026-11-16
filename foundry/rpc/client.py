@@ -23,7 +23,7 @@ from foundry.types import (
     Array, ArrayBatch, Candidate, CandidateGrid, CommitReport, ContextConflict, DataGrid, Diagnostics, EvaluationReport,
     FamilyResult, FamilySeed, PortfolioReport, RegisteredBatch, ResearchContext,
     ReweightResult, WeightCommit, WeightReport,
-    ProgramPlan, ProgramSimulation, StrategyProgram, ProgramReference,
+    ProgramPlan, ProgramSimulation, StrategyProgram, ProgramReference, ProgramCheckpoint,
 )
 
 if TYPE_CHECKING:
@@ -247,7 +247,8 @@ class RemoteBackend:
             raise TypeError('Remote programs require an explicit deployed ProgramReference')
         return self._call('research.plan_program', dict(context=context, program=asdict(program)), ProgramPlan)
 
-    def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation:
+    def simulate(self, program: StrategyProgram | ProgramReference, context: str, *, until: int | None = None,
+                 checkpoint: ProgramCheckpoint | None = None) -> ProgramSimulation:
         raise ValueError('Program instances require an in-process session; remote programs require explicit versioned artifact deployment')
 
     def resident(self):

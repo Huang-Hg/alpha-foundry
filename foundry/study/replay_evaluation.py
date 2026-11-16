@@ -211,12 +211,12 @@ class ReplayEvaluation:
         yearly = xp.stack((pipeline.years.sharpe(rt, pipeline.ppy),
             pipeline.years.share(result.active), pipeline.years.total(lg)), axis=2)
         host = pipeline.to_host(xp.concatenate((values, yearly.reshape(len(rt), -1),
-            M.sound(rt, xp)[:, None]), axis=1)).tolist()
+            M.sound(rt, xp)[:, None], result.fill_count[:, None]), axis=1)).tolist()
         risks = self._risk_summaries(result)
         dates = pipeline.measurement_times[pipeline.measurement_start:]
         return [StatsRow(None, rt[i], Metrics(*v[:10],
             yearly=tuple(YearMetrics(int(year), int(periods), round(v[10+j*3], 3),
                 round(v[11+j*3], 3), round(v[12+j*3], 4)) for j, (year, periods) in
                 enumerate(zip(pipeline.years.years, pipeline.years.periods))),
-            span=f'{dates[0]}..{dates[-1]}', n_periods=len(dates), activity_basis='executed_fills'),
-            bool(v[-1]), risks[i]) for i, v in enumerate(host)]
+            span=f'{dates[0]}..{dates[-1]}', n_periods=len(dates), activity_basis='executed_fills', fills=int(v[-1])),
+            bool(v[-2]), risks[i]) for i, v in enumerate(host)]

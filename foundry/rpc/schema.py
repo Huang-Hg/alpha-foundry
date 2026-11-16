@@ -25,7 +25,7 @@ MAX_RESPONSE_BYTES = 1 << 30
 MAX_PENDING = 64
 HEARTBEAT_SECONDS = 10.
 BUNDLE = 'candidate-batch-v3'
-CHECKPOINT_FORMAT = 'candidate-discovery-v6'
+CHECKPOINT_FORMAT = 'candidate-discovery-v7'
 
 REPORT_NOTES = {
     Metrics: {
@@ -34,6 +34,7 @@ REPORT_NOTES = {
         'max_single_weight': 'Maximum absolute asset notional/equity ratio in the declared activity basis.',
         'margin_bps': 'ann_ret / max(turnover * decision_periods_per_year, 1e-12) * 1e4; basis points per annualized reported turnover.',
         'activity_basis': 'target_book uses target-book turnover/exposure; executed_fills uses actual filled notional turnover and actual account exposure. Yearly attendance measures exposure-active periods.',
+        'fills': 'Number of actual fill events for executed_fills; null for target_book, which does not publish an actual fill count.',
     },
     RiskSummary: {
         'model': 'Stable execution-account model identifier, including collateral timing and liquidation assumptions.',
@@ -70,7 +71,7 @@ def schema_for(kind):
             properties['parameters'].update(maxLength=65536, contentMediaType='application/json',
                 description='Canonical finite JSON object: sorted keys, compact separators and unescaped Unicode; UTF-8 payload at most 64KiB.')
         if kind is ProgramDescriptor:
-            properties['protocol'] = dict(const=2)
+            properties['protocol'] = dict(const=3)
         if kind is ProgramSource:
             properties['variant'].update(minimum=0)
             properties['snapshot'].update(minLength=1)
@@ -216,10 +217,10 @@ def describe():
         programs=dict(transport='deployed_artifact_reference', descriptor=schema_for(ProgramDescriptor), plan=schema_for(ProgramPlan),
             reference=schema_for(ProgramReference),
             methods=dict(plan_program='Validate a StrategyProgram and return its execution plan without opening state',
-                         simulate='In-process fresh private state and resident actual-account audit arrays',
+                         simulate='In-process private state and actual-account audit; optional until base-bar close and context-bound checkpoint resume',
                          register='Bounded local StrategyProgram or deployed ProgramReference lease',
                          evaluate='Program candidates share the public evaluate/commit/retain/release workflow'),
-            returns='ProgramSimulation: resident returns/equity (B,V), immutable period-start UTC ns (V,), final AccountSnapshot',
+            returns='ProgramSimulation: resident completed returns/equity (B,V), immutable period-start UTC ns (V,), final AccountSnapshot; explicit until adds a detached host ProgramCheckpoint',
             scope='Program candidates participate in evaluation/admission/replay; remote registration requires a caller-deployed artifact catalog. No source execution or Python object deserialization.'),
         binary='register_batch carries exactly params.bytes bytes after the JSON request newline; 1GiB encoded and decoded limits; no pickle',
         python='with foundry.open() as session: report = session.evaluate(formulas); session.commit(report)')
