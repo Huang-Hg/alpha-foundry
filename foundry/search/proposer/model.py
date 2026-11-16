@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from dataclasses import dataclass
 
 import numpy as np
 import torch
 from torch import Tensor, nn
 
-from foundry.search.proposer.sampling import Sampler, State
+from foundry.search.proposer.sampling import Sampler
+from foundry.search.proposer.device_sampling import DeviceSampler, Drawn, Trajectories
 from foundry.types import HostArray, TrainingResult
 
 
@@ -35,21 +35,6 @@ class Policy(nn.Module):
         hidden = torch.tanh(features @ self.w1.T)
         logits = hidden @ self.w2[:, :-1].T + self.w2[:, -1]
         return torch.log_softmax(logits.masked_fill(~legal, -torch.inf), dim=-1)
-
-
-@dataclass(frozen=True)
-class Trajectories:
-    """Current-batch device tensors: N prefix rows, B trajectories, P probes, A actions."""
-
-    features: Tensor  # (N,F), float32
-    legal: Tensor  # (N,A), bool
-    actions: Tensor  # (N,), int64
-    owners: Tensor  # (B,L), int64 prefix row indices with an appended zero sentinel
-    context: Tensor  # (C+1,), float32
-    probe_features: Tensor  # (P,F), float32
-    probe_legal: Tensor  # (P,A), bool
-    probe_actions: Tensor  # (P,3), int64
-    probe_ids: Tensor  # (P,4,3), int64
 
 
 def trajectory_balance(model: Policy, batch: Trajectories, rewards: Tensor) -> Tensor:
@@ -103,53 +88,28 @@ def paired_teacher(model: Policy, batch: Trajectories, rewards: Tensor) -> tuple
 class Learner:
     """Own one model and a dedicated CUDA stream; never borrow account or market buffers."""
 
-    def __init__(self, sampler: Sampler, device: str) -> None:
+    def __init__(self, sampler: Sampler, device: str, seed: int) -> None:
         if device not in ('cpu', 'cuda'):
             raise ValueError('policy device must be cpu or cuda')
         self.device = torch.device(device)
         self.stream = torch.cuda.Stream(device=self.device) if device == 'cuda' else None
         with self.scope():
             self.model = Policy(sampler, device)
+            self.sampling = DeviceSampler(sampler, self.device, seed)
+            # The public train call sets the requested rate before any update.
+            self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0., foreach=False)
         self.batch: Trajectories | None = None
+        self.drawn: Drawn | None = None
 
     def scope(self) -> torch.cuda.StreamContext | nullcontext:
         return torch.cuda.stream(self.stream) if self.stream is not None else nullcontext()
 
-    def probabilities(self, sampler: Sampler, states: list[State]) -> HostArray:
-        features, legal = sampler.encode(states)
+    def sample(self, count: int, probes: int, context: HostArray) -> tuple[tuple[int, ...], ...]:
         with self.scope(), torch.no_grad():
-            result = self.model(torch.as_tensor(features, device=self.device),
-                                torch.as_tensor(legal, device=self.device)).exp()
-            return result.cpu().numpy()
-
-    def prepare(self, sampler: Sampler) -> None:
-        states, actions, owners = [], [], []
-        for sample in sampler.samples[:sampler.ordinary]:
-            row = []
-            state = State()
-            for action in sample.sequence:
-                row.append(len(states))
-                states.append(state)
-                actions.append(action)
-                state = sampler.step(state, action)
-            owners.append(row)
-        width = max(map(len, owners))
-        owner_array = np.full((len(owners), width), len(states), dtype=np.int64)
-        for i, row in enumerate(owners):
-            owner_array[i, :len(row)] = row
-        features, legal = sampler.encode(states)
-        if sampler.probes:
-            probe_features, probe_legal = sampler.encode([probe.state for probe in sampler.probes])
-        else:
-            probe_features, probe_legal = features[:0], legal[:0]
-        with self.scope():
-            self.batch = Trajectories(
-                torch.as_tensor(features, device=self.device), torch.as_tensor(legal, device=self.device),
-                torch.tensor(actions, device=self.device), torch.as_tensor(owner_array, device=self.device),
-                torch.tensor([1., *sampler.context], dtype=torch.float32, device=self.device),
-                torch.as_tensor(probe_features, device=self.device), torch.as_tensor(probe_legal, device=self.device),
-                torch.tensor([p.actions for p in sampler.probes], dtype=torch.int64, device=self.device).reshape(-1, 3),
-                torch.tensor([p.ids for p in sampler.probes], dtype=torch.int64, device=self.device).reshape(-1, 4, 3))
+            self.drawn = self.sampling.sample(count, probes,
+                torch.as_tensor(context, dtype=torch.float32, device=self.device), self.model)
+            self.batch = self.drawn.trace
+            return tuple(tuple(token for token in row if token >= 0) for row in self.drawn.tokens.cpu().tolist())
 
     def train(self, batch: Trajectories, rewards: HostArray, steps: int, learning_rate: float,
               opd_strength: float) -> TrainingResult:
@@ -157,7 +117,9 @@ class Learner:
             target = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
             model = self.model
             parameters = (model.w1, model.w2)
-            optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, foreach=False)
+            optimizer = self.optimizer
+            for group in optimizer.param_groups:
+                group['lr'] = learning_rate
             with torch.no_grad():
                 before = trajectory_balance(model, batch, target)
             teachers = target.new_zeros((), dtype=torch.int64)
@@ -189,8 +151,15 @@ class Learner:
         with self.scope():
             return {name: value.detach().cpu().numpy().copy() for name, value in self.model.named_parameters()}
 
-    def restore(self, arrays: dict[str, HostArray]) -> None:
+    def restore(self, arrays: dict[str, HostArray], rng: HostArray) -> None:
         with self.scope(), torch.no_grad():
+            self.sampling.rng.set_state(torch.from_numpy(rng))
             for name, value in self.model.named_parameters():
                 value.copy_(torch.as_tensor(arrays[name], device=self.device))
+            self.optimizer.zero_grad(set_to_none=True)
         self.batch = None
+        self.drawn = None
+
+    def random_state(self) -> HostArray:
+        with self.scope():
+            return self.sampling.rng.get_state().numpy().copy()

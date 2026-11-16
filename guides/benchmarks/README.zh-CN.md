@@ -2,7 +2,7 @@
 
 [English](README.md) · [2026-11-15 PRO 6000 报告](arch-v2-pro6000-20261115/report.zh-CN.md) · [重构前公开接口报告](current/report.zh-CN.md) · [更早的算子实验](archive/pro6000-operator66/operator66.md)
 
-[PyTorch GPU GFlowNet 报告](gfn-torch-l4-20261116/README.zh-CN.md) 验证了 Python 管理的 FP32 GPU 学习：L4 上 4096 个普通提案的循环耗时 7.889 秒，含打开/关闭为 8.921 秒；[旧原生学习器记录](gfn-l4-20261116/README.zh-CN.md)为 5.032 秒。后续轮次训练更快，但采样与首次准备使总耗时增加，报告保留误差、准入证据及不同候选轨迹的对比限制。
+[GPU 驻留采样报告](gfn-resident-l4-20261116/README.zh-CN.md) 测量采样状态、合法动作和抽样留在 GPU、复用轨迹、优化器只初始化一次后的效果：4096 提案循环 7.889 → 6.168 秒；含准备和会话生命周期为 8.921 → 8.586 秒。报告保留数值误差、显存增长和随机候选差异，前版记录见 [PyTorch 迁移验收](gfn-torch-l4-20261116/README.zh-CN.md)。
 
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
 

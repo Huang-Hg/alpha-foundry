@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) · [2026-11-15 PRO 6000 report](arch-v2-pro6000-20261115/report.md) · [Pre-refactor public API report](current/report.md) · [Earlier operator experiments](archive/pro6000-operator66/operator66.md)
 
-The [PyTorch GPU GFlowNet report](gfn-torch-l4-20261116/README.md) validates Python-owned FP32 GPU learning on L4. The 4096-proposal loop takes 7.889 s (8.921 s including open/close), versus 5.032 s in the [historical native-learner run](gfn-l4-20261116/README.md). Steady training is faster, but sampling and first-use preparation increase total time; the report preserves errors, admission evidence and the trajectory-comparison limits.
+The [resident GPU sampling report](gfn-resident-l4-20261116/README.md) measures device-side states, legality and draws, trace reuse and a persistent optimizer: the 4096-proposal loop falls from 7.889 to 6.168 s; preparation plus session lifecycle falls from 8.921 to 8.586 s. Numerical errors, increased peak memory and candidate-trajectory differences are disclosed. The [PyTorch migration report](gfn-torch-l4-20261116/README.md) remains the previous baseline.
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
 

@@ -1,0 +1,197 @@
+{
+  "schema": "foundry-discovery-v2",
+  "passed": true,
+  "gpu": "NVIDIA L4, 23034 MiB, 580.82.07",
+  "shape": [
+    269,
+    500
+  ],
+  "snapshot": {
+    "id": "adbc44c6da300d251a460b5dc83c618ab05352e7135ff02ad226da5f8dc3bd40",
+    "study": {
+      "market": "us_equity",
+      "start": "2025-07-01",
+      "asof": "2026-06-30"
+    },
+    "data_snapshot": "a986d2e25181bbd87d9839d7503fcbb74748b3763e174e8c18189eacc2fbc99f",
+    "execution_snapshot": "3370472e64e2d9ab76c29348ea1f360af2ed95c9dc89f8a4529658511a611f15",
+    "implementation": "61101683ccfb9cc624368a642cafeacc548ac78a28a4001988093677db0970a6",
+    "configuration": "8c459d08f283f7af6e2ab601836f45032bf600649f15614a0761b506e51d2abd",
+    "data_contract": {
+      "schema": "legacy-daily",
+      "source": "stored US equity artifact",
+      "retrieved_at": "unrecorded",
+      "features": "vendor total-return adjustment; historical vintages unverified",
+      "execution_prices": "adjusted OHLC",
+      "publication": "publication timestamps and revision vintages unavailable",
+      "membership": "effective intervals; announcement timestamps unavailable"
+    },
+    "evaluation": "in_sample_research",
+    "decision": "session_close",
+    "execution": "next_session_open",
+    "allocation": {
+      "max_gross": 1.0,
+      "allow_short": false
+    },
+    "precision": {
+      "requested": "paired",
+      "effective": "paired",
+      "reason": "fixed_study_policy",
+      "supported": [
+        "mixed",
+        "paired"
+      ]
+    }
+  },
+  "epochs": 8,
+  "ordinary_proposals": 4096,
+  "proposals": 4288,
+  "accepted": 8,
+  "counters": {
+    "requested": 4288,
+    "unique_evaluations": 2968,
+    "g1": 2204,
+    "g2": 243,
+    "low_corr": 212,
+    "behavior_duplicates": 0,
+    "weight_trials": 44376,
+    "probe_evaluations": 192,
+    "reweight_evaluations": 903
+  },
+  "stage_sums": {
+    "sampling_seconds": 1.0660365449998608,
+    "evaluation_seconds": 3.201830405999999,
+    "training_seconds": 0.8077415209999117,
+    "commit_seconds": 0.19041023299996596,
+    "reweight_seconds": 0.25180119600008766
+  },
+  "open_s": 0.92611209100005,
+  "policy_prepare_s": 1.354557117000013,
+  "mining_wall_s": 6.168272428999899,
+  "lifecycle_s": 8.585817698000028,
+  "sampled_peak_mib": 5774.0,
+  "initial_policy_sha256": "fc0006901a3bee7a19110cd6b6fa9ebf56f68fa8aecdbca791a0501bd15cf247",
+  "final_policy_sha256": "69045c7eba9bc1588d9a7987a7a5025c6d43f8f2d885a1eeea3bdc1fee7160f4",
+  "policy_changed": true,
+  "policy_device": "cuda",
+  "policy_dtype": "float32",
+  "torch_peak_allocated_mib": 36.17236328125,
+  "portfolio": {
+    "context": {
+      "id": "3360fababc2f39459a6c5ef3e56507a5467070f696f775391ee3cc4845cf5871",
+      "snapshot": {
+        "id": "adbc44c6da300d251a460b5dc83c618ab05352e7135ff02ad226da5f8dc3bd40",
+        "study": {
+          "market": "us_equity",
+          "start": "2025-07-01",
+          "asof": "2026-06-30"
+        },
+        "data_snapshot": "a986d2e25181bbd87d9839d7503fcbb74748b3763e174e8c18189eacc2fbc99f",
+        "execution_snapshot": "3370472e64e2d9ab76c29348ea1f360af2ed95c9dc89f8a4529658511a611f15",
+        "implementation": "61101683ccfb9cc624368a642cafeacc548ac78a28a4001988093677db0970a6",
+        "configuration": "8c459d08f283f7af6e2ab601836f45032bf600649f15614a0761b506e51d2abd",
+        "data_contract": {
+          "schema": "legacy-daily",
+          "source": "stored US equity artifact",
+          "retrieved_at": "unrecorded",
+          "features": "vendor total-return adjustment; historical vintages unverified",
+          "execution_prices": "adjusted OHLC",
+          "publication": "publication timestamps and revision vintages unavailable",
+          "membership": "effective intervals; announcement timestamps unavailable"
+        },
+        "evaluation": "in_sample_research",
+        "decision": "session_close",
+        "execution": "next_session_open",
+        "allocation": {
+          "max_gross": 1.0,
+          "allow_short": false
+        },
+        "precision": {
+          "requested": "paired",
+          "effective": "paired",
+          "reason": "fixed_study_policy",
+          "supported": [
+            "mixed",
+            "paired"
+          ]
+        }
+      },
+      "portfolio": "477ad3fe56252f6e42a713c71c8ae30ae714729cdb8bdb55eec71e6d9aaab823"
+    },
+    "sources": [
+      {
+        "expression": "add(ma_dist_60,ret_20)",
+        "kind": "formula"
+      },
+      {
+        "expression": "ts_chanpos(tanh(ts_arg_max(ma_dist_20,180)),5)",
+        "kind": "formula"
+      },
+      {
+        "expression": "abs(ret_20)",
+        "kind": "formula"
+      },
+      {
+        "expression": "gt(lt(ts_arg_max(ret_20,180),0.5),ts_ref(ts_zscore(ret_60,5),3))",
+        "kind": "formula"
+      },
+      {
+        "expression": "gt(neg(gt(ma_dist_20,ret_120)),ts_ref(tanh(ret_60),20))",
+        "kind": "formula"
+      },
+      {
+        "expression": "div(gt(ts_arg_min(pow_const(ma_dist_120,-0.5),90),log(ret_120)),ts_arg_max(rangepos,14))",
+        "kind": "formula"
+      },
+      {
+        "expression": "abs(ts_max(ts_mean(gt(ma_dist_20,0.1),2),10))",
+        "kind": "formula"
+      },
+      {
+        "expression": "abs(ts_delta(mul(ts_corr(ret_20,s_log_1p(candlebody),10),rangepos),180))",
+        "kind": "formula"
+      }
+    ],
+    "weights": [
+      0.9999893568956114,
+      0.1521516497173858,
+      0.999999101523359,
+      0.4519844142654696,
+      0.9999981704177312,
+      0.999999520628204,
+      0.6140027489441499,
+      0.8
+    ],
+    "metrics": {
+      "sharpe": 2.7244040714902873,
+      "ann_ret": 0.20797326955418494,
+      "maxdd": -0.02205875571615401,
+      "cagr": 0.227518809676182,
+      "total_ret": 0.22452680606631148,
+      "turnover": 0.11946987137856974,
+      "exposure": 0.4163909716395521,
+      "margin_bps": 69.07940409377436,
+      "max_single_weight": 0.009073528013867453,
+      "concentration": 0.27032146709537636,
+      "yearly": [
+        {
+          "year": 2025,
+          "days": 128,
+          "sharpe": 0.825,
+          "attend": 1.0,
+          "lg": 0.0105
+        },
+        {
+          "year": 2026,
+          "days": 121,
+          "sharpe": 3.868,
+          "attend": 1.0,
+          "lg": 0.1921
+        }
+      ],
+      "span": "2025-07-01..2026-06-26",
+      "n_days": 249
+    },
+    "baseline": false
+  }
+}

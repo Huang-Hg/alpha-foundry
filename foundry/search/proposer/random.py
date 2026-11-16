@@ -2,8 +2,6 @@
 from collections.abc import Sequence
 import json
 
-import numpy as np
-
 from foundry.search.proposer.sampling import Sampler
 from foundry.types import Candidate, Formula, ProposalBatch, TrainingResult
 
@@ -17,8 +15,7 @@ class RandomProposer:
 
     def sample(self, count: int, probes: int, context: Sequence[float]) -> ProposalBatch:
         sampler = self.sampler
-        sampler.sample(count + 12 * probes, 0, context,
-                       lambda states: np.stack([sampler.legal(s) for s in states]), uniform=True)
+        sampler.sample(count + 12 * probes, context)
         candidates = tuple(Candidate(expression, Formula(expression)) for expression in sampler.expressions())
         return ProposalBatch(sampler.epoch, sampler.ordinary, 0, candidates)
 
