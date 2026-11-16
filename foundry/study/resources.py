@@ -111,6 +111,9 @@ class HostResources:
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
         return cfg.candidate_batch, cfg.trial_batch
 
+    def measurement_budget(self, cfg: CudaConfig) -> int:
+        return cfg.measurement_cache_mib * 1048576
+
     def status(self) -> ResourceStatus:
         return ResourceStatus('CPU', 0)
 
@@ -150,6 +153,10 @@ class CudaResources:
         limit = max(1, int(free * .65 / (T * S * 8 * 20)))
         return (min(cfg.candidate_batch, 1 << (limit.bit_length() - 1)),
                 min(cfg.trial_batch, max(1, int(free * .10 / (T * 8 * 10)))))
+
+    def measurement_budget(self, cfg: CudaConfig) -> int:
+        free, _ = self.cp.cuda.runtime.memGetInfo()
+        return min(cfg.measurement_cache_mib * 1048576, int(free * .20))
 
     def status(self) -> ResourceStatus:
         with self.device:

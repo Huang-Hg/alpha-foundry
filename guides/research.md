@@ -279,6 +279,8 @@ The current model uses fixed maintenance/fee parameters. It does not reproduce h
 
 ## Numerical behavior and performance
 
+`foundry.CUDA(measurement_cache_mib=8192)` budgets reuse of candidate books, returns and reports between evaluation and commit, independently of `candidate_batch`. CUDA caps this reservation at 20% of available device memory when opening the session; CPU uses the configured budget. Whole allocation batches are evicted together. Set the budget to `0` to disable measurement reuse. This performance setting does not change the study identity. Commit always checks the expected context and judges candidates against the evolving portfolio; cached measurements cannot reuse a stale admission decision.
+
 CUDA batch sizes and precision are explicit. Paired FP32 uses two components to retain residual precision in supported account/statistical paths. The resolved plan is fixed at session startup; evaluation never chooses a higher precision after seeing a result. Small perpetual batches can be planned for CPU before execution using `CUDA.perpetual_host_cells`; there is no runtime-error fallback.
 
 Use `session.describe()` and report precision/backend fields to inspect the actual plan. The [2026-11-15 PRO 6000 report](benchmarks/arch-v2-pro6000-20261115/report.md) measures source `fa2acfd`: 512 public tests passed, one private-baseline test was skipped, and all 124 cases covering 66 operators passed. The 4096-formula workflow admitted 28 candidates on both backends, with no decision mismatches or numerical tolerance exceedances; complete-case CPU/CUDA wall times were 93.724/2.879 s. These are single-round observations. Earlier `current/` reports remain historical.

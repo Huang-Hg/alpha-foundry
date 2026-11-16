@@ -83,6 +83,7 @@ class CudaConfig:
     precision: str = 'paired'
     return_atol: float = 1e-06
     perpetual_host_cells: int = 100000
+    measurement_cache_mib: int = 8192
 
     def __post_init__(self):
         if self.streams <= 0 or self.candidate_batch <= 0 or self.trial_batch <= 0:
@@ -93,6 +94,8 @@ class CudaConfig:
             raise ValueError('CUDA parameters return error budget must be positive')
         if self.perpetual_host_cells < 0:
             raise ValueError('CUDA parameters perpetual_host_cells must be nonnegative')
+        if type(self.measurement_cache_mib) is not int or self.measurement_cache_mib < 0:
+            raise ValueError('CUDA parameters measurement_cache_mib must be a nonnegative integer')
 
 
 @dataclass(frozen=True)

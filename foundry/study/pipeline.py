@@ -84,6 +84,7 @@ class DeviceResources(Protocol):
     def finish_batch(self) -> None: ...
     def synchronize(self) -> None: ...
     def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]: ...
+    def measurement_budget(self, cfg: CudaConfig) -> int: ...
     def status(self) -> ResourceStatus: ...
     def close(self) -> None: ...
 
@@ -133,7 +134,8 @@ class Pipeline:
         self.candidate_batch, self.trial_batch = resources.batch_sizes(settings.cuda, self.panel.shape)
         self.commit_batch = self.candidate_batch if executor.parallel_trials else 1
         self.precision = context.precision.effective
-        self.cache = CandidateCache(self.candidate_batch, settings.portfolio.max_members)
+        self.cache = CandidateCache(self.candidate_batch, settings.portfolio.max_members,
+                                    resources.measurement_budget(settings.cuda), self.panel.shape)
 
     def batches(self, items: Sequence[Item]) -> Iterator[Sequence[Item]]:
         """Apply the runtime's resident candidate bound at every batch boundary."""
@@ -278,8 +280,7 @@ class Pipeline:
         if missing:
             computed = self._compute_sources([key.source for key in missing], True, precision, delayed)
             found.update(zip(missing, computed))
-        for key in keys:
-            self.cache.reports[key] = found[key]
+            self.cache.reports.put(missing, computed)
         return [replace(found[key]) for key in keys]
 
     def _compute_sources(self, sources: Sequence[Source], report: bool, precision: str,

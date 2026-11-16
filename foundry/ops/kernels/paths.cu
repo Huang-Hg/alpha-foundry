@@ -26,40 +26,6 @@ extern "C" __global__ void k_std(const double* x,double* out,int T,int S,int w,i
     }
 }
 
-// Keep the native reference's chronological recurrence and resynchronization.
-// A window-local recomputation is not numerically interchangeable after an
-// extreme observation leaves the rolling window.
-extern "C" __global__ void k_slope(const double* x,double* out,int T,int S,int w,int tile) {
-    int s=blockIdx.x*blockDim.x+threadIdx.x;
-    if(s>=S)return;
-    int begin=blockIdx.y*tile,end=min(T,begin+tile);
-    for(int t=begin;t<end;t++)out[t*S+s]=NAN;
-    int lo=0;while(lo<T && isnan(x[lo*S+s]))lo++;
-    if(lo+w>end)return;
-    double sx=0.,skx=0.,mean=(w-1)/2.,var=(double(w)*w-1.)/12.;int missing=0;
-    for(int k=0;k<w;k++) {
-        double v=x[(lo+k)*S+s];
-        if(isnan(v))missing++;else{sx+=v;skx+=double(k)*v;}
-    }
-    if(lo+w-1>=begin)out[(lo+w-1)*S+s]=missing?NAN:(skx-mean*sx)/double(w)/var;
-    for(int t=lo+w;t<end;t++) {
-        if(((t-lo)&65535)==0) {
-            sx=skx=0.;missing=0;
-            for(int k=0;k<w;k++) {
-                double v=x[(t-w+1+k)*S+s];
-                if(isnan(v))missing++;else{sx+=v;skx+=double(k)*v;}
-            }
-        } else {
-            double next=x[t*S+s],old=x[(t-w)*S+s];
-            bool nn=isnan(next),no=isnan(old);
-            double nv=nn?0.:next,ov=no?0.:old;
-            skx=skx-sx+ov+double(w-1)*nv;sx=sx+nv-ov;
-            missing+=int(nn)-int(no);
-        }
-        if(t>=begin)out[t*S+s]=missing?NAN:(skx-mean*sx)/double(w)/var;
-    }
-}
-
 extern "C" __global__ void k_pair(const double* a,const double* b,double* out,int T,int S,int w,int mode,int tile) {
     int s=blockIdx.x*blockDim.x+threadIdx.x;
     if(s>=S)return;
@@ -125,20 +91,6 @@ extern "C" __global__ void k_recursive(const double* x, const double* y, const d
         if(mode==0) prev=z[i]>0?0.:(v>0?y[i]:prev);
         else { if(!isnan(v)&&(isnan(prev)||fabs(v-prev)>k))prev=v; }
         out[i]=prev;
-    }
-}
-
-// The non-NaN mean exists before a full window is available, unlike ts_mean.
-extern "C" __global__ void k_av_diff(const double* x,double* out,int T,int S,int w,int tile) {
-    int s=blockIdx.x*blockDim.x+threadIdx.x;
-    if(s>=S)return;
-    int begin=blockIdx.y*tile,end=min(T,begin+tile);
-    double sum=0.;int count=0;
-    for(int t=0;t<end;++t) {
-        int i=t*S+s;double v=x[i];
-        if(!isnan(v)){sum+=v;++count;}
-        if(t>=w) {double old=x[i-w*S];if(!isnan(old)){sum-=old;--count;}}
-        if(t>=begin)out[i]=count>0&&!isnan(v)?v-sum/double(count):NAN;
     }
 }
 

@@ -4,6 +4,8 @@
 
 The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
 
+The [2026-11-16 TMA and measurement-reuse report](history-pro6000-20261116/README.md) measures faster `ts_slope` and `ts_av_diff`, bounded query-to-commit reuse, and unchanged 4096-formula decisions. It includes the memory tradeoff and actual Blackwell bulk-copy instruction evidence.
+
 The [CUDA operator optimization](ops-pro6000-20261115/README.md) compares before/after measurements on the same PRO 6000. Recurrence, backfill and shift operators improve while the 4096-formula reports, weights and decisions remain identical. The report also identifies cases where CUDA still trails CPU.
 
 The [native framework comparison](frameworks-pro6000-20261115/README.md) separately compares Foundry with Spectre, vectorbt Numba/Rust and Freqtrade on identical daily spot inputs and trading rules. The shared entry is `python -m foundry benchmark OUTPUT --suite frameworks`; see the [setup and method](../framework-benchmark.md). This restricted comparison measures execution, not portfolio admission.

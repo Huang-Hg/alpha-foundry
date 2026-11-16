@@ -21,14 +21,18 @@ class Ops:
     def __init__(self):
         contract = _KERNELS.parent.joinpath('two_point.hpp').read_text(encoding='utf-8')
         self._OPS = cp.RawModule(code=contract+'\n'+'\n'.join((_KERNELS / name).read_text(encoding='utf-8') for name in ('ops.cu','select.cu')), options=('--std=c++14', '--fmad=false'))
-        self._PATHS = cp.RawModule(code=contract+'\n'+(_KERNELS / 'paths.cu').read_text(encoding='utf-8'), options=('--std=c++14', '--fmad=false'))
+        self._PATHS = cp.RawModule(code=contract+'\n'+'\n'.join((_KERNELS / n).read_text(encoding='utf-8') for n in ('paths.cu', 'rolling.cu')), options=('--std=c++14', '--fmad=false'))
         self._PROPS = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
         self._WARP = self._PROPS['warpSize']
         self._OPTIN = self._PROPS['sharedMemPerBlockOptin']
         self._MAXTHR = self._PROPS['maxThreadsPerBlock']
         self._SHBUDGET = min(self._OPTIN, self._PROPS['sharedMemPerMultiprocessor'] // 3)
         self._k_moment, self._k_ext, self._k_ema, self._k_cs, self._k_cs_rank = (self._OPS.get_function(n) for n in ('k_moment', 'k_ext', 'k_ema', 'k_cs', 'k_cs_rank'))
-        self._k_pair, self._k_slope, self._k_standardize, self._k_std = (self._PATHS.get_function(n) for n in ('k_pair', 'k_slope', 'k_standardize', 'k_std'))
+        self._k_pair, self._k_standardize, self._k_std = (self._PATHS.get_function(n) for n in ('k_pair', 'k_standardize', 'k_std'))
+        self._staged = {name: self._PATHS.get_function(f'k_{name}_staged') for name in ('slope', 'av_diff')}
+        self._history_capacity = min(self._SHBUDGET, *(self._optin_max(fn) for fn in self._staged.values()))
+        self._pack_history = self._PATHS.get_function('k_history_pack')
+        self._finish_history = self._PATHS.get_function('k_history_finish')
         self._median = {size:self._OPS.get_function(f'k_median{size}') for size in (32,128,512,2048)}
         self._DYNMAX = min((self._optin_max(f) for f in (self._k_moment, self._k_ext, self._k_cs_rank)))
         self.max_window = self._max_window()
@@ -158,12 +162,30 @@ class Ops:
     def ts_wma(self, x, w):
         return self._ext(x, w, 2)
 
-    def ts_slope(self, x, w):
+    def _history(self, x, w, name):
+        """Choose the storage plan before launch; arithmetic is shared by both plans."""
         T, S = x.shape
         out = cp.empty_like(x)
-        grid, tile = self._path_tiles(T, S)
-        self._k_slope(grid, (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(w), tile))
+        counts = cp.empty(x.shape if name == 'av_diff' else (0,), dtype=cp.int32)
+        pitch = (T + 1) // 2 * 2
+        if pitch * 4 * _ELEM <= self._history_capacity:
+            packed = cp.empty(((S + 3) // 4, pitch, 4), dtype=D)
+            self._pack_history(((S + 31) // 32, (T + 31) // 32), (32, 8),
+                (x, packed, np.int32(T), np.int32(S), np.int32(pitch)))
+            tile = (T + 7) // 8
+            self._staged[name](((S + 3) // 4,), (self._WARP,),
+                (packed, out, counts, np.int32(T), np.int32(S), np.int32(w), np.int32(pitch), np.int32(tile)),
+                shared_mem=pitch * 4 * _ELEM)
+        else:
+            grid, tile = self._path_tiles(T, S)
+            self._PATHS.get_function(f'k_{name}')(grid, (self._WARP,),
+                (x, out, counts, np.int32(T), np.int32(S), np.int32(w), tile))
+        self._finish_history(((x.size + 255) // 256,), (256,),
+            (x, out, counts, np.int32(x.size), np.int32(w), np.int32(name == 'slope')))
         return out
+
+    def ts_slope(self, x, w):
+        return self._history(x, w, 'slope')
 
     def ts_rank(self, x, w):
         return self._ext(x, w, 4)
@@ -243,12 +265,7 @@ class Ops:
         return self._range(x, w, 2, k)
 
     def ts_av_diff(self, x, w):
-        T, S = x.shape
-        out = cp.empty_like(x)
-        grid, tile = self._path_tiles(T, S)
-        self._PATHS.get_function('k_av_diff')(grid, (self._WARP,),
-            (x, out, np.int32(T), np.int32(S), np.int32(w), tile))
-        return out
+        return self._history(x, w, 'av_diff')
 
     def ts_quantile(self, x, w, driver):
         """Plotting position p = (r + 0.5)/w of the rank within the window, through the inverse CDF of the driver."""

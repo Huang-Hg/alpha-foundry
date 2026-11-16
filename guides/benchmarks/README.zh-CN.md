@@ -4,6 +4,8 @@
 
 这套基准回答三个问题：**一次实际研究调用要多久？CUDA 带来多大数值误差？接纳的候选是否与 CPU 相同？**
 
+[2026-11-16 TMA 与测量复用报告](history-pro6000-20261116/README.zh-CN.md) 比较 `ts_slope`、`ts_av_diff` 和查询到提交的提速，验证 4096 条公式决策一致，并披露显存成本和实际 Blackwell 批量搬运指令。
+
 [CUDA 慢算子优化](ops-pro6000-20261115/README.zh-CN.md) 对同一台 PRO 6000 上的修改前后结果逐项比较：递推、回填和移位等算子提速，4096 条公式的报告数值、权重和决策一致，同时列出仍慢于 CPU 的用例。
 
 [原生框架对比](frameworks-pro6000-20261115/README.zh-CN.md) 使用相同日线现货输入和交易规则，单独比较 Foundry、Spectre、vectorbt Numba/Rust 与 Freqtrade。共用入口为 `python -m foundry benchmark OUTPUT --suite frameworks`，安装与口径见[方法说明](../framework-benchmark.zh-CN.md)。该受限对比测量账户执行，不包含组合准入。
