@@ -96,10 +96,10 @@ def load_study(settings: Settings, study: Study, backend: Backend) -> StudyData:
     elif isinstance(cfg, UsEquityConfig):
         market = UsEquity(cfg.cost_rate, cfg.daily_borrow, settings.account.gross_limit)
     elif isinstance(cfg, CryptoSpotConfig):
-        market = CryptoSpot(cfg.cost_rate, settings.account.gross_limit)
+        market = CryptoSpot(cfg.cost_rate, settings.account.gross_limit, settings.clock)
     else:
         market = CryptoPerpetual(settings.account.leverage, cfg.cost_rate, cfg.maintenance_rate,
-                                 cfg.liquidation_fee, settings.account.gross_limit)
+                                 cfg.liquidation_fee, settings.account.gross_limit, settings.clock)
     return market.compile(load_data(settings, study), backend, study)
 
 
@@ -132,7 +132,8 @@ class HostResources:
     def content_leaves(self, values: Array) -> HostArray:
         return host_leaves(values)
 
-    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
+    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int], events: int,
+                    measurements: int) -> tuple[int, int]:
         return self.cfg.candidate_batch, self.cfg.workers
 
     def measurement_budget(self, cfg: CudaConfig) -> int:
@@ -202,12 +203,15 @@ class CudaResources:
     def content_leaves(self, values: Array) -> HostArray:
         return self.hasher.leaves(values)
 
-    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]:
+    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int], events: int,
+                    measurements: int) -> tuple[int, int]:
         free, _ = self.cp.cuda.runtime.memGetInfo()
-        T, S = shape
-        limit = max(1, int(free * .65 / (T * S * 8 * 20)))
+        D, S = shape
+        candidate_bytes = D * S * 8 * 20 + events * S + measurements * 8 * 10
+        trial_bytes = D * S * 8 * 2 + events * S + measurements * 8 * 10
+        limit = max(1, int(free * .65 / candidate_bytes))
         return (min(cfg.candidate_batch, 1 << (limit.bit_length() - 1)),
-                min(cfg.trial_batch, max(1, int(free * .10 / (T * 8 * 10)))))
+                min(cfg.trial_batch, max(1, int(free * .10 / trial_bytes))))
 
     def measurement_budget(self, cfg: CudaConfig) -> int:
         free, _ = self.cp.cuda.runtime.memGetInfo()

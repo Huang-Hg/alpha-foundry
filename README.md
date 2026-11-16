@@ -34,10 +34,10 @@ The example uses the bundled US equity snapshot. You can replace it with your ow
 | --- | --- |
 | US equities | Historical membership, adjusted prices, next-session execution and costs |
 | China A-shares | Historical membership, suspensions, price limits, sell tax and separate signal/execution prices |
-| Crypto spot | Daily UTC calendar, 365-day annualization, eligibility and trading fees |
-| USDT linear perpetuals | Long/short exposure, isolated margin, hourly funding events and liquidation |
+| Crypto spot | Continuous UTC calendar, independent bar clocks, eligibility and trading fees |
+| USDT linear perpetuals | Long/short exposure, isolated margin, base-bar funding events and liquidation |
 
-The current R1 contract supports daily decisions and statistics; perpetuals use hourly account events. Intraday decision grids, stateful strategy callbacks and orders are later delivery phases. The [guide](guides/research.md#crypto-execution) describes the model's price, funding and liquidation assumptions.
+Crypto supports explicit base bars with independent decision and statistics frequencies, including 5-minute execution, 15-minute decisions and daily statistics. Existing daily presets and hourly perpetual datasets retain their conventions. Stateful strategy callbacks and orders are later delivery phases. The [guide](guides/research.md#crypto-execution) describes the model's price, funding and liquidation assumptions.
 
 ## Bring your own data
 
@@ -54,7 +54,7 @@ with foundry.open(
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-For US equities, prepare `panel.parquet` with OHLCV and adjustment factors, plus `membership.parquet` with historical eligibility intervals. Retain earlier history for rolling features. Other markets have explicit data contracts; perpetuals additionally require hourly trade, mark and funding records. See [file formats and conversion examples](guides/research.md#bring-your-own-data).
+For US equities, prepare `panel.parquet` with OHLCV and adjustment factors, plus `membership.parquet` with historical eligibility intervals. Retain earlier history for rolling features. Other markets have explicit data contracts; intraday crypto accepts publication-aware base bars, with mark and funding records for perpetuals. See [file formats and conversion examples](guides/research.md#bring-your-own-data).
 
 If your program already produces signals or positions, use `session.register(...)` instead. It accepts batches of model scores, long-only target weights or signed perpetual exposures with UTC decision/asset coordinates, explicit units and timestamp information cutoffs. Scores use `Sizing(rule="equal_slots")` by default; `Sizing(rule="independent", scale=...)` avoids asset-count dilution. Targets use `kind="targets", unit="equity_fraction"`. Temporary GPU candidates stay resident until `session.release(batch)`; only admitted, checkpoint-referenced or explicitly retained outputs are saved.
 

@@ -1,9 +1,9 @@
 """USDT linear isolated-margin research execution, not an exchange replica.
 
-Daily close targets rebalance at the next UTC day's first hourly event. Each
+Targets rebalance at their compiled next-open execution event. Each
 asset receives isolated collateral abs(target)/leverage times post-trade NAV;
 unallocated cash remains separate and collateral is redistributed only at the
-scheduled daily rebalance. Funding settles before rebalance. Mark OHLC adverse
+scheduled target update. Funding settles before rebalance. Mark OHLC adverse
 touches trigger the stated bar liquidation model, with no intrabar replenishment.
 Liquidation fees record actual collateral deductions; isolated_loss_cap records
 the model's compensation for a negative isolated bucket when losses are capped.
@@ -14,7 +14,7 @@ assumptions whose historical limitations belong in the study data contract.
 from dataclasses import fields
 import numpy as np
 
-from foundry.types import ExecutionRiskBatch, SimulationResult, PerpetualSpec, PERPETUAL_MODEL, PERPETUAL_ARRAY_FIELDS
+from foundry.types import ExecutionRiskBatch, SimulationResult, PERPETUAL_MODEL
 from foundry.numeric import metrics
 
 

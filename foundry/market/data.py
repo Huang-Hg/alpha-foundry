@@ -11,6 +11,7 @@ from foundry.config import Settings, path
 from foundry.types import DataContract, MarketData, Study
 from foundry.market.pit import membership
 from foundry.market.perpetual import PerpetualData, load_perpetual
+from foundry.market.intraday import IntradayData, SCHEMA as INTRADAY_SCHEMA, load_intraday
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -62,16 +63,20 @@ def crypto_grid(frame: pd.DataFrame, asof: str) -> tuple[
     return dates.to_numpy(dtype='datetime64[D]'), symbols, grids, members
 
 
-def load_data(settings: Settings, study: Study) -> MarketData | PerpetualData:
+def load_data(settings: Settings, study: Study) -> MarketData | PerpetualData | IntradayData:
     if study.market != settings.market.name:
         raise ValueError('study market differs from the selected market configuration')
     import pandas as pd
     import pyarrow.parquet as pq
 
-    if study.market == 'crypto_perpetual':
-        return load_perpetual(path(settings.market.data_dir), study)
     cfg = settings.market
     directory = path(cfg.data_dir)
+    if study.market in ('crypto_spot', 'crypto_perpetual'):
+        manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
+        if manifest['schema'] == INTRADAY_SCHEMA:
+            return load_intraday(directory, study, settings.clock)
+        if study.market == 'crypto_perpetual':
+            return load_perpetual(directory, study)
     frame = pd.read_parquet(directory / 'panel.parquet')
     if study.market == 'crypto_spot':
         manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))

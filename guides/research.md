@@ -50,7 +50,7 @@ Admission reports expose each constraint's raw `delta` and `required` threshold;
 
 ### Parameters and discovery
 
-Pass `market`, `backend`, `data_dir`, `start`, `end` and market costs directly. Advanced groups are `foundry.CPU`, `foundry.CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`. All settings are fixed when a session opens; open another session to compare them.
+Pass `market`, `backend`, `data_dir`, `start`, `end` and market costs directly. Advanced groups include `foundry.Clock`, `Sizing`, `Account`, `Execution`, `CPU`, `CUDA`, `Admission`, `Operators`, `Search`, `Single` and `Monitor`. All settings are fixed when a session opens; open another session to compare them.
 
 `foundry.schema()` returns the parameter schema, market defaults and RPC contract without opening a study. `session.describe()` supplies available fields, the 66 operators and resolved parameters. `foundry.mine(...)` and `foundry.serve(...)` accept the same parameter groups. A supplied mining session already owns its parameters.
 
@@ -116,7 +116,7 @@ Extra Parquet columns do not automatically become formula fields. Register model
 
 ### Perpetual data
 
-The hourly contract consists of `trade.parquet`, `mark.parquet`, `funding.parquet` and `manifest.json`. The manifest records ordered symbols, artifact hashes and funding-interval transition evidence where required. Daily OHLC alone cannot reconstruct funding or liquidation.
+The preserved hourly archive contract consists of `trade.parquet`, `mark.parquet`, `funding.parquet` and `manifest.json`. It produces daily decisions and statistics from hourly execution events. The manifest records ordered symbols, artifact hashes and funding-interval transition evidence where required. Daily OHLC alone cannot reconstruct funding or liquidation.
 
 ```python
 foundry.import_perpetual(
@@ -127,11 +127,63 @@ foundry.import_perpetual(
 )
 ```
 
-The importer acquires public USD-M archives, verifies checksums and retains source records. Open the output with `market="crypto_perpetual"` and matching dates. Existing datasets get asset order from their manifests; `symbols` selects new acquisition. A different provider must satisfy the explicit event contract in [`market/perpetual.py`](../foundry/market/perpetual.py).
+The importer acquires public USD-M archives, verifies checksums and retains source records. Open the output with `market="crypto_perpetual"` and matching dates. Existing datasets get asset order from their manifests; `symbols` selects new acquisition. Supply finer bars through the following explicit contract.
+
+### Intraday crypto files
+
+For spot or isolated perpetuals, supply `manifest.json` and `bars.parquet` using `schema="crypto-bars-v1"`. Perpetuals also require `funding.parquet`. The reader is [`market/intraday.py`](../foundry/market/intraday.py); the hourly importer does not generate this format.
+
+| File | Required columns |
+| --- | --- |
+| `bars.parquet` | String `symbol`; int64 UTC nanoseconds `open_ns`, `close_ns`, `available_ns`; floating `open`, `high`, `low`, `close`, `volume`; boolean `eligible` |
+| Perpetual bar additions | Floating `mark_open`, `mark_high`, `mark_low`, `mark_close`; execution-only |
+| `funding.parquet` | String `symbol`; int64 UTC nanoseconds `settlement_ns`; floating `rate`, `mark` |
+
+Bars describe aligned half-open base intervals `[open_ns,close_ns)`. `available_ns >= close_ns` identifies when that complete row, including eligibility, became visible. Versions may repeat `(symbol,open_ns)` with distinct availability timestamps. The reader first cuts off both bar ends and availability at the requested end, then freezes each decision bar using only versions available by that decision's close. Missing or late constituent bars make that decision's features unavailable; later publications never rewrite earlier decisions. Execution uses the first published version visible by the study cutoff. Spot can carry positions across missing quotes; perpetual execution requires complete finite trade and mark bars.
+
+An illustrative perpetual manifest follows. Replace the digest placeholders with `hashlib.sha256(file_bytes).hexdigest()` for each actual parquet file and record your real provenance and limitations:
+
+```json
+{
+  "schema": "crypto-bars-v1",
+  "market": "crypto_perpetual",
+  "source": "Your archived feed and version",
+  "retrieved_at": "2026-11-16T00:00:00Z",
+  "features": "Completed trade OHLCV; mark and funding excluded",
+  "execution_prices": "First published trade and mark base bars",
+  "publication": "Per-row available_ns; describe missing historical vintages",
+  "membership": "Historical eligible values published with each bar",
+  "timezone": "UTC",
+  "interval": "5min",
+  "history_start": "2025-01-01T00:00:00Z",
+  "end": "2025-02-01T00:00:00Z",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "artifacts": {
+    "bars": {"path": "bars.parquet", "sha256": "<bars file digest>"},
+    "funding": {"path": "funding.parquet", "sha256": "<funding file digest>"}
+  }
+}
+```
+
+For spot, set `market="crypto_spot"` and omit the funding artifact and mark columns. Manifest history bounds are explicit ISO UTC timestamps with an exclusive `end`. The research `start` and `end` may be ISO UTC timestamps; a date-only `end` includes that entire UTC day. Source history start, research start and cutoff must align with complete statistics periods. Decision and statistics durations must be integer multiples of the base interval; fixed durations use `s`, `min`, `h` or `D`.
+
+Funding must explicitly cover every base-open/asset pair: `settlement_ns` equals that base open, `rate=0` declares no cashflow there, and `mark` is a finite positive settlement mark. Missing records are rejected rather than assumed zero. Settlement times between base opens require finer base data. Funding rates and mark prices never enter the feature panel.
+
+```python
+with foundry.open(
+    market="crypto_perpetual", data_dir="/datasets/crypto_5m",
+    start="2025-01-08", end="2025-01-31", backend="cuda",
+    clock=foundry.Clock(decision="15min", statistics="1D"),
+    account=foundry.Account(margin="isolated", leverage=3., gross_limit=2.),
+) as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+```
+
+Here features and registered `(B,D,S)` arrays use completed 15-minute decision bars. `Execution(fill="next_open")` executes at the next 5-minute base open after the completed decision, including a shared boundary; it does not wait for the next decision. Between updates, actual quantities remain held. Formula windows count decision bars, so `ma_dist_20` uses 20 observations.
 
 ## Numerical factors, model signals and target positions
 
-`session.grid` gives canonical ISO UTC `decision_times`, the equivalent int64 UTC nanoseconds in `time_ns`, ordered assets and snapshot identity. Arrays use shape `(B,D,S)`: candidates, decisions, assets. R1 preserves the four daily market paths; `Clock` currently accepts only daily decisions and statistics. Equity decisions use the exchange session close (including DST and early closes); crypto decisions use the right boundary of each UTC day. This calendar coordinate does not supply missing historical publication timestamps.
+`session.grid` gives canonical ISO UTC `decision_times`, the equivalent int64 UTC nanoseconds in `time_ns`, ordered assets and snapshot identity. Arrays use shape `(B,D,S)`: candidates, decisions, assets. The four daily presets retain their existing conventions; crypto bar artifacts also support independent decision and statistics frequencies. Equity decisions use the exchange session close (including DST and early closes); crypto decisions use the right boundary of each completed decision bar. This calendar coordinate does not supply missing historical publication timestamps.
 
 This example registers three constant zero-score candidates, which use no observations or fitted model. Replace the values and causal declarations with your actual outputs:
 
@@ -141,9 +193,9 @@ import foundry
 
 with foundry.open() as session:
     grid = session.grid
-    days, assets = len(grid.decision_times), len(grid.assets)
-    values = np.zeros((3, days, assets), dtype=np.float32)
-    unused = np.full((3, days), foundry.NO_INFORMATION, dtype=np.int64)
+    decisions, assets = len(grid.decision_times), len(grid.assets)
+    values = np.zeros((3, decisions, assets), dtype=np.float32)
+    unused = np.full((3, decisions), foundry.NO_INFORMATION, dtype=np.int64)
     registered = session.register(
         values, kind="scores", unit="score", ids=("model-small", "model-base", "model-large"),
         grid=grid, producer="external-program-v1",
@@ -160,7 +212,7 @@ with foundry.open() as session:
 
 `Sizing(rule="equal_slots")` preserves the daily preset: cash markets use `clip(score, 0, 1) / N`, short-enabled markets use `clip(score, -1, 1) / N`, with `N` eligible assets. `Sizing(rule="independent", scale=0.1)` uses the clipped score times the explicit scale without dividing by asset count. Adding zero-score assets therefore leaves an existing asset's independent target unchanged. Independent sizing reports an exceeded gross budget as a candidate rejection and continues the batch; it does not automatically normalize to full investment.
 
-Direct `targets` bypass score mapping and require `unit="equity_fraction"`. Zero means an explicit flat target. R1 accepts an omitted `update_mask` or an all-true boolean `(B,D,S)` mask, which have one canonical identity; false entries require the later account execution capability and are rejected. Scores do not accept an update mask. Quantity and notional targets are not available in R1.
+Direct `targets` bypass score mapping and require `unit="equity_fraction"`. Zero means an explicit flat target. The current target contract accepts an omitted `update_mask` or an all-true boolean `(B,D,S)` mask, which have one canonical identity; false entries require the later account execution capability and are rejected. Scores do not accept an update mask. Quantity and notional targets are not yet supported.
 
 Use `foundry.Account(margin="isolated", leverage=3., gross_limit=2.)` to separate collateral leverage from the allowed gross target exposure. Default daily presets retain their previous economics: cash 1×, isolated perpetual 5× leverage and gross limit. Any causal score calibration must be included in `fit_at`.
 
@@ -172,7 +224,7 @@ Values must be float32 or float64 arrays. Observation and fitting declarations a
 
 Call `session.release(registered)` when finished, normally in `finally` in a repeated loop. Session exit releases its remaining leases. Across active batches, the total row count cannot exceed `candidate_batch`; release a batch before registering more. Released resident references cannot be evaluated, even if an internal measurement remains cached.
 
-To keep selected outputs, use `saved = session.retain(registered.candidates[:1])` before release and save `saved.candidates` for future use. Only this explicit request, accepted portfolio members, or discovery checkpoint references write artifacts to `Admission.artifact_dir`. `retain` returns durable references; it does not release the original batch. Commit and discovery handle their own required retention automatically. Portfolio/RPC, array and discovery formats are `research-v15`, `candidate-array-v4` and `candidate-discovery-v4` (binary batch transport: `candidate-batch-v3`); old formats require an explicit rerun, with no automatic migration.
+To keep selected outputs, use `saved = session.retain(registered.candidates[:1])` before release and save `saved.candidates` for future use. Only this explicit request, accepted portfolio members, or discovery checkpoint references write artifacts to `Admission.artifact_dir`. `retain` returns durable references; it does not release the original batch. Commit and discovery handle their own required retention automatically. Portfolio/RPC, array and discovery formats are `research-v16`, `candidate-array-v4` and `candidate-discovery-v5` (binary batch transport: `candidate-batch-v3`); old formats require an explicit rerun, with no automatic migration.
 
 ## Strategy discovery
 
@@ -213,7 +265,7 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
 
 `ExternalProposer` accepts finite candidate or registered batches. `foundry.mine(..., session=session, proposers=[proposer])` opens, restores and closes producer resources automatically while leaving the supplied session open. Its optional callback receives one `LearningFeedback`: `feedback.batch` preserves candidate ordering and the research context; `feedback.rewards` is a same-device FP32 vector. CPU programs explicitly call `to_host()`; CUDA programs use `borrow(stream_pointer)` on their own stream and import the borrowed array through zero-copy DLPack. Do not mutate feedback or retain aliases beyond the borrow scope. Feedback owns no market/portfolio buffers, so learning can overlap commit and reweight.
 
-Custom proposers implement an `open(device)` context manager yielding a producer with `propose(request)`, `learn(feedback)`, `release(batch)`, `dump()` and `load()`. `ProposalRequest` contains only count, research context and diagnostic features; model-specific learning settings stay in each constructor. Each producer permits one unreleased batch, and feedback must reference its exact original handle, preserving instance, order and context. The driver joins learning before releasing feedback and trajectories, including on failure. Ordinary and auxiliary evaluations use actual counts; random proposers no longer append implicit GFN probes. Checkpoints use `candidate-discovery-v4` and reject older formats. Additional feedback storage is `O(B)`, with no history/replay cache.
+Custom proposers implement an `open(device)` context manager yielding a producer with `propose(request)`, `learn(feedback)`, `release(batch)`, `dump()` and `load()`. `ProposalRequest` contains only count, research context and diagnostic features; model-specific learning settings stay in each constructor. Each producer permits one unreleased batch, and feedback must reference its exact original handle, preserving instance, order and context. The driver joins learning before releasing feedback and trajectories, including on failure. Ordinary and auxiliary evaluations use actual counts; random proposers no longer append implicit GFN probes. Checkpoints use `candidate-discovery-v5` and reject older formats. Additional feedback storage is `O(B)`, with no history/replay cache.
 
 
 Without a supplied proposer, `foundry.mine(output, ...)` uses the configured built-in GFN or random formula proposer. The default `Search(accept=False)` still evolves an in-memory research portfolio through ordered admission and scheduled reweighting; it prevents persistent library publication. To publish, use `Search(accept=True, seed_portfolio="current")`. A supplied persistent session requires that publication setting; it is rejected with `accept=False`. `Discovery`, mining and walk-forward need an in-process session; their device-resident work is not a remote callback protocol.
@@ -304,7 +356,7 @@ with foundry.open(start="2025-07-01", end="2026-06-30") as session:
 
 Each prediction returns `(B,S)` in study asset order using the backend array library. `FoldView` contains timestamp `start`, exclusive timestamp `stop`, `decision_times`, `assets`, `features` and `eligibility`. Its arrays are owned causal prefixes. Outputs undergo the same registration checks as external arrays. The executor records the current decision in `observed_at` and the final visible fit decision in `fit_at`; include every observation used by training labels inside the fit interval. External callbacks remain responsible for separately loaded data and pre-trained model provenance.
 
-Diagnostics attribute a fold's net returns from the closing measurement after its first decision in the evaluation interval until the next model's corresponding measurement, or study end for the last fold. `FoldResult.measurement_start` and `measurement_stop` are half-open UTC nanosecond bounds on these closing measurements; they are not next-open fill times. The terminal stop is one nanosecond after the last measurement. Exit costs, funding and blocked-position carry during gaps remain attributed to the preceding model. `sign_consistency` is the larger of the positive-fold and negative-fold counts divided by all folds; zero/invalid folds count in neither numerator. A consistently losing model can score 1, so inspect the fold signs and returns as well. The operation registers and evaluates predictions but does not commit them. Release `result.registered` after use, or explicitly retain selected candidates first.
+Diagnostics attribute complete statistics periods using each fold's first actual base-bar execution in the evaluation interval, continuing until the next model's first execution period or study end. Decisions before the evaluation decision offset remain flat. The first fold owns any preceding flat prefix in its initial statistics period; later model changes must start at a period's first execution event. A change inside a period, or folds sharing a period, requires a finer `Clock.statistics`. `FoldResult.measurement_start` and `measurement_stop` are half-open UTC nanosecond period boundaries, independent of decision and fill times. The terminal stop is the final period's start plus its configured duration. Exit costs, funding and blocked-position carry during gaps remain attributed to the preceding model. `sign_consistency` is the larger of the positive-fold and negative-fold counts divided by all folds; zero/invalid folds count in neither numerator. A consistently losing model can score 1, so inspect the fold signs and returns as well. The operation registers and evaluates predictions but does not commit them. Release `result.registered` after use, or explicitly retain selected candidates first.
 
 ## Remote sessions
 
@@ -319,17 +371,21 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 Formula evaluation, registration, family judging, diagnosis, weight trials and portfolio commands use the same public session methods. Fit external models in your own process and register their outputs for remote evaluation. `session.resident` and `evaluate_device` are in-process facilities.
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) derives requests and responses from the typed contracts; [`rpc/codec.py`](../foundry/rpc/codec.py) handles encoding, with [`rpc/server.py`](../foundry/rpc/server.py) and [`rpc/client.py`](../foundry/rpc/client.py) owning transport. Array uploads use a binary bundle with 1 GiB encoded and decoded limits and no pickle. Portfolio/RPC protocol `research-v15` rejects old formats explicitly. Commands run through one bounded worker queue; disconnecting a client does not cancel an accepted command.
+[`rpc/schema.py`](../foundry/rpc/schema.py) derives requests and responses from the typed contracts; [`rpc/codec.py`](../foundry/rpc/codec.py) handles encoding, with [`rpc/server.py`](../foundry/rpc/server.py) and [`rpc/client.py`](../foundry/rpc/client.py) owning transport. Array uploads use a binary bundle with 1 GiB encoded and decoded limits and no pickle. Portfolio/RPC protocol `research-v16` rejects old formats explicitly. Commands run through one bounded worker queue; disconnecting a client does not cancel an accepted command.
 
 Input-contract errors raise `ValueError` or `TypeError`; stale contexts raise `ContextConflict`; resource/implementation failures propagate. Candidate business rejection remains a structured report. Consult `foundry.schema()` rather than constructing undocumented wire messages.
 
 ## Crypto execution
 
-Spot uses UTC daily bars and 365-day annualization. Eligibility and quotes remain separate; missing trade prices can block execution and leave an existing position carried. Configured fees apply to executed changes.
+Spot uses a continuous UTC calendar with either the preserved daily artifact or explicit base bars. Eligibility and quotes remain separate; missing trade prices can block execution and leave an existing position carried. Configured fees apply to executed changes.
 
-Perpetuals model USDT linear contracts with isolated collateral. Daily targets are signed notional/account equity; gross exposure is bounded by `Account.gross_limit`. Signals do not automatically allocate maximum leverage. Hourly events process mark gaps, existing-position funding, a daily rebalance, adverse high/low liquidation checks and closing marks. Funding follows actual event timestamps mapped to the hourly grid. If the public funding archive lacks settlement mark prices, the importer explicitly records its mark-open proxy.
+Perpetuals model USDT linear contracts with isolated collateral. Targets are signed notional/account equity; gross exposure is bounded by `Account.gross_limit`. Signals do not automatically allocate maximum leverage. Each base event processes mark gaps, existing-position funding, any newly scheduled target, adverse high/low liquidation checks and closing marks. The preserved Binance hourly archive uses daily targets, hourly events and its disclosed settlement-time bucketing and mark-open proxy. `crypto-bars-v1` uses the supplied base frequency and exact base-open funding records; it does not inherit that proxy.
 
 The current model uses fixed maintenance/fee parameters. It does not reproduce historical tier schedules, VIP fees, ADL, an order book or tick-by-tick intrabar fills. `risk` reports funding, trading fees, liquidation fees, liquidation counts, bankruptcy and account equity with units documented by the schema.
+
+Account valuations compound into `Clock.statistics` periods independently of decisions. Crypto annualization uses `365 * 86400 / statistics_seconds`; daily presets retain their original conventions. Returns, Sharpe, reported drawdown, `Metrics.n_periods` and `YearMetrics.periods` use that statistics grid. Period labels identify the UTC period start, so a period ending at New Year belongs to its starting year. Reported drawdown is sampled at statistics closes; base-bar liquidation checks remain active between those closes. `risk.first_liquidation_ns` identifies the UTC start of the first liquidation's base bar, not an exact tick or fill time; `-1` means none.
+
+`turnover` measures mean absolute target changes per decision, and `margin_bps` annualizes that denominator with the decision frequency. `exposure` and yearly attendance sample the latest target at each statistics close; they describe targets, not executed positions. Actual fees and account leverage remain in `risk`.
 
 ## Numerical behavior and performance
 

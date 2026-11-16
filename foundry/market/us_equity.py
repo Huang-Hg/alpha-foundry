@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from foundry.market.execution import cash_spec
-from foundry.market.clock import daily_clock
+from foundry.market.clock import daily_clock, daily_schedule
 from foundry.types import Allocation, Backend, BoolArray, ExecutionSpec, LoadedStudy, MarketData, Study, Window
 from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
@@ -30,13 +30,14 @@ class UsEquity(Market[MarketData, ExecutionSpec]):
         dates, symbols, g = data.dates, data.assets, data.values
         clock = daily_clock(dates, self.name)
         start = int(np.searchsorted(dates, np.datetime64(study.start)))
-        window = Window(dates, start, clock)
+        window = Window(clock, start, dates, start, self.ppy)
         src = {k: g[k] * g['adj_factor'] for k in ('open', 'high', 'low', 'close')}
         src['volume'] = g['volume']
         src['member'] = data.members
         fields = [Field(k, 'price', formula=False) for k in src] + ohlcv_fields() + trend_fields()
         carry = None if self.daily_borrow == 0 else np.full(src['close'].shape, self.daily_borrow)
-        spec = cash_spec(src['open'], src['close'], self.cost_rate * src['open'], carry=carry)
+        spec = cash_spec(src['open'], src['close'], self.cost_rate * src['open'], carry=carry,
+                         schedule=daily_schedule(dates, self.name, clock))
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
                            window, data.contract)
 

@@ -114,9 +114,9 @@ def points(candidates: Sequence[Candidate], batch: DeviceBatch, ref: PortfolioVi
             out[candidate] = FamilyPoint(candidate, False, None, None, None, None, None, None)
             continue
         p, m = verdict.proposal, row.metrics
-        days = sum(y.days for y in m.yearly)
+        days = sum(y.periods for y in m.yearly)
         out[candidate] = FamilyPoint(candidate, verdict.passed, m.sharpe, m.maxdd,
-            sum(y.attend * y.days for y in m.yearly) / days,
+            sum(y.attend * y.periods for y in m.yearly) / days,
             p.sharpe - ref.sharpe if p.valid else None,
             p.cagr - ref.cagr if p.valid else None,
             p.maxdd - ref.maxdd if p.valid else None)

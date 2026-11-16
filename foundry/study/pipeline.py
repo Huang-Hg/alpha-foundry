@@ -21,7 +21,7 @@ from typing import (
 
 from foundry.numeric.allocation import cap_book
 
-from foundry.config import CudaConfig, Settings
+from foundry.config import CudaConfig, Settings, frequency_nanoseconds
 from foundry.numeric import metrics as M
 from foundry.ops.parse import validate
 from foundry.portfolio.allocation import score_to_book
@@ -95,7 +95,8 @@ class DeviceResources(Protocol):
     def synchronize(self) -> None: ...
     def stage_host(self, values: Array) -> HostArray: ...
     def content_leaves(self, values: Array) -> HostArray: ...
-    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int]) -> tuple[int, int]: ...
+    def batch_sizes(self, cfg: CudaConfig, shape: tuple[int, int], events: int,
+                    measurements: int) -> tuple[int, int]: ...
     def measurement_budget(self, cfg: CudaConfig) -> int: ...
     def status(self) -> ResourceStatus: ...
     def close(self) -> None: ...
@@ -136,21 +137,32 @@ class Pipeline:
         self.context = context
         self.fields = {k: self.panel[k] for k in self.panel.vocabulary}
         self.vocabulary = self.panel.vocabulary
-        self.dates, self.start, self.ppy = loaded.window.dates, loaded.window.start, self.market.ppy
+        self.measurement_times = loaded.window.measurement_times
+        self.measurement_start = loaded.window.measurement_start
+        self.decision_start = loaded.window.decision_start
+        self.ppy = loaded.window.periods_per_year
+        self.schedule = loaded.host_spec.schedule
+        self.decision_ppy = self.ppy * (frequency_nanoseconds(settings.clock.statistics)
+                                        / frequency_nanoseconds(settings.clock.decision))
         self.clock = loaded.window.clock
         self.decision_times = self.clock.decision_times
         self.decision_ns = self.xp.asarray(self.clock.decision_ns)
         self.universe = self.market.universe(self.panel)
         self.slots = self.xp.maximum(self.universe.sum(1, keepdims=True), 1).astype(self.xp.float64)
         self.spec = executor.device_spec(loaded.host_spec)
-        self.years = M.Years(loaded.window.stat_dates, self.xp)
-        self.recency_weights = M.recency(loaded.window.stat_dates, settings.portfolio.recent_halflife_days, self.xp)
-        self.top_days = max(1, int((len(self.dates) - self.start) * 0.01))
-        self.candidate_batch, self.trial_batch = resources.batch_sizes(settings.cuda, self.panel.shape)
+        measurement_times = self.measurement_times[self.measurement_start:]
+        self.years = M.Years(measurement_times, self.xp)
+        ends = self.measurement_times.astype('datetime64[ns]').astype('int64') + frequency_nanoseconds(settings.clock.statistics)
+        sample = self.clock.decision_ns.searchsorted(ends, side='right') - 1
+        self.measurement_targets = self.xp.asarray(sample[self.measurement_start:])
+        self.recency_weights = M.recency(measurement_times, settings.portfolio.recent_halflife_days, self.xp)
+        self.top_periods = max(1, int(len(measurement_times) * 0.01))
+        self.candidate_batch, self.trial_batch = resources.batch_sizes(settings.cuda, self.panel.shape,
+            len(self.schedule.event_ns), self.schedule.measurement_count)
         self.commit_batch = self.candidate_batch if executor.parallel_trials else 1
         self.precision = context.precision.effective
         self.cache = CandidateCache(self.candidate_batch, settings.portfolio.max_members,
-                                    resources.measurement_budget(settings.cuda), self.panel.shape[0])
+                                    resources.measurement_budget(settings.cuda), self.schedule.measurement_count)
         self.inputs = ResidentInputs(self.candidate_batch, self.xp, resources.content_leaves)
 
     def batches(self, items: Sequence[Item]) -> Iterator[Sequence[Item]]:
@@ -278,7 +290,7 @@ class Pipeline:
         if report:
             # These books are owned by this batch; match the execution prefix
             # even when cached returns avoid another account simulation.
-            books[:, :self.start] = 0
+            books[:, :self.decision_start] = 0
             pending = []
             for j, i in enumerate(ids):
                 row = rows[i]
@@ -399,11 +411,11 @@ class Pipeline:
 
     @resource_scope
     def simulate(self, W: FloatArray) -> SimulationResult:
-        return self.executor.simulate(W, self.spec, self.start, self.ppy, self.precision)
+        return self.executor.simulate(W, self.spec, self.measurement_start, self.ppy, self.precision)
 
     @resource_scope
     def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray) -> SimulationResult:
-        return self.executor.blend(W, U, owners, weights, self.spec, self.start, self.ppy, self.precision, self.trial_batch)
+        return self.executor.blend(W, U, owners, weights, self.spec, self.measurement_start, self.ppy, self.precision, self.trial_batch)
 
     @resource_scope
     def fingerprints(self, W: FloatArray) -> list[int]:
@@ -413,25 +425,25 @@ class Pipeline:
         xp = self.xp
         W = xp.ascontiguousarray(books if isinstance(books, xp.ndarray)
                                 else xp.stack([xp.asarray(b, dtype=xp.float64) for b in books]), dtype=xp.float64).copy()
-        W[:, :self.start] = 0
+        W[:, :self.decision_start] = 0
         return W
 
     @resource_scope
     def returns(self, books: FloatArray | Sequence[FloatArray]) -> ReturnBatch:
         W = self._stack(books)
         result = self.simulate(W)
-        rt = result.returns[:, self.start:]
+        rt = result.returns[:, self.measurement_start:]
         return ReturnBatch(W, rt, M.sound(rt, self.xp), result.statistics[:, 3], result.risk)
 
     def _risk_summaries(self, risk: ExecutionRiskBatch | None, size: int) -> list[RiskSummary | None]:
         if risk is None:
             return [None] * size
         xp = self.xp
-        scalars = self.to_host(xp.stack((risk.funding[:, self.start:].sum(1),
-            risk.trading_fees[:, self.start:].sum(1), risk.liquidation_fees[:, self.start:].sum(1),
-            risk.isolated_loss_cap[:, self.start:].sum(1), risk.ending_equity, risk.max_gross_leverage), axis=1)).tolist()
-        counts = self.to_host(risk.liquidations[:, self.start:].sum(1)).tolist()
-        timestamps = self.to_host(risk.first_liquidation_ms).tolist()
+        scalars = self.to_host(xp.stack((risk.funding[:, self.measurement_start:].sum(1),
+            risk.trading_fees[:, self.measurement_start:].sum(1), risk.liquidation_fees[:, self.measurement_start:].sum(1),
+            risk.isolated_loss_cap[:, self.measurement_start:].sum(1), risk.ending_equity, risk.max_gross_leverage), axis=1)).tolist()
+        counts = self.to_host(risk.liquidations[:, self.measurement_start:].sum(1)).tolist()
+        timestamps = self.to_host(risk.first_liquidation_ns).tolist()
         bankrupt = self.to_host(risk.bankrupt).tolist()
         return [RiskSummary(risk.model, v[0], v[1], v[2], v[3], int(count), int(timestamp), bool(failed), v[4], v[5])
                 for v, count, timestamp, failed in zip(scalars, counts, timestamps, bankrupt)]
@@ -443,27 +455,30 @@ class Pipeline:
         W = self._stack(books)
         result = self.simulate(W) if result is None else result
         rr, st = result.returns, result.statistics
-        rt, wt = rr[:, self.start:], W[:, self.start:]
+        rt, wt = rr[:, self.measurement_start:], W[:, self.decision_start:]
         lg = xp.log1p(rt)
-        gross = xp.abs(wt).sum(2)
-        turnover = xp.abs(xp.diff(wt, axis=1)).sum(2).mean(1)
+        target_gross = xp.abs(W).sum(2)
+        gross = xp.where(self.measurement_targets[None, :] >= 0,
+                         target_gross[:, xp.maximum(self.measurement_targets, 0)], 0.)
+        turnover = (xp.abs(xp.diff(wt, axis=1)).sum(2).mean(1)
+                    if wt.shape[1] > 1 else xp.zeros(len(W)))
         ann = st[:, 1]
         sh = xp.where(st[:, 2] > 0, st[:, 0], 0)
         total = rt.sum(1)
-        concentration = xp.where(total > 0, xp.sort(rt, axis=1)[:, -self.top_days:].sum(1)
+        concentration = xp.where(total > 0, xp.sort(rt, axis=1)[:, -self.top_periods:].sum(1)
                                  / xp.where(total > 0, total, 1), xp.inf)
         vals = xp.stack((sh, ann, st[:, 3], self.backend.measure(rt, self.recency_weights, self.ppy).cagr, st[:, 4], turnover,
-                         gross.mean(1), ann / xp.maximum(turnover * self.ppy, 1e-12) * 1e4,
+                         gross.mean(1), ann / xp.maximum(turnover * self.decision_ppy, 1e-12) * 1e4,
                          xp.abs(wt).max(axis=(1, 2)), concentration), axis=1)
         yearly = xp.stack((self.years.sharpe(rt, self.ppy), self.years.share(gross > 1e-9), self.years.total(lg)), axis=2)
         host = self.to_host(xp.concatenate((vals, yearly.reshape(len(W), -1), M.sound(rt, xp)[:, None]), axis=1)).tolist()
-        dates = self.dates[self.start:]
+        dates = self.measurement_times[self.measurement_start:]
         risks = self._risk_summaries(result.risk, len(W))
         return [StatsRow(W[i], rt[i], Metrics(*v[:10],
                     yearly=tuple(YearMetrics(int(year), int(days), round(v[10 + j * 3], 3),
                                              round(v[11 + j * 3], 3), round(v[12 + j * 3], 4))
-                                 for j, (year, days) in enumerate(zip(self.years.years, self.years.days))),
-                    span=f'{dates[0]}..{dates[-1]}', n_days=len(dates)), bool(v[-1]), risks[i])
+                                 for j, (year, days) in enumerate(zip(self.years.years, self.years.periods))),
+                    span=f'{dates[0]}..{dates[-1]}', n_periods=len(dates)), bool(v[-1]), risks[i])
                 for i, v in enumerate(host)]
 
     def close(self) -> None:
@@ -471,4 +486,4 @@ class Pipeline:
         self.cache.close()
         self.inputs.close()
         self.fields.clear()
-        del self.spec, self.universe, self.slots, self.years, self.decision_ns
+        del self.spec, self.universe, self.slots, self.years, self.decision_ns, self.measurement_targets

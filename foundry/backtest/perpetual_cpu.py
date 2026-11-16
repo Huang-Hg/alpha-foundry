@@ -42,20 +42,25 @@ class Executor:
 
     def simulate(self, W: FloatArray, spec: HostSpec, start: int, ppy: float, precision: str) -> SimulationResult:
         assert precision == 'native'
-        inputs = tuple(getattr(spec.host, name) for name in PERPETUAL_ARRAY_FIELDS)
+        s = spec.host
+        inputs = (s.schedule.event_ns, s.schedule.measurement_index, s.schedule.decision_index,
+                  *(getattr(s, name) for name in PERPETUAL_ARRAY_FIELDS))
         def account(w: FloatArray) -> tuple[FloatArray, ...]:
-            return _bt.perpetual(np.ascontiguousarray(w[None], dtype=np.float64), inputs, spec.host.leverage)
+            return _bt.perpetual(np.ascontiguousarray(w[None], dtype=np.float64), inputs,
+                                 s.leverage, s.schedule.measurement_count)
         arrays = tuple(np.concatenate(parts) for parts in zip(*self.map(account, W)))
         return simulation_result(arrays, host_statistics(arrays[0], start, ppy))
 
     def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
               spec: HostSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
         allocation = Allocation(spec.host.gross_limit, True)
-        inputs = tuple(getattr(spec.host, name) for name in PERPETUAL_ARRAY_FIELDS)
+        s = spec.host
+        inputs = (s.schedule.event_ns, s.schedule.measurement_index, s.schedule.decision_index,
+                  *(getattr(s, name) for name in PERPETUAL_ARRAY_FIELDS))
         def trial(i: int) -> SimulationResult:
             books = U[None] + weights[i] * W[owners[i]][None]
             books = cap_book(books, allocation, np)
-            arrays = _bt.perpetual(books, inputs, spec.host.leverage)
+            arrays = _bt.perpetual(books, inputs, s.leverage, s.schedule.measurement_count)
             return simulation_result(arrays, host_statistics(arrays[0], start, ppy))
         return concatenate_results(list(self.map(trial, range(len(weights)))), start, np)
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from foundry.types import ExecutionSpec
+from foundry.types import ExecutionSchedule, ExecutionSpec
 
 EPS = 1e-7
 
@@ -23,12 +23,12 @@ def previous(x: NDArray[np.floating]) -> NDArray[np.floating]:
 
 def cash_spec(open_: NDArray[np.floating], close: NDArray[np.floating], cost_buy: NDArray[np.floating],
               cost_sell: NDArray[np.floating] | None = None, block: NDArray[np.integer] | None = None,
-              carry: NDArray[np.floating] | None = None) -> ExecutionSpec:
+              carry: NDArray[np.floating] | None = None, *, schedule: ExecutionSchedule) -> ExecutionSpec:
     """Prices in the kernel's form from raw open/close (NaN = no price that day)."""
     c = np.ascontiguousarray
     open_ff, close_ff = ffill(open_), ffill(close)
     open_ff0 = np.where(np.isnan(open_ff), 0.0, open_ff)
     live = np.isfinite(open_) & np.isfinite(cost_buy) & (open_ff0 > EPS)
-    return ExecutionSpec(c(open_), c(ffill(previous(close))), c(open_ff0), c(np.where(np.isnan(close_ff), 0.0, close_ff)),
+    return ExecutionSpec(schedule, c(open_), c(ffill(previous(close))), c(open_ff0), c(np.where(np.isnan(close_ff), 0.0, close_ff)),
                          c(cost_buy), c(live.astype(np.uint8)), None if cost_sell is None else c(cost_sell),
                          None if block is None else c(block.astype(np.uint8)), None if carry is None else c(carry))

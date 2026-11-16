@@ -32,7 +32,7 @@ from collections.abc import Mapping, Sequence
 from foundry.types import ArrayBatch, Formula
 from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
                                    FamilySeed, RegisteredBatch, WeightReport)
-from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport
+from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport, ExecutionSchedule
 
 
 if TYPE_CHECKING:
@@ -58,7 +58,7 @@ class Ledger:
             books = [book for book, _ in pipeline.members(tuple(m.source for m in members))]
             xp = pipeline.xp
             U = xp.sum(xp.stack(books) * xp.asarray([m.weight for m in members])[:, None, None], axis=0)
-            U[:pipeline.start] = 0
+            U[:pipeline.decision_start] = 0
             measured = pipeline.metrics([cap_book(U, pipeline.allocation, xp)])[0]
             reference = Reference.build(U, measured, pipeline.recency_weights, pipeline.ppy, members,
                 not library.members, pipeline.backend, pipeline.portfolio_cfg, library.version)
@@ -624,9 +624,21 @@ class ResidentPort:
         return DataGrid(self.context.snapshot.id, pipeline.decision_times, pipeline.panel.assets)
 
     @property
-    def stat_dates(self) -> tuple[str, ...]:
+    def measurement_times(self) -> tuple[str, ...]:
         pipeline = self.__ledger.pipeline
-        return tuple(str(day) for day in pipeline.dates[pipeline.start:])
+        return tuple(str(day) for day in pipeline.measurement_times[pipeline.measurement_start:])
+
+    @property
+    def decision_start(self) -> int:
+        return self.__ledger.pipeline.decision_start
+
+    @property
+    def measurement_start(self) -> int:
+        return self.__ledger.pipeline.measurement_start
+
+    @property
+    def execution_schedule(self) -> ExecutionSchedule:
+        return self.__ledger.pipeline.schedule
 
     @property
     def recency_weights(self) -> FloatArray:

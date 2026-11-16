@@ -51,6 +51,7 @@ class _DeviceSpec:
         self.flags = int(spec.cost_sell is not None) | int(spec.block is not None) << 1 | int(spec.carry is not None) << 2
         names = ('open_raw', 'prev_close', 'open_ff0', 'close_ff0', 'cost_buy')
         self.storage = [cp.asarray(getattr(spec, k), dtype=cp.float64) for k in names] + [cp.asarray(spec.live, dtype=cp.uint8)]
+        self.schedule = (cp.asarray(spec.schedule.decision_index), cp.asarray(spec.schedule.measurement_index))
 
     @cached_property
     def extra_storage(self):
@@ -121,17 +122,20 @@ class Executor:
         self._STATS((B,), (128,), (rr, np.int32(T), np.int32(start), np.float64(ppy), stats))
 
     def simulate(self, W: FloatArray, spec: _DeviceSpec, start: int, ppy: float, precision: str) -> SimulationResult:
-        """Books W (B,T,S) -> (net daily returns (B,T), stats (B,5) = sharpe, mean, vol, max drawdown, total return
-    over rows [start:]). One launch walks the days in order, so it has a latency floor independent of B
-    (V100S, T=4262 x S=73: ~31 ms for 1..256 books): batch books into as few launches as possible."""
-        B, T, S = W.shape
-        rr, stats = (cp.empty((B, T), dtype=cp.float64), cp.empty((B, 5), dtype=cp.float64))
+        """Targets (B,D,S) -> measurement returns (B,V) and statistics over [start:].
+
+        One launch walks E execution events in order and gathers only scheduled
+        target rows. Targets are never expanded to the event axis.
+        """
+        B, D, S = W.shape
+        E, V = len(spec.host.schedule.event_ns), spec.host.schedule.measurement_count
+        rr, stats = (cp.empty((B, V), dtype=cp.float64), cp.empty((B, 5), dtype=cp.float64))
         if spec.general:
             kernel = self._general_module((S + 127) // 128).get_function(f'k_general_{precision}')
-            kernel((B,), (128,), (self._pack(W, precision), *(np.uint64(0),) * 5, *spec.general_arrays(precision), np.int32(T), np.int32(S), np.int64(start), np.float64(ppy), rr, stats))
+            kernel((B,), (128,), (self._pack(W, precision), *(np.uint64(0),) * 5, *spec.general_arrays(precision), *spec.schedule, np.int32(D), np.int32(E), np.int32(V), np.int32(S), np.int64(start), np.float64(ppy), rr, stats))
             self._statistics(rr, stats, start, ppy)
             return SimulationResult(rr, stats, None)
-        self._SIMULATE[precision](((B + 3) // 4,), (128,), (self._pack(W, precision), *spec.arrays(precision), np.int32(T), np.int32(S), np.int32(B), np.int64(start), np.float64(ppy), rr, stats))
+        self._SIMULATE[precision](((B + 3) // 4,), (128,), (self._pack(W, precision), *spec.arrays(precision), *spec.schedule, np.int32(D), np.int32(E), np.int32(V), np.int32(S), np.int32(B), np.int64(start), np.float64(ppy), rr, stats))
         self._statistics(rr, stats, start, ppy)
         return SimulationResult(rr, stats, None)
 
@@ -144,19 +148,20 @@ class Executor:
         if self.gross_limit != 1.:
             eref /= self.gross_limit
             eown /= self.gross_limit
-        T, S = W.shape[1:]
+        D, S = W.shape[1:]
+        E, V = len(spec.host.schedule.event_ns), spec.host.schedule.measurement_count
         N = len(weights)
         W, U = (self._pack(W, precision), self._pack(U, precision))
         if precision == 'paired':
             weights, eref, eown = (self.paired(weights), self.paired(eref), self.paired(eown))
-        rr, stats = (cp.empty((N, T), dtype=cp.float64), cp.empty((N, 5), dtype=cp.float64))
+        rr, stats = (cp.empty((N, V), dtype=cp.float64), cp.empty((N, 5), dtype=cp.float64))
         for lo in range(0, N, batch):
             n = min(batch, N - lo)
             if spec.general:
                 kernel = self._general_module((S + 127) // 128).get_function(f'k_general_blend_{precision}')
-                kernel((n,), (128,), (W, U, owners[lo:lo + n], weights[lo:lo + n], eref, eown, *spec.general_arrays(precision), np.int32(T), np.int32(S), np.int64(start), np.float64(ppy), rr[lo:lo + n], stats[lo:lo + n]))
+                kernel((n,), (128,), (W, U, owners[lo:lo + n], weights[lo:lo + n], eref, eown, *spec.general_arrays(precision), *spec.schedule, np.int32(D), np.int32(E), np.int32(V), np.int32(S), np.int64(start), np.float64(ppy), rr[lo:lo + n], stats[lo:lo + n]))
                 continue
-            self._BLEND[precision](((n + 3) // 4,), (128,), (W, U, owners[lo:lo + n], weights[lo:lo + n], eref, eown, *spec.arrays(precision), np.int32(T), np.int32(S), np.int32(n), np.int64(start), np.float64(ppy), rr[lo:lo + n], stats[lo:lo + n]))
+            self._BLEND[precision](((n + 3) // 4,), (128,), (W, U, owners[lo:lo + n], weights[lo:lo + n], eref, eown, *spec.arrays(precision), *spec.schedule, np.int32(D), np.int32(E), np.int32(V), np.int32(S), np.int32(n), np.int64(start), np.float64(ppy), rr[lo:lo + n], stats[lo:lo + n]))
         self._statistics(rr, stats, start, ppy)
         return SimulationResult(rr[:, start:], stats, None)
 

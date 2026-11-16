@@ -99,7 +99,7 @@ class MemberKey:
 
 
 class MeasurementCache:
-    """Retain only (T,) returns and compact reports, never (T,S) candidate books.
+    """Retain only (V,) returns and compact reports, never (T,S) candidate books.
 
     Reserve full-grid returns and 4 KiB of report metadata per entry. Evict
     complete return allocations because row views share their batch buffer.
@@ -107,8 +107,8 @@ class MeasurementCache:
     in bounded batches; the cache footprint is independent of asset count.
     """
 
-    def __init__(self, budget: int, days: int):
-        self.entry_bytes = days * 8 + 4096
+    def __init__(self, budget: int, periods: int):
+        self.entry_bytes = periods * 8 + 4096
         self.capacity = budget // self.entry_bytes
         self.capacity_bytes = budget
         self._groups: OrderedDict[MeasurementKey, tuple[MeasurementKey, ...]] = OrderedDict()
@@ -148,9 +148,9 @@ class MeasurementCache:
 class CandidateCache:
     """Own bounded inputs/member books and compact snapshot measurements."""
 
-    def __init__(self, candidate_batch: int, max_members: int, budget: int, days: int):
+    def __init__(self, candidate_batch: int, max_members: int, budget: int, periods: int):
         self.arrays = ArrayCache(candidate_batch)
-        self.reports = MeasurementCache(budget, days)
+        self.reports = MeasurementCache(budget, periods)
         self.members: BoundedCache[MemberKey, tuple[FloatArray, FloatArray]] = BoundedCache(
             2 * (max_members + 1))
 

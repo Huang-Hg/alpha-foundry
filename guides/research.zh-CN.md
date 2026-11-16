@@ -50,7 +50,7 @@ with foundry.open(
 
 ### 参数与自描述
 
-`market`、`backend`、`data_dir`、`start`、`end` 和市场费用直接传入。高级参数组包括 `foundry.CPU`、`foundry.CUDA`、`Admission`、`Operators`、`Search`、`Single` 与 `Monitor`。参数在会话打开时固定；比较其他设置时另开会话。
+`market`、`backend`、`data_dir`、`start`、`end` 和市场费用直接传入。高级参数组包括 `foundry.Clock`、`Sizing`、`Account`、`Execution`、`CPU`、`CUDA`、`Admission`、`Operators`、`Search`、`Single` 与 `Monitor`。参数在会话打开时固定；比较其他设置时另开会话。
 
 `foundry.schema()` 无需打开研究即可返回参数 schema、市场默认值与 RPC 契约。`session.describe()` 返回当前字段、66 个算子和实际参数。`foundry.mine(...)` 与 `foundry.serve(...)` 使用相同参数组；向挖掘器传入已有会话时，不再重复传参数。
 
@@ -116,7 +116,7 @@ A 股和现货 manifest 包含 `DataContract` 的七个字段：`schema`、`sour
 
 ### 永续数据
 
-小时数据契约由 `trade.parquet`、`mark.parquet`、`funding.parquet` 和 `manifest.json` 组成。manifest 记录资产顺序、工件哈希，以及需要时的资金费间隔变更证据。仅有日线 OHLC 无法还原资金费和强平。
+保留的小时归档契约由 `trade.parquet`、`mark.parquet`、`funding.parquet` 和 `manifest.json` 组成，使用小时执行事件生成日线决策与统计。manifest 记录资产顺序、工件哈希，以及需要时的资金费间隔变更证据。仅有日线 OHLC 无法还原资金费和强平。
 
 ```python
 foundry.import_perpetual(
@@ -127,11 +127,63 @@ foundry.import_perpetual(
 )
 ```
 
-导入器获取公开 USD-M 归档、验证校验和并保存来源记录。读取时使用 `market="crypto_perpetual"`、对应目录与日期。已有数据的资产顺序由 manifest 决定；`symbols` 用于新数据采集。其他供应商需满足 [`market/perpetual.py`](../foundry/market/perpetual.py) 的显式事件契约。
+导入器获取公开 USD-M 归档、验证校验和并保存来源记录。读取时使用 `market="crypto_perpetual"`、对应目录与日期。已有数据的资产顺序由 manifest 决定；`symbols` 用于新数据采集。更细行情通过以下显式契约接入。
+
+### 加密货币日内文件
+
+现货与逐仓永续均可提供 `manifest.json` 和 `bars.parquet`，使用 `schema="crypto-bars-v1"`；永续还须提供 `funding.parquet`。读取器位于 [`market/intraday.py`](../foundry/market/intraday.py)，小时归档导入器不生成此格式。
+
+| 文件 | 必需列 |
+| --- | --- |
+| `bars.parquet` | 字符串 `symbol`；int64 UTC 纳秒 `open_ns`、`close_ns`、`available_ns`；浮点 `open`、`high`、`low`、`close`、`volume`；布尔 `eligible` |
+| 永续 Bar 附加列 | 浮点 `mark_open`、`mark_high`、`mark_low`、`mark_close`，仅供执行 |
+| `funding.parquet` | 字符串 `symbol`；int64 UTC 纳秒 `settlement_ns`；浮点 `rate`、`mark` |
+
+Bar 是对齐的左闭右开基础区间 `[open_ns,close_ns)`；`available_ns >= close_ns` 表示包含资格信息的整行何时可见。同一 `(symbol,open_ns)` 可有不同可见时间的版本。读取器先按研究截止点截断 Bar 终点与可见时间，再仅用决策收盘前已可见的版本冻结每根决策 Bar。组成行情缺失或迟到时，该次决策的特征不可用；后来的发布不会改写过去决策。执行采用研究截止前可见的首个发布版本。现货报价缺失时可保留已有持仓；永续执行要求完整且有限的成交价和标记价基础 Bar。
+
+以下是永续 manifest 示意。请用实际 parquet 字节的 `hashlib.sha256(file_bytes).hexdigest()` 替换摘要占位符，并填写真实来源与限制：
+
+```json
+{
+  "schema": "crypto-bars-v1",
+  "market": "crypto_perpetual",
+  "source": "Your archived feed and version",
+  "retrieved_at": "2026-11-16T00:00:00Z",
+  "features": "Completed trade OHLCV; mark and funding excluded",
+  "execution_prices": "First published trade and mark base bars",
+  "publication": "Per-row available_ns; describe missing historical vintages",
+  "membership": "Historical eligible values published with each bar",
+  "timezone": "UTC",
+  "interval": "5min",
+  "history_start": "2025-01-01T00:00:00Z",
+  "end": "2025-02-01T00:00:00Z",
+  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "artifacts": {
+    "bars": {"path": "bars.parquet", "sha256": "<bars file digest>"},
+    "funding": {"path": "funding.parquet", "sha256": "<funding file digest>"}
+  }
+}
+```
+
+现货将 `market` 设为 `crypto_spot`，省略资金费工件及标记价列。manifest 的历史边界须为显式 ISO UTC 时间戳，`end` 为排他边界。研究 `start`、`end` 可用 ISO UTC 时间戳；仅日期的 `end` 包含完整 UTC 当日。源历史起点、研究起点和截止点必须对齐完整统计周期。决策与统计时长须为基础周期的整数倍；固定时长单位为 `s`、`min`、`h`、`D`。
+
+资金费表须显式覆盖每个基础开盘时点与资产：`settlement_ns` 等于该基础开盘时间，`rate=0` 明确表示该时点无现金流，`mark` 为有限正数结算标记价。缺行会拒绝读取，不默认为零。结算发生于基础开盘之间时，需要更细的基础数据。资金费率与标记价不进入特征面板。
+
+```python
+with foundry.open(
+    market="crypto_perpetual", data_dir="/datasets/crypto_5m",
+    start="2025-01-08", end="2025-01-31", backend="cuda",
+    clock=foundry.Clock(decision="15min", statistics="1D"),
+    account=foundry.Account(margin="isolated", leverage=3., gross_limit=2.),
+) as session:
+    report = session.evaluate("gt(ma_dist_20,0)")
+```
+
+此处特征及注册的 `(B,D,S)` 数组使用已完成的 15 分钟决策 Bar。`Execution(fill="next_open")` 在决策完成后的下一个 5 分钟基础开盘执行，允许收盘与开盘共用边界，不等待下一次决策。没有新目标的基础 Bar 保持实际数量。公式窗口按决策 Bar 数计数，因此 `ma_dist_20` 使用 20 条观测。
 
 ## 数值因子、模型信号与目标持仓
 
-`session.grid` 提供规范 ISO UTC `decision_times`、等价的 int64 UTC 纳秒 `time_ns`、有序资产和快照身份。数组维度为 `(B,D,S)`：候选、决策、资产。R1 保留四市场日线流程，`Clock` 当前只接受日线决策与统计；股票决策为交易所时段收盘（包含夏令时和提前收盘），crypto 为 UTC 日线右端点。日历坐标不补造缺失的历史发布时间。
+`session.grid` 提供规范 ISO UTC `decision_times`、等价的 int64 UTC 纳秒 `time_ns`、有序资产和快照身份。数组维度为 `(B,D,S)`：候选、决策、资产。四市场日线预设保留原有口径，crypto Bar 工件还支持独立的决策与统计频率。股票决策为交易所时段收盘（包含夏令时和提前收盘），crypto 为已完成决策 Bar 的右端点。日历坐标不补造缺失的历史发布时间。
 
 以下示例注册三个常量零评分候选，没有使用观测或拟合。接入实际策略时替换数值和因果声明：
 
@@ -141,9 +193,9 @@ import foundry
 
 with foundry.open() as session:
     grid = session.grid
-    days, assets = len(grid.decision_times), len(grid.assets)
-    values = np.zeros((3, days, assets), dtype=np.float32)
-    unused = np.full((3, days), foundry.NO_INFORMATION, dtype=np.int64)
+    decisions, assets = len(grid.decision_times), len(grid.assets)
+    values = np.zeros((3, decisions, assets), dtype=np.float32)
+    unused = np.full((3, decisions), foundry.NO_INFORMATION, dtype=np.int64)
     registered = session.register(
         values, kind="scores", unit="score", ids=("model-small", "model-base", "model-large"),
         grid=grid, producer="external-program-v1",
@@ -160,7 +212,7 @@ with foundry.open() as session:
 
 `Sizing(rule="equal_slots")` 保留日线预设：现金市场使用 `clip(score, 0, 1) / N`，可做空市场使用 `clip(score, -1, 1) / N`，`N` 为当日具资格资产数量。`Sizing(rule="independent", scale=0.1)` 使用截断评分乘显式尺度，不除以资产数量；增加零评分资产不会稀释已有资产目标。独立规则超总敞口预算时返回候选拒绝并继续批次，不自动归一化到满仓。
 
-直接 `targets` 跳过评分映射，必须传入 `unit="equity_fraction"`；零表示明确清仓。R1 接受省略 `update_mask` 或全真的布尔 `(B,D,S)` 掩码，两者具有相同规范身份。含 false 的掩码需要后续账户执行能力，当前明确拒绝；评分不接受掩码。R1 尚不支持数量或名义金额目标。
+直接 `targets` 跳过评分映射，必须传入 `unit="equity_fraction"`；零表示明确清仓。当前目标契约接受省略 `update_mask` 或全真的布尔 `(B,D,S)` 掩码，两者具有相同规范身份。含 false 的掩码需要后续账户执行能力，当前明确拒绝；评分不接受掩码。数量或名义金额目标尚未支持。
 
 `foundry.Account(margin="isolated", leverage=3., gross_limit=2.)` 将逐仓抵押杠杆与允许的总目标敞口分开。默认日线经济口径保留：现金 1 倍，逐仓永续杠杆与敞口上限均为 5 倍。评分校准若有拟合，必须计入 `fit_at`。
 
@@ -174,7 +226,7 @@ with foundry.open() as session:
 
 用完调用 `session.release(registered)`；循环中通常放在 `finally` 内。退出会话也会释放其剩余租约。所有活动批次的总行数不得超过 `candidate_batch`，满额后须先释放再注册。释放后的驻留引用失效，即使内部仍有该候选的紧凑测量缓存也不能继续使用。
 
-需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v15`、`candidate-array-v4`、`candidate-discovery-v4`（二进制批次传输为 `candidate-batch-v3`），旧格式须显式重跑，不自动迁移。
+需要保存部分输出时，在释放前调用 `saved = session.retain(registered.candidates[:1])`，以后使用 `saved.candidates`。只有明确保留、组合入选或发现检查点引用的候选才写入 `Admission.artifact_dir`。`retain` 返回持久引用，原批次仍须释放；提交与发现流程自动保存其必需引用。组合/RPC、数组与检查点协议分别为 `research-v16`、`candidate-array-v4`、`candidate-discovery-v5`（二进制批次传输为 `candidate-batch-v3`），旧格式须显式重跑，不自动迁移。
 
 ## 策略发现
 
@@ -215,7 +267,7 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
 
 `ExternalProposer` 接受有限的候选或已注册批次。`foundry.mine(..., session=session, proposers=[proposer])` 自动打开、恢复和关闭提案器资源，不关闭调用者传入的会话。可选回调接收一个 `LearningFeedback`：`feedback.batch` 保留候选顺序及研究快照，`feedback.rewards` 是同设备的 FP32 向量。CPU 程序可显式调用 `to_host()`；CUDA 程序在自己的流上使用 `borrow(stream_pointer)`，再用 DLPack 零拷贝接入 PyTorch。借用范围内不得修改反馈或向外保留别名。反馈不借用行情/组合缓冲区，因此可与提交和重配重叠。
 
-自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v4`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
+自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v5`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
 
 
 不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
@@ -306,7 +358,7 @@ with foundry.open(start="2025-07-01", end="2026-06-30") as session:
 
 预测每次返回研究资产顺序下的 `(B,S)` 后端数组。`FoldView` 包含时间戳 `start`、排他时间戳 `stop`、`decision_times`、`assets`、`features` 和 `eligibility`；数组为独立拥有的因果前缀。输出通过同样的注册检查。执行器将当前决策写入 `observed_at`，将最后可见拟合决策写入 `fit_at`；拟合区间需包含训练标签使用的全部观测。外部回调仍须对独立读取的数据及预训练模型来源负责。
 
-折诊断从该模型在评价区间内首次决策后的收盘测量开始归属净收益，直到下一模型对应的收盘测量；最后一折截至研究结束。`FoldResult.measurement_start` 和 `measurement_stop` 是这些收盘测量的 UTC 纳秒左闭右开边界，不是次开盘成交时间；最终排他边界为最后测量时间加一纳秒。间隙中的退出费用、资金费和无法平仓的持仓继续归属前一模型。`sign_consistency` 为正折数与负折数的较大值除以总折数；零收益或无效折不进入分子。持续亏损模型也可能为 1，应同时检查符号和收益。操作仅注册并评价预测，不提交组合；使用后释放 `result.registered`，需要保留时先显式 retain。
+折诊断根据模型在评价区间内首次实际基础 Bar 执行归属完整统计周期，直到下一模型首次执行所在周期；最后一折截至研究结束。评价决策偏移之前的目标保持空仓。首折可以归属其起始统计周期内此前的空仓前缀；后续模型切换必须落在统计周期的首个执行事件。周期内部切换或多折共享一个周期时，须使用更细的 `Clock.statistics`。`FoldResult.measurement_start` 和 `measurement_stop` 是统计周期的 UTC 纳秒左闭右开边界，独立于决策时间和成交时间；最终排他边界为最后周期起点加配置的统计周期时长。间隙中的退出费用、资金费和无法平仓的持仓继续归属前一模型。`sign_consistency` 为正折数与负折数的较大值除以总折数；零收益或无效折不进入分子。持续亏损模型也可能为 1，应同时检查符号和收益。操作仅注册并评价预测，不提交组合；使用后释放 `result.registered`，需要保留时先显式 retain。
 
 ## 远程会话
 
@@ -321,17 +373,21 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 诊断、权重试验和组合命令共用公开会话接口。模型可在自己的程序中拟合，然后注册输出进行远程评价。`session.resident` 与 `evaluate_device` 仅用于进程内计算。
 
-[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v15`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
+[`rpc/schema.py`](../foundry/rpc/schema.py) 从类型契约派生请求与响应；[`rpc/codec.py`](../foundry/rpc/codec.py) 负责编码，[`rpc/server.py`](../foundry/rpc/server.py) 和 [`rpc/client.py`](../foundry/rpc/client.py) 负责传输。数组上传采用二进制包，编码前后均限制 1 GiB，禁用 pickle。组合与 RPC 使用 `research-v16`，明确拒绝旧格式。命令通过一个有界 worker 队列执行；客户端断开不会取消已经接纳的命令。
 
 输入契约错误抛出 `ValueError` 或 `TypeError`，旧上下文抛出 `ContextConflict`，资源或实现失败直接传播；候选业务拒绝保留为结构化结果。机器调用请读取 `foundry.schema()`，不要拼接未公开的协议字段。
 
 ## 加密货币执行
 
-现货使用 UTC 日线和 365 日年化。资格与报价分离；交易价格缺失可能阻止成交，使已有持仓继续保留。配置费用作用于实际执行的变化。
+现货使用连续 UTC 日历，支持保留的日线工件或显式基础 Bar。资格与报价分离；交易价格缺失可能阻止成交，使已有持仓继续保留。配置费用作用于实际执行的变化。
 
-永续模拟 USDT 线性合约和逐仓抵押。日线目标是有符号名义金额/账户权益，总绝对敞口受 `Account.gross_limit` 限制；信号不会自动使用最大杠杆。小时事件依次处理标记价跳空、已有持仓资金费、日线再平衡、不利高低价强平检查和收盘标记。资金费按实际事件时间映射到小时网格；公开归档缺少结算标记价时，导入器会明确记录标记开盘价代理。
+永续模拟 USDT 线性合约和逐仓抵押。目标是有符号名义金额/账户权益，总绝对敞口受 `Account.gross_limit` 限制；信号不会自动使用最大杠杆。每个基础事件依次处理标记价跳空、已有持仓资金费、调度到来的新目标、不利高低价强平检查和收盘标记。保留的 Binance 小时归档使用日线目标、小时事件，以及已披露的结算时间分桶与标记开盘价代理；`crypto-bars-v1` 使用所提供的基础频率和精确基础开盘资金费记录，不沿用该代理。
 
 当前使用固定维持保证金和费率，不还原历史档位、VIP 费用、ADL、订单簿或逐 tick 日内成交路径。`risk` 报告资金费、交易费用、强平费用、强平次数、破产状态和账户权益，单位以 schema 描述为准。
+
+账户估值独立于决策频率，复合归入 `Clock.statistics` 周期。crypto 年化系数为 `365 * 86400 / statistics_seconds`，日线预设保留原有口径。收益、Sharpe、报告回撤、`Metrics.n_periods` 和 `YearMetrics.periods` 均使用统计网格；周期标签为 UTC 起点，因此跨年收盘的周期归属其起点年份。报告回撤采样于统计收盘，基础 Bar 强平检查在两次统计收盘之间仍执行。`risk.first_liquidation_ns` 标识首次强平所在基础 Bar 的 UTC 起点，不表示精确 tick 或成交时点；`-1` 表示没有强平。
+
+`turnover` 是每次决策的目标绝对变化均值，`margin_bps` 用决策频率年化这一分母。`exposure` 与逐年出勤率在统计收盘采样最近目标，描述目标而非实际成交持仓；实际费用和账户杠杆见 `risk`。
 
 ## 数值与性能
 

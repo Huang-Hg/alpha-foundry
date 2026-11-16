@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 
 from foundry.market.execution import cash_spec, ffill, previous
-from foundry.market.clock import daily_clock
+from foundry.market.clock import daily_clock, daily_schedule
 from foundry.types import Allocation, Backend, BoolArray, ExecutionSpec, LoadedStudy, MarketData, Study, Window
 from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
@@ -37,7 +37,7 @@ class AShare(Market[MarketData, ExecutionSpec]):
         dates, symbols, g = data.dates, data.assets, data.values
         clock = daily_clock(dates, self.name)
         start = int(np.searchsorted(dates, np.datetime64(study.start)))
-        window = Window(dates, start, clock)
+        window = Window(clock, start, dates, start, self.ppy)
         src = {k:g[k] for k in ('open','high','low','close','volume')}
         src['trading'] = np.isfinite(g['open'])
         src['member'] = data.members
@@ -52,7 +52,8 @@ class AShare(Market[MarketData, ExecutionSpec]):
         block = (np.where(gap >= limit - TOLERANCE, NO_BUY, 0) | np.where(gap <= -limit + TOLERANCE, NO_SELL, 0)
                  | np.where(suspended, NO_BUY | NO_SELL, 0))
         fee = self.commission + self.transfer_fee
-        spec = cash_spec(open_, close, fee * open_, cost_sell=(fee + self.stamp_tax_sell) * open_, block=block)
+        spec = cash_spec(open_, close, fee * open_, cost_sell=(fee + self.stamp_tax_sell) * open_, block=block,
+                         schedule=daily_schedule(dates, self.name, clock))
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
                            window, data.contract)
 

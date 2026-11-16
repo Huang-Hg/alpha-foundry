@@ -34,10 +34,10 @@ with foundry.open(backend="cuda") as session:
 | --- | --- |
 | 美股 | 历史成分资格、复权价格、下一交易时段执行及成本 |
 | 中国 A 股 | 历史资格、停牌、涨跌停、卖出税费，以及分离的信号与执行价格 |
-| 加密货币现货 | UTC 日线、365 日年化、交易资格与手续费 |
-| USDT 线性永续 | 多空敞口、逐仓保证金、小时资金费事件与强平 |
+| 加密货币现货 | 连续 UTC 日历、独立 Bar 时钟、交易资格与手续费 |
+| USDT 线性永续 | 多空敞口、逐仓保证金、基础 Bar 资金费事件与强平 |
 
-当前 R1 契约支持日线决策与统计，永续使用小时账户事件递推；日内决策网格、有状态策略回调和订单属于后续交付阶段。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
+Crypto 支持显式基础 Bar 与独立决策、统计频率，例如 5 分钟执行、15 分钟决策和日统计；已有日线预设与小时永续数据保留原有口径。有状态策略回调和订单属于后续交付阶段。价格、资金费与强平的建模口径见[使用指南](guides/research.zh-CN.md#加密货币执行)。
 
 ## 接入自己的数据
 
@@ -54,7 +54,7 @@ with foundry.open(
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-美股需要包含 OHLCV 和复权因子的 `panel.parquet`，以及记录历史资格区间的 `membership.parquet`。保留研究起点之前的历史，以便计算滚动特征。其他市场同样有明确的数据契约；永续还需要小时成交价、标记价和资金费记录。详见[文件格式与转换示例](guides/research.zh-CN.md#接入自己的数据)。
+美股需要包含 OHLCV 和复权因子的 `panel.parquet`，以及记录历史资格区间的 `membership.parquet`。保留研究起点之前的历史，以便计算滚动特征。其他市场同样有明确的数据契约；日内 crypto 接受声明发布时间的基础 Bar，永续还需标记价与资金费记录。详见[文件格式与转换示例](guides/research.zh-CN.md#接入自己的数据)。
 
 如果程序已经生成信号或持仓，直接使用 `session.register(...)`。它支持模型评分、多头目标权重和永续多空敞口，并要求声明 UTC 决策时间、资产坐标、显式单位和时间戳信息截止点。评分默认使用 `Sizing(rule="equal_slots")`；`Sizing(rule="independent", scale=...)` 避免资产数量稀释。直接目标使用 `kind="targets", unit="equity_fraction"`。临时 GPU 候选保持驻留，用完调用 `session.release(batch)`；只有入选、检查点引用或明确要求保留的候选才落盘。
 

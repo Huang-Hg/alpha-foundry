@@ -24,14 +24,14 @@ MAX_RESPONSE_BYTES = 1 << 30
 MAX_PENDING = 64
 HEARTBEAT_SECONDS = 10.
 BUNDLE = 'candidate-batch-v3'
-CHECKPOINT_FORMAT = 'candidate-discovery-v4'
+CHECKPOINT_FORMAT = 'candidate-discovery-v5'
 
 REPORT_NOTES = {
     Metrics: {
-        'turnover': 'Mean over consecutive research-window days of sum(abs(target[t]-target[t-1])); target-book fraction per day, not executed notional.',
-        'exposure': 'Research-window mean of sum(abs(daily target book)); target notional/equity ratio, not actual account leverage.',
-        'max_single_weight': 'Maximum absolute daily target-book value over the research window; target notional/equity ratio.',
-        'margin_bps': 'ann_ret / max(turnover * periods_per_year, 1e-12) * 1e4; basis points per annualized target-turnover proxy, not realized margin or execution profit per trade.',
+        'turnover': 'Mean over consecutive research-window decisions of sum(abs(target[t]-target[t-1])); target-book fraction per decision, not executed notional.',
+        'exposure': 'Research-window mean of sum(abs(target book sampled at each statistics close)); target notional/equity ratio, not actual account leverage.',
+        'max_single_weight': 'Maximum absolute decision target-book value over the research window; target notional/equity ratio.',
+        'margin_bps': 'ann_ret / max(turnover * decision_periods_per_year, 1e-12) * 1e4; basis points per annualized target-turnover proxy, not realized margin or execution profit per trade.',
     },
     RiskSummary: {
         'model': 'Stable execution-account model identifier, including collateral timing and liquidation assumptions.',
@@ -39,11 +39,11 @@ REPORT_NOTES = {
         'trading_fees': 'Research-window sum of actual nonnegative trading charges in initial-NAV units.',
         'liquidation_fees': 'Research-window sum of actual nonnegative liquidation charges in initial-NAV units; limited to available isolated-bucket equity.',
         'isolated_loss_cap': 'Research-window sum of max(-isolated bucket equity,0) at liquidation, in initial-NAV units. This nonnegative accounting adjustment protects free cash under the model; it is not verified exchange insurance cashflow.',
-        'liquidations': 'Research-window total count of per-asset liquidation events across all execution stages; not the number of affected hours.',
-        'first_liquidation_ms': 'Full-run first liquidation event-bar timestamp in UTC milliseconds; -1 means none. Intrabar events identify the containing hour, not the exact touch or fill time.',
+        'liquidations': 'Research-window total count of per-asset liquidation events across all execution stages; not the number of affected base bars.',
+        'first_liquidation_ns': 'Full-run first liquidation event-bar timestamp in UTC nanoseconds; -1 means none. Intrabar events identify the containing base bar, not the exact touch or fill time.',
         'bankrupt': 'Full-run account bankruptcy flag; not an isolated-position liquidation flag.',
         'ending_equity': 'Final full-run account equity in initial-NAV units (initial NAV=1).',
-        'max_gross_leverage': 'Maximum full-run actual gross notional/account equity ratio sampled at mark open before liquidation, after daily rebalance, and at mark close; not an intrabar maximum. Adverse prices can exceed the entry limit; infinity at nonpositive equity serializes as null.',
+        'max_gross_leverage': 'Maximum full-run actual gross notional/account equity ratio sampled at mark open before liquidation, after target update, and at mark close; not an intrabar maximum. Adverse prices can exceed the entry limit; infinity at nonpositive equity serializes as null.',
     },
 }
 

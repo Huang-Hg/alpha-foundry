@@ -1,4 +1,4 @@
-"""Statistics of daily net returns - the one definition every report and every admission check uses.
+"""Statistics of sampled net returns - the one definition every report and every admission check uses.
 
 Functions take a batch of return rows r (B,T) (or one row) on numpy or cupy and return per-row values. Sharpe is
 annualised with the market's periods per year `ppy`; the arithmetic form uses mean / population std,
@@ -22,8 +22,8 @@ def sharpe(r: FloatArray, ppy: float, xp: ModuleType, geometric: bool = False) -
 
 
 def recency(dates: NDArray[np.datetime64], halflife: float, xp: ModuleType) -> FloatArray:
-    """Weights over the days of `dates` (datetime64[D]), p[-1] largest, sum 1."""
-    d = xp.asarray(dates.astype('int64'))
+    """Weights over elapsed calendar days; measurement labels may be intraday."""
+    d = xp.asarray(dates.astype('datetime64[ns]').astype('int64')) / 86400000000000.
     p = xp.power(0.5, (d[-1] - d) / halflife)
     return p / p.sum()
 
@@ -66,21 +66,21 @@ class Years:
         self.xp = xp
         y = dates.astype('datetime64[Y]').astype(int) + 1970
         self.years = np.unique(y)
-        self.days = np.array([int((y == v).sum()) for v in self.years])
+        self.periods = np.array([int((y == v).sum()) for v in self.years])
         self.M = xp.asarray((y[None, :] == self.years[:, None]).astype(np.float64))
-        self.ndays = xp.asarray(self.days.astype(np.float64))
+        self.nperiods = xp.asarray(self.periods.astype(np.float64))
 
     def sharpe(self, r: FloatArray, ppy: float, last: int | None = None) -> FloatArray:
         """(B, Y) arithmetic Sharpe per calendar year; `last` keeps only the most recent years."""
         xp = self.xp
-        M, n = (self.M, self.ndays) if last is None else (self.M[len(self.M) - last:], self.ndays[len(self.ndays) - last:])
+        M, n = (self.M, self.nperiods) if last is None else (self.M[len(self.M) - last:], self.nperiods[len(self.nperiods) - last:])
         mean = r @ M.T / n
         sd = xp.sqrt(xp.maximum((r * r) @ M.T / n - mean * mean, 0.0))
         return xp.where(sd > 0, mean / xp.where(sd > 0, sd, 1.0) * ppy ** 0.5, 0.0)
 
     def share(self, x: FloatArray) -> FloatArray:
         """(B, Y) mean of x per year (e.g. the share of days holding a position)."""
-        return (x.astype(np.float64) @ self.M.T) / self.ndays
+        return (x.astype(np.float64) @ self.M.T) / self.nperiods
 
     def total(self, x: FloatArray) -> FloatArray:
         return x @ self.M.T

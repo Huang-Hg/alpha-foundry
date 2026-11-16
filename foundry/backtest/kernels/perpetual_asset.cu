@@ -1,5 +1,5 @@
-// One warp owns a book; lanes own assets. Hourly funding, risk checks and daily
-// rebalance remain chronological. CPU's scalar recurrence is the reference.
+// One warp owns a book; lanes own assets. Funding, risk checks and scheduled
+// targets remain chronological. CPU's scalar recurrence is the reference.
 template<class R> __device__ R pabs(R x) { return x<R(0.) ? -x:x; }
 template<class R> __device__ R pmax(R x,R y) { return x>y?x:y; }
 template<class R> __device__ R pmin(R x,R y) { return x<y?x:y; }
@@ -11,7 +11,7 @@ template<class R> __device__ R ratio(R gross,R equity) {
 template<class R> struct PerpArrays {
     const R *trade,*open,*high,*low,*close,*funding,*funding_mark,*maintenance,*fee,*liqfee;
 };
-// Lanes own assets; hourly settlement stays chronological.
+// Lanes own assets; settlement stays chronological.
 // Rebalance reductions run across the warp instead of serializing all assets
 // through lane zero. The same code is instantiated at each arithmetic width.
 #define SLOTS ((ASSETS+31)/32)
@@ -25,7 +25,7 @@ template<class R> __device__ R asset_liquidate(R price,R quantity,R balance,R ra
     return pmax(balance-nominal,R(0.));
 }
 template<class R> __device__ void asset_account(const R* weights,PerpArrays<R> in,
-    const long long* times,const long long* offsets,const unsigned char* rebalance,
+    const long long* times,const long long* offsets,const long long* decision,
     int days,R leverage,bt::PerpetualOutput out) {
     const int lane=threadIdx.x;
     R q[SLOTS],bucket[SLOTS],last[SLOTS];
@@ -61,11 +61,11 @@ template<class R> __device__ void asset_account(const R* weights,PerpArrays<R> i
             cash+=warp_sum_bcast(residual);equity=R(0.);
             for(int j=0;j<SLOTS;j++)equity+=bucket[j];equity=cash+warp_sum_bcast(equity);
             if(equity<=R(0.))bankrupt=true;
-            if(!bankrupt&&rebalance[event]&&day>0) {
+            if(!bankrupt&&decision[event]>=0) {
                 R A(0.),C(0.),zero_fee(0.),alpha[SLOTS],w[SLOTS];
                 for(int j=0;j<SLOTS;j++) {
                     int a=lane+32*j;w[j]=alpha[j]=R(0.);if(a>=ASSETS)continue;int k=event*ASSETS+a;
-                    w[j]=weights[(day-1)*ASSETS+a];alpha[j]=w[j]/in.open[k];
+                    w[j]=weights[decision[event]*ASSETS+a];alpha[j]=w[j]/in.open[k];
                     A+=q[j]*(in.trade[k]-in.open[k]);C+=w[j]*(R(1.)-in.trade[k]/in.open[k]);
                     zero_fee+=in.fee[k]*pabs(q[j])*in.trade[k];
                 }
@@ -146,14 +146,14 @@ template<class R> __device__ void asset_account(const R* weights,PerpArrays<R> i
 }
 #define ASSET_ENTRY(NAME,R) \
 extern "C" __global__ void NAME(const R* weights,const long long* times,const long long* offsets, \
- const unsigned char* rebalance,const R* trade,const R* open,const R* high,const R* low,const R* close, \
+ const long long* decision,const R* trade,const R* open,const R* high,const R* low,const R* close, \
  const R* funding,const R* funding_mark,const R* maintenance,const R* fee,const R* liqfee, \
- long long events,long long days,double leverage,double* returns,double* funding_out,double* fees, \
+ long long events,long long decisions,long long days,double leverage,double* returns,double* funding_out,double* fees, \
  double* liquidation_fees,double* loss_cap,long long* counts,unsigned char* flags,long long* first, \
  unsigned char* bankrupt,double* ending,double* maximum) { \
  long long b=blockIdx.x; \
  bt::PerpetualOutput out{returns+b*days,funding_out+b*days,fees+b*days,liquidation_fees+b*days,loss_cap+b*days, \
  counts+b*days,flags+b*events*ASSETS,first+b,bankrupt+b,ending+b,maximum+b}; \
  PerpArrays<R> in{trade,open,high,low,close,funding,funding_mark,maintenance,fee,liqfee}; \
- asset_account(weights+b*days*ASSETS,in,times,offsets,rebalance,(int)days,R(leverage),out); }
+ asset_account(weights+b*decisions*ASSETS,in,times,offsets,decision,(int)days,R(leverage),out); }
 ASSET_ENTRY(perpetual_asset_native,double)

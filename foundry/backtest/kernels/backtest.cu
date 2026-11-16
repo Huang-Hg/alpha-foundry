@@ -4,9 +4,8 @@
  * general.cu covers larger cross-sections and asymmetric trading rules.
  * One warp simulates one book: block = 128 threads = 4 books, grid = ceil(B/4). The cross-section (S <= 128) is
  * held in registers, ASSETS_PER_LANE assets per lane; the ~7 reductions a day are warp shuffles, with no shared memory
- * and no __syncthreads. The daily chain is latency-bound (the batch time does not depend on B), hence the
- * prefetching below.
- * W (B,T,S); prices/cost (T,S); live uint8 (T,S). Outputs rr (B,T) f64 and stats (B,5) f64 =
+ * and no __syncthreads. The event chain is latency-bound for small batches.
+ * W (B,D,S); prices/cost (E,S); live uint8 (E,S). Outputs rr (B,V) f64 and stats (B,5) f64 =
  * [sharpe, mean_return, volatility, max_drawdown, total_return] over rows [i0:], arithmetic annualisation.
  * Recurrence scalars are replicated in every lane (same FP order -> deterministic); accumulators and shares are
  * paired by default; the mixed instantiation uses single components. Relies on IEEE NaN propagation (0*NaN = NaN
@@ -63,7 +62,8 @@ __device__ void simulate_core(const T* __restrict__ W,
                               const T* __restrict__ open_raw, const T* __restrict__ prev_close,
                               const T* __restrict__ open_ff0, const T* __restrict__ close_ff0,
                               const T* __restrict__ cost, const unsigned char* __restrict__ live,
-                              int Tn, int S, int B, long long i0, double ppy,
+                              const long long* decision, const long long* measurement,
+                              int Dn, int En, int Vn, int S, int B, long long i0, double ppy,
                               double* __restrict__ rr_out, double* __restrict__ stats_out,
                               const T* ref = nullptr, const int* owners = nullptr,
                               const C* weights = nullptr,
@@ -71,30 +71,24 @@ __device__ void simulate_core(const T* __restrict__ W,
     const int lane = threadIdx.x & 31;
     const long long b = (long long)blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
     if (b >= B) return;                                    /* warp-uniform: the whole warp leaves */
-    const T* Wb = W + (MIX ? owners[b] : b) * (long long)Tn * S;
+    const T* Wb = W + (MIX ? owners[b] : b) * (long long)Dn * S;
     const C alpha = MIX ? weights[b] : C(0);
-    const C* eown = MIX ? eown_all + owners[b] * (long long)Tn : nullptr;
-    double* rr = rr_out + b * (long long)Tn;
+    const C* eown = MIX ? eown_all + owners[b] * (long long)Dn : nullptr;
+    double* rr = rr_out + b * (long long)Vn;
     A wt[ASSETS_PER_LANE], shares[ASSETS_PER_LANE], off_prev[ASSETS_PER_LANE];
-    /* The daily chain is latency-bound: (1) the next W row is prefetched while today's reductions run (day+1 trades
-     * W[day]); (2) today's static rows are loaded into registers at once; (3) yesterday's open is carried in a
-     * register; (4) four independent sums share one shuffle chain. The per-sum order is unchanged => bitwise the
-     * same results as reducing term by term. */
-    T wcur[ASSETS_PER_LANE];
+    // Shared event panels and compact decision indices avoid expanding targets to (B,E,S).
     #pragma unroll
     for (int j = 0; j < ASSETS_PER_LANE; j++) {
-        const int a = lane + 32 * j;
         wt[j] = A(0); shares[j] = A(0); off_prev[j] = A(0);
-        wcur[j] = (a < S) ? blend_weight<T,MIX>(Wb,ref,a,alpha,blend_den<MIX>(eref,eown,0,alpha)) : (T)0;
     }
 
     A eq_after = A(0), prev_tonight = A(1);
-    for (int day = 0; day < Tn; day++) {
+    for (int day = 0; day < En; day++) {
         const long long r0 = (long long)day * S;
-        const C den = blend_den<MIX>(eref, eown, day, alpha);
+        const long long d = decision[day];
+        const C den = d >= 0 ? blend_den<MIX>(eref, eown, d, alpha) : C(1);
         A oraw[ASSETS_PER_LANE], pcl[ASSETS_PER_LANE], off[ASSETS_PER_LANE], cff[ASSETS_PER_LANE], sl[ASSETS_PER_LANE];
         bool ul[ASSETS_PER_LANE];
-        T wnext[ASSETS_PER_LANE];
         #pragma unroll
         for (int j = 0; j < ASSETS_PER_LANE; j++) {
             const int a = lane + 32 * j;
@@ -105,15 +99,15 @@ __device__ void simulate_core(const T* __restrict__ W,
             cff[j]  = in ? (A)close_ff0[r0 + a] : A(0);
             sl[j]   = in ? (A)cost[r0 + a] : A(0);
             ul[j]   = in ? (live[r0 + a] != 0) : false;
-            wnext[j] = (in && day + 1 < Tn) ? blend_weight<T,MIX>(Wb,ref,r0+a,alpha,den) : (T)0;
         }
 
-        /* --- effective weights: shift-1 -> normalise -> open adjustment -> normalise --- */
-        if (day > 0) {
+        /* --- scheduled target: normalise -> open adjustment -> normalise --- */
+        if (d >= 0) {
             A part = A(0);
             #pragma unroll
             for (int j = 0; j < ASSETS_PER_LANE; j++) {
-                A x = (A)wcur[j];
+                const int a = lane + 32 * j;
+                A x = a < S ? A(blend_weight<T,MIX>(Wb,ref,d*S+a,alpha,den)) : A(0);
                 if (!isfinite(x)) x = A(0);
                 wt[j] = x; part += fabs(x);
             }
@@ -151,7 +145,7 @@ __device__ void simulate_core(const T* __restrict__ W,
         const A w_op   = p_unl + w_free;
         const A eq_oper = eq_before - p_lock;
 
-        if (w_op < A(PRICE_EPS)) {                              /* w_op is warp-uniform => uniform branch */
+        if (d < 0 || w_op < A(PRICE_EPS)) {                     /* warp-uniform branch */
             eq_after = eq_before;
         } else {
             A part = A(0);
@@ -175,20 +169,20 @@ __device__ void simulate_core(const T* __restrict__ W,
         }
         const A eq_tonight = eq_after + warp_sum_bcast(part2);
 
-        A v = eq_tonight / prev_tonight - A(1);
-        if (!isfinite(v)) v = A(0);
-        // An unrepresentable recurrence remains invalid; it cannot masquerade
-        // as a valid zero return and is never rerun in another precision.
-        if (LimitedRange<A>::value &&
-            (!isfinite(eq_tonight) || !isfinite(eq_after) ||
-             !isfinite(prev_tonight) || fabs(prev_tonight) < A(1e-30))) v = (A)__int_as_float(0x7fffffff);
-        if (lane == 0) rr[day] = (double)v;
-        prev_tonight = eq_tonight;
+        if (day + 1 == En || measurement[day + 1] != measurement[day]) {
+            A v = eq_tonight / prev_tonight - A(1);
+            if (!isfinite(v)) v = A(0);
+            // Unrepresentable recurrence states cannot masquerade as valid zero returns.
+            if (LimitedRange<A>::value &&
+                (!isfinite(eq_tonight) || !isfinite(eq_after) ||
+                 !isfinite(prev_tonight) || fabs(prev_tonight) < A(1e-30))) v = (A)__int_as_float(0x7fffffff);
+            if (lane == 0) rr[measurement[day]] = (double)v;
+            prev_tonight = eq_tonight;
+        }
         #pragma unroll
         for (int j = 0; j < ASSETS_PER_LANE; j++) {
             if (!ul[j]) shares[j] = A(0);                     /* no price: the position is closed after tonight */
             off_prev[j] = off[j];
-            wcur[j] = wnext[j];
         }
         rebase(eq_after, prev_tonight, shares);
     }
@@ -198,35 +192,35 @@ __device__ void simulate_core(const T* __restrict__ W,
 
 extern "C" __global__ void k_simulate_mixed(const float* W, const float* o_raw, const float* pcl,
                                             const float* off, const float* cff, const float* cost,
-                                            const unsigned char* live, int T, int S, int B, long long i0,
+                                            const unsigned char* live, const long long* decision, const long long* measurement, int D, int E, int V, int S, int B, long long i0,
                                             double ppy, double* rr, double* st) {
-    simulate_core<float,false,float>(W, o_raw, pcl, off, cff, cost, live, T, S, B, i0, ppy, rr, st);
+    simulate_core<float,false,float>(W, o_raw, pcl, off, cff, cost, live, decision, measurement, D, E, V, S, B, i0, ppy, rr, st);
 }
 extern "C" __global__ void k_blend_mixed(const float* W, const float* ref,
                                          const int* owners, const double* weights,
                                          const double* eref, const double* eown,
                                          const float* o_raw, const float* pcl,
                                          const float* off, const float* cff, const float* cost,
-                                         const unsigned char* live, int T, int S, int B, long long i0,
+                                         const unsigned char* live, const long long* decision, const long long* measurement, int D, int E, int V, int S, int B, long long i0,
                                          double ppy, double* rr, double* st) {
-    simulate_core<float,true,float>(W, o_raw, pcl, off, cff, cost, live, T, S, B, i0, ppy, rr, st,
+    simulate_core<float,true,float>(W, o_raw, pcl, off, cff, cost, live, decision, measurement, D, E, V, S, B, i0, ppy, rr, st,
                                     ref, owners, weights, eref, eown);
 }
 
 // Paired holdings and blended-book arithmetic retain low input bits.
 extern "C" __global__ void k_simulate_paired(const FloatPair* W, const FloatPair* o_raw, const FloatPair* pcl,
                                            const FloatPair* off, const FloatPair* cff, const FloatPair* cost,
-                                           const unsigned char* live, int T, int S, int B, long long i0,
+                                           const unsigned char* live, const long long* decision, const long long* measurement, int D, int E, int V, int S, int B, long long i0,
                                            double ppy, double* rr, double* st) {
-    simulate_core<FloatPair,false,FloatPair,FloatPair>(W, o_raw, pcl, off, cff, cost, live, T, S, B, i0, ppy, rr, st);
+    simulate_core<FloatPair,false,FloatPair,FloatPair>(W, o_raw, pcl, off, cff, cost, live, decision, measurement, D, E, V, S, B, i0, ppy, rr, st);
 }
 extern "C" __global__ void k_blend_paired(const FloatPair* W, const FloatPair* ref,
                                         const int* owners, const FloatPair* weights,
                                         const FloatPair* eref, const FloatPair* eown,
                                         const FloatPair* o_raw, const FloatPair* pcl,
                                         const FloatPair* off, const FloatPair* cff, const FloatPair* cost,
-                                        const unsigned char* live, int T, int S, int B, long long i0,
+                                        const unsigned char* live, const long long* decision, const long long* measurement, int D, int E, int V, int S, int B, long long i0,
                                         double ppy, double* rr, double* st) {
-    simulate_core<FloatPair,true,FloatPair,FloatPair>(W, o_raw, pcl, off, cff, cost, live, T, S, B, i0, ppy, rr, st,
+    simulate_core<FloatPair,true,FloatPair,FloatPair>(W, o_raw, pcl, off, cff, cost, live, decision, measurement, D, E, V, S, B, i0, ppy, rr, st,
                                                    ref, owners, weights, eref, eown);
 }

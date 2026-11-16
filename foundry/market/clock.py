@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from foundry.types import ClockGrid
+from foundry.types import ClockGrid, ExecutionSchedule
 
 
 def daily_clock(dates: NDArray[np.datetime64], market: str) -> ClockGrid:
@@ -56,3 +56,20 @@ def daily_clock(dates: NDArray[np.datetime64], market: str) -> ClockGrid:
                      f'exchange_calendars {calendars.__version__} {name} regular-session closes; '
                      'daily-bar availability assumption; exact source publication/revision '
                      'vintages are limited by DataContract.publication')
+
+
+def daily_schedule(dates: NDArray[np.datetime64], market: str, clock: ClockGrid) -> ExecutionSchedule:
+    """Compile next-session-open execution without inferring it from a date string."""
+    if market in ('crypto_spot', 'crypto_perpetual'):
+        events = dates.astype('datetime64[ns]').astype(np.int64)
+    else:
+        import exchange_calendars as calendars
+        import pandas as pd
+
+        end = dates[-1] if len(dates) > 1 else dates[-1] + np.timedelta64(1, 'D')
+        calendar = calendars.get_calendar(clock.calendar, start=str(dates[0]), end=str(end))
+        events = calendar.opens.reindex(pd.DatetimeIndex(dates.astype('datetime64[ns]'))).array.as_unit('ns').asi8
+    if np.any(events[1:] < clock.decision_ns[:-1]):
+        raise ValueError('Daily execution cannot precede the corresponding decision')
+    indices = np.arange(len(dates), dtype=np.int64)
+    return ExecutionSchedule(events, indices - 1, indices, len(dates), len(dates))

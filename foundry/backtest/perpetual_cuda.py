@@ -30,6 +30,8 @@ class DeviceSpec:
     host: PerpetualSpec
     arrays: tuple[Array, ...]
     offsets: IntArray
+    event_ns: IntArray
+    decision_index: IntArray
     backend: str = 'cuda'
 
 
@@ -54,8 +56,9 @@ class Executor:
         return self._modules[assets]
 
     def device_spec(self, host: PerpetualSpec) -> DeviceSpec:
-        offsets = np.searchsorted(host.day_index, np.arange(host.days + 1)).astype(np.int64)
-        assert np.all(np.diff(offsets) > 0), 'each daily interval has execution events'
+        schedule = host.schedule
+        offsets = np.searchsorted(schedule.measurement_index,
+                                  np.arange(schedule.measurement_count + 1)).astype(np.int64)
         self._module(host.shape[1]).get_function('perpetual_asset_native')
         # Contracts may quote prices in very small or large units. Normalize by
         # each asset's first available mark using an exact power of two; all
@@ -65,7 +68,8 @@ class Executor:
         arrays = tuple(cp.asarray(np.ldexp(getattr(host, name), -exponents)
                        if name in price_fields else getattr(host, name)) for name in PERPETUAL_ARRAY_FIELDS)
         offsets = cp.asarray(offsets)
-        return DeviceSpec(host, arrays, offsets)
+        return DeviceSpec(host, arrays, offsets, cp.asarray(schedule.event_ns),
+                          cp.asarray(schedule.decision_index))
 
     def simulate(self, W: FloatArray, spec: DeviceSpec, start: int, ppy: float, precision: str) -> SimulationResult:
         assert precision == 'native'
@@ -80,19 +84,20 @@ class Executor:
 
     def simulate_device(self, W: FloatArray, spec: DeviceSpec, start: int, ppy: float) -> SimulationResult:
         """One CUDA execution; also the explicit kernel verification boundary."""
-        B, T, S = W.shape
-        E = len(spec.host.event_times_ms)
-        arrays = (*[cp.empty((B, T), cp.float64) for _ in range(5)],
-                  cp.empty((B, T), cp.int64), cp.empty((B, E, S), cp.uint8),
+        B, D, S = W.shape
+        E = len(spec.host.schedule.event_ns)
+        V = spec.host.schedule.measurement_count
+        arrays = (*[cp.empty((B, V), cp.float64) for _ in range(5)],
+                  cp.empty((B, V), cp.int64), cp.empty((B, E, S), cp.uint8),
                   cp.empty(B, cp.int64), cp.empty(B, cp.bool_),
                   cp.empty(B, cp.float64), cp.empty(B, cp.float64))
         kernel = self._modules[S].get_function('perpetual_asset_native')
         kernel((B,), (32,),
-               (cp.ascontiguousarray(W), spec.arrays[0], spec.offsets, spec.arrays[2], *spec.arrays[3:],
-                np.int64(E), np.int64(T), np.float64(spec.host.leverage), *arrays))
+               (cp.ascontiguousarray(W), spec.event_ns, spec.offsets, spec.decision_index, *spec.arrays,
+                np.int64(E), np.int64(D), np.int64(V), np.float64(spec.host.leverage), *arrays))
         stats = cp.empty((B, 5), cp.float64)
         self._modules[S].get_function('k_statistics_paired')((B,), (128,),
-            (arrays[0], np.int32(T), np.int32(start), np.float64(ppy), stats))
+            (arrays[0], np.int32(V), np.int32(start), np.float64(ppy), stats))
         return simulation_result(arrays, stats)
 
     def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,

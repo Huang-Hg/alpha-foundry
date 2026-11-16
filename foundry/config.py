@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, TypedDict, Unpack
@@ -14,15 +15,26 @@ def path(value: str) -> Path:
     return p if p.is_absolute() else ROOT / p
 
 
+def frequency_nanoseconds(value: str) -> int:
+    """Resolve a fixed UTC duration; calendar months are not fixed durations."""
+    match = re.fullmatch(r'([1-9][0-9]*)(s|min|h|D)', value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError('Clock frequencies require a positive integer followed by s, min, h or D')
+    result = int(match[1]) * {'s': 1, 'min': 60, 'h': 3600, 'D': 86400}[match[2]] * 1000000000
+    if result > 9223372036854775807:
+        raise ValueError('Clock frequency exceeds the UTC nanosecond range')
+    return result
+
+
 @dataclass(frozen=True)
 class Clock:
-    """Decision and statistics frequencies supported by the daily execution plan."""
-    decision: Literal['1D'] = '1D'
-    statistics: Literal['1D'] = '1D'
+    """Independent fixed decision and valuation periods on the market clock."""
+    decision: str = '1D'
+    statistics: str = '1D'
 
     def __post_init__(self) -> None:
-        if self.decision != '1D' or self.statistics != '1D':
-            raise ValueError('The R1 execution plan supports only 1D decision and statistics clocks')
+        frequency_nanoseconds(self.decision)
+        frequency_nanoseconds(self.statistics)
 
 
 @dataclass(frozen=True)
@@ -64,7 +76,7 @@ class Execution:
 
     def __post_init__(self) -> None:
         if self.fill != 'next_open':
-            raise ValueError('The R1 execution plan supports only next_open fills')
+            raise ValueError('The target execution plan supports only next_open fills')
 
 
 @dataclass(frozen=True)
@@ -326,6 +338,8 @@ def configure(**parameters: Unpack[Parameters]) -> Settings:
             raise TypeError(f'{public_name} requires {kind.__name__}')
     selected = factories[name](**parameters)
     account = groups['account']
+    if name in ('us_equity', 'a_share') and groups['clock'] != Clock():
+        raise ValueError('Equity data and execution plans currently require daily decision and statistics clocks')
     if (name == 'crypto_perpetual') != (account.margin == 'isolated'):
         raise ValueError('Isolated accounts require crypto_perpetual; other markets require cash accounts')
     if isinstance(selected, CryptoPerpetualConfig) and not (

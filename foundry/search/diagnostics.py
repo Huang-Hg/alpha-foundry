@@ -125,7 +125,7 @@ def calibrate(port: ResidentPort, population: CalibrationPopulation) -> SingleGa
 
 
 def drawdown_window(port: ResidentPort, returns: FloatArray) -> DrawdownWindow:
-    xp, dates = port.xp, port.stat_dates
+    xp, dates = port.xp, port.measurement_times
     wealth = xp.concatenate((xp.ones(1), xp.cumprod(1 + returns)))
     peaks = wealth.copy()
     offset = 1

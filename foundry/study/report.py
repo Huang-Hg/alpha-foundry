@@ -5,13 +5,13 @@ from foundry.ops.registry import ARITY, MAX_WINDOW, MIN_WINDOW, OPS
 
 def fields(runtime):
     engine, market, panel = runtime.pipeline, runtime.market, runtime.panel
-    universe = engine.to_host(engine.universe)[engine.start:]
+    universe = engine.to_host(engine.universe)[engine.decision_start:]
     print(f'{market.name}: {len(panel.vocabulary)} 个字段\n')
     for category, names in panel.categories().items():
         scope = panel.fields[names[0]].scope
         print(f'{category} [{scope}] {market.categories[category]}')
         for name in names:
-            values = engine.to_host(panel[name])[engine.start:][universe]
+            values = engine.to_host(panel[name])[engine.decision_start:][universe]
             finite = values[np.isfinite(values)]
             if len(finite):
                 p1, p50, p99 = np.percentile(finite, (1, 50, 99))

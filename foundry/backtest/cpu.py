@@ -33,7 +33,9 @@ class Executor:
         s=spec.host
         def account(w: FloatArray) -> FloatArray:
             return _bt.simulate(np.ascontiguousarray(w,dtype=np.float64),s.open_raw,s.prev_close,s.open_ff0,
-                                s.close_ff0,s.cost_buy,s.cost_sell,s.live,s.block,s.carry)
+                                s.close_ff0,s.cost_buy,s.cost_sell,s.live,s.block,s.carry,
+                                s.schedule.decision_index,s.schedule.measurement_index,
+                                s.schedule.measurement_count)
         return self._result(np.stack(list(self.map(account, W))), start, ppy)
 
     @staticmethod
@@ -53,7 +55,9 @@ class Executor:
                 gross /= self.gross_limit
             book /= np.maximum(1., gross)
             return _bt.simulate(book, s.open_raw, s.prev_close, s.open_ff0, s.close_ff0,
-                                s.cost_buy, s.cost_sell, s.live, s.block, s.carry)
+                                s.cost_buy, s.cost_sell, s.live, s.block, s.carry,
+                                s.schedule.decision_index, s.schedule.measurement_index,
+                                s.schedule.measurement_count)
         result = self._result(np.stack(list(self.map(trial, range(len(weights))))), start, ppy)
         return SimulationResult(result.returns[:, start:], result.statistics, None)
 

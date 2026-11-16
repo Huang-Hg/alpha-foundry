@@ -13,11 +13,12 @@ from zipfile import ZipFile
 import numpy as np
 from numpy.typing import NDArray
 
-from foundry.config import CryptoPerpetualConfig
-from foundry.types import Allocation, Backend, BoolArray, DataContract, LoadedStudy, MarketData, PerpetualSpec, Study, Window
+from foundry.config import Clock, CryptoPerpetualConfig
+from foundry.types import Allocation, Backend, BoolArray, DataContract, ExecutionSchedule, LoadedStudy, MarketData, PerpetualSpec, Study, Window
 from foundry.market.panel import Field, Panel
 from foundry.market.base import Market, ohlcv_fields, trend_fields
 from foundry.market.clock import daily_clock
+from foundry.market.intraday import IntradayData
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -29,8 +30,8 @@ Publisher = Callable[[Path, bytes], None]
 class PerpetualData:
     """Owned host event arrays: integer (E,) clocks and floating (E,S) prices/rates."""
     daily: MarketData
-    event_times_ms: NDArray[np.int64]
-    day_index: NDArray[np.int32]
+    event_ns: NDArray[np.int64]
+    measurement_index: NDArray[np.int64]
     trade_open: NDArray[np.floating]
     mark_open: NDArray[np.floating]
     mark_high: NDArray[np.floating]
@@ -338,13 +339,17 @@ def _project(tables: Mapping[str, pd.DataFrame], manifest: Manifest, asof: str) 
     rows = ((funding['hour'].to_numpy(dtype=np.int64) - lower) // HOUR_MS)
     cols = np.array([asset_index[symbol] for symbol in funding['symbol']], dtype=np.int64)
     rates[rows, cols] = funding['last_funding_rate'].to_numpy(dtype=np.float64)
-    cube = {key: value.reshape(len(dates), 24, len(assets)) for key, value in trade.items()}
-    daily = dict(open=cube['open'][:, 0], high=cube['high'].max(1), low=cube['low'].min(1),
-                 close=cube['close'][:, -1], volume=cube['volume'].sum(1))
+    measurement_index = np.searchsorted(dates, times.astype('datetime64[ms]').astype('datetime64[D]')).astype(np.int64)
+    starts = np.flatnonzero(np.r_[True, measurement_index[1:] != measurement_index[:-1]])
+    stops = np.r_[starts[1:], len(times)]
+    daily = dict(open=trade['open'][starts], high=np.maximum.reduceat(trade['high'], starts),
+                 low=np.minimum.reduceat(trade['low'], starts), close=trade['close'][stops - 1],
+                 volume=np.stack([trade['volume'][left:right].sum(axis=0)
+                                  for left, right in zip(starts, stops)]))
     contract = DataContract(**{key: manifest[key] for key in DataContract.__dataclass_fields__})
     data = MarketData(dates, assets, {key: np.ascontiguousarray(value) for key, value in daily.items()},
                       np.ones((len(dates), len(assets)), dtype=bool), contract)
-    return PerpetualData(data, times, np.repeat(np.arange(len(dates), dtype=np.int32), 24),
+    return PerpetualData(data, times * 1_000_000, measurement_index,
                          trade['open'], mark['open'], mark['high'], mark['low'], mark['close'],
                          rates, mark['open'].copy())
 
@@ -379,7 +384,7 @@ def load_perpetual(directory: str | Path, study: Study) -> PerpetualData:
     return _project(tables, manifest, study.asof)
 
 
-class CryptoPerpetual(Market[PerpetualData, PerpetualSpec]):
+class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
     name = 'crypto_perpetual'
     decision_clock = 'utc_day_close'
     execution_clock = 'next_utc_day_open_then_hourly_funding_and_mark_risk'
@@ -389,26 +394,53 @@ class CryptoPerpetual(Market[PerpetualData, PerpetualSpec]):
                   'trend': 'daily trend; execution-only funding and mark risk stay outside features'}
 
     def __init__(self, leverage: float, cost_rate: float, maintenance_rate: float, liquidation_fee: float,
-                 gross_limit: float):
+                 gross_limit: float, clock: Clock = Clock()):
         self.leverage = leverage
         self.allocation = Allocation(gross_limit, True)
         self.cost_rate, self.maintenance_rate, self.liquidation_fee = cost_rate, maintenance_rate, liquidation_fee
+        self.clock = clock
 
-    def compile(self, data: PerpetualData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
+    def compile(self, data: PerpetualData | IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
+        if isinstance(data, IntradayData):
+            return self._intraday(data, backend, study)
+        if self.clock != Clock():
+            raise ValueError('Historical daily perpetual artifacts require 1D decision and statistics clocks')
         daily = data.daily
         clock = daily_clock(daily.dates, self.name)
-        window = Window(daily.dates, int(np.searchsorted(daily.dates, np.datetime64(study.start))), clock)
+        start = int(np.searchsorted(daily.dates, np.datetime64(study.start)))
+        window = Window(clock, start, daily.dates, start, self.ppy)
         src = dict(daily.values, member=daily.members)
         fields = [Field(k, 'price', formula=False) for k in src] + ohlcv_fields() + trend_fields()
         shape = data.trade_open.shape
-        spec = PerpetualSpec(data.event_times_ms, data.day_index,
-            np.r_[True, data.day_index[1:] != data.day_index[:-1]], data.trade_open,
+        first = np.r_[True, data.measurement_index[1:] != data.measurement_index[:-1]]
+        targets = np.where(first, data.measurement_index - 1, -1)
+        schedule = ExecutionSchedule(data.event_ns, targets, data.measurement_index, len(daily.dates), len(daily.dates))
+        spec = PerpetualSpec(schedule, data.trade_open,
             data.mark_open, data.mark_high, data.mark_low, data.mark_close,
             data.funding_rate, data.funding_mark, np.full(shape, self.maintenance_rate),
             np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee),
-            self.leverage, len(daily.dates), self.allocation.max_gross)
+            self.leverage, self.allocation.max_gross)
         panel = Panel(daily.dates, daily.assets, fields, src, backend)
         return LoadedStudy(study, self, panel, spec, window, daily.contract)
+
+    def _intraday(self, data: IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
+        bars = data.panel
+        start_time = np.datetime64(study.start.removesuffix('Z'))
+        start = int(np.searchsorted(bars.dates, start_time))
+        measurement_start = int(np.searchsorted(data.measurement_times, start_time))
+        window = Window(data.clock, start, data.measurement_times, measurement_start, data.periods_per_year)
+        src = dict(bars.values, member=bars.members)
+        fields = [Field(k, 'price', formula=False) for k in src] + ohlcv_fields() + trend_fields()
+        g = data.execution
+        shape = g['open'].shape
+        spec = PerpetualSpec(data.schedule, g['open'], g['mark_open'], g['mark_high'], g['mark_low'],
+            g['mark_close'], g['funding_rate'], g['funding_mark'], np.full(shape, self.maintenance_rate),
+            np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee), self.leverage,
+            self.allocation.max_gross)
+        self.ppy = data.periods_per_year
+        self.decision_clock = data.clock.provenance
+        self.execution_clock = 'next_base_bar_open_then_exact_funding_and_mark_risk'
+        return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec, window, bars.contract)
 
     def universe(self, panel: Panel) -> BoolArray:
         return panel['member'] & panel.backend.xp.isfinite(panel['close'])

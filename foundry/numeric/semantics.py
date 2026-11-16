@@ -2,4 +2,4 @@
 
 MOMENTS_SEMANTIC_VERSION = 'paired-centered-moments-log-growth-v1'
 
-BACKTEST_SEMANTIC_VERSION = 'paired-cash-hourly-isolated-warp-v1'
+BACKTEST_SEMANTIC_VERSION = 'paired-cash-isolated-event-schedule-v2'

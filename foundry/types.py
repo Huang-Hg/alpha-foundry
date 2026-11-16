@@ -117,7 +117,7 @@ class ExecutionRiskBatch:
     isolated_loss_cap: FloatArray
     liquidations: IntArray
     liquidation_events: IntArray
-    first_liquidation_ms: IntArray
+    first_liquidation_ns: IntArray
     bankrupt: BoolArray
     ending_equity: FloatArray
     max_gross_leverage: FloatArray
@@ -221,18 +221,25 @@ class ClockGrid:
 
 @dataclass(frozen=True)
 class Window:
-    """Daily kernel session labels plus a distinct absolute decision clock."""
-    dates: NDArray[np.datetime64]
-    start: int
+    """Separate decision and measurement axes with explicit evaluation offsets."""
     clock: ClockGrid
+    decision_start: int
+    measurement_times: NDArray[np.datetime64]
+    measurement_start: int
+    periods_per_year: float
 
     def __post_init__(self) -> None:
-        if len(self.dates) != len(self.clock.decision_ns) or not 0 <= self.start < len(self.dates):
-            raise ValueError('Research window and decision clock must align')
-
-    @property
-    def stat_dates(self):
-        return self.dates[self.start:]
+        times = np.asarray(self.measurement_times)
+        if (times.ndim != 1 or times.dtype.kind != 'M' or not len(times)
+                or np.isnat(times).any() or np.any(times[1:] <= times[:-1])):
+            raise ValueError('Measurement labels must be ordered nonempty datetime64 values')
+        if not (0 <= self.decision_start < len(self.clock.decision_ns)
+                and 0 <= self.measurement_start < len(times)
+                and np.isfinite(self.periods_per_year) and self.periods_per_year > 0):
+            raise ValueError('Research offsets and annualization must match their declared axes')
+        owned = np.array(times, copy=True)
+        owned.flags.writeable = False
+        object.__setattr__(self, 'measurement_times', owned)
 
 
 @dataclass(frozen=True)
@@ -355,7 +362,7 @@ class FamilySeed:
 @dataclass(frozen=True)
 class YearMetrics:
     year: int
-    days: int
+    periods: int
     sharpe: float
     attend: float
     lg: float
@@ -365,7 +372,7 @@ class YearMetrics:
 class Metrics:
     """Common research metrics; turnover/exposure/max_single_weight use targets.
 
-    Turnover is mean absolute change of the daily target book, not executed
+    Turnover is mean absolute change per decision of the target book, not executed
     notional. margin_bps uses this same target turnover denominator. Derivative
     realized fees and actual account leverage are reported separately in risk.
     """
@@ -381,14 +388,14 @@ class Metrics:
     concentration: float
     yearly: tuple[YearMetrics, ...]
     span: str
-    n_days: int
+    n_periods: int
 
 
 @dataclass(frozen=True)
 class RiskSummary:
     """Window cashflows/counts; account state and first event use the full run.
 
-    first_liquidation_ms identifies the hourly event bar, not an exact tick fill.
+    first_liquidation_ns identifies the execution event bar, not an exact tick fill.
     """
     model: str
     funding: float
@@ -396,7 +403,7 @@ class RiskSummary:
     liquidation_fees: float
     isolated_loss_cap: float
     liquidations: int
-    first_liquidation_ms: int
+    first_liquidation_ns: int
     bankrupt: bool
     ending_equity: float
     max_gross_leverage: float
@@ -706,7 +713,64 @@ class SessionBackend(Protocol[ResidentValue]):
 
 
 @dataclass(frozen=True)
+class ExecutionSchedule:
+    """Owned event clock and compact target/measurement mappings.
+
+    event_ns is ordered UTC ns (E,). decision_index (E,) is -1 to retain
+    actual positions or an index in the target grid (D,). measurement_index
+    (E,) assigns every event to one contiguous valuation period in [0,V).
+    The compiler guarantees that a target is visible before its event.
+    """
+    event_ns: NDArray[np.int64]
+    decision_index: NDArray[np.int64]
+    measurement_index: NDArray[np.int64]
+    decision_count: int
+    measurement_count: int
+
+    def __post_init__(self) -> None:
+        names = ('event_ns', 'decision_index', 'measurement_index')
+        arrays = tuple(np.asarray(getattr(self, name)) for name in names)
+        times, decisions, measurements = arrays
+        if (self.decision_count < 1 or self.measurement_count < 1
+                or any(a.dtype != np.dtype('int64') or a.ndim != 1 for a in arrays)
+                or not len(times) or any(a.shape != times.shape for a in arrays)):
+            raise ValueError('Execution schedule requires aligned int64 event arrays and positive axis sizes')
+        if np.any(times == NO_INFORMATION) or np.any(times[1:] <= times[:-1]):
+            raise ValueError('Execution events must be strictly increasing UTC nanoseconds')
+        updates = decisions[decisions >= 0]
+        if (np.any(decisions < -1) or np.any(decisions >= self.decision_count)
+                or np.any(updates[1:] <= updates[:-1])):
+            raise ValueError('Target updates must be unique ordered decision indices or -1')
+        if (measurements[0] != 0 or measurements[-1] != self.measurement_count - 1
+                or np.any(np.diff(measurements) < 0) or np.any(np.diff(measurements) > 1)):
+            raise ValueError('Every measurement period must have a contiguous nonempty event interval')
+        for name, array in zip(names, arrays):
+            owned = np.array(array, copy=True, order='C')
+            owned.flags.writeable = False
+            object.__setattr__(self, name, owned)
+
+    @property
+    def snapshot(self) -> str:
+        digest = hashlib.sha256(str((self.decision_count, self.measurement_count)).encode())
+        for array in (self.event_ns, self.decision_index, self.measurement_index):
+            digest.update(array.tobytes())
+        return digest.hexdigest()
+
+    def prefix(self, measurements: int, decisions: int) -> ExecutionSchedule:
+        if not 0 < measurements <= self.measurement_count or not 0 < decisions <= self.decision_count:
+            raise ValueError('Schedule prefix bounds must lie within both declared axes')
+        end = int(np.searchsorted(self.measurement_index, measurements))
+        return ExecutionSchedule(self.event_ns[:end], self.decision_index[:end],
+                                 self.measurement_index[:end], decisions, measurements)
+
+
+CASH_ARRAY_FIELDS = ('open_raw', 'prev_close', 'open_ff0', 'close_ff0', 'cost_buy',
+                     'live', 'cost_sell', 'block', 'carry')
+
+
+@dataclass(frozen=True)
 class ExecutionSpec:
+    schedule: ExecutionSchedule
     open_raw: HostArray
     prev_close: HostArray
     open_ff0: HostArray
@@ -718,20 +782,28 @@ class ExecutionSpec:
     carry: HostArray | None = None
 
     def __post_init__(self):
-        for field in fields(self):
-            value = getattr(self, field.name)
+        shape = np.asarray(self.open_raw).shape
+        if len(shape) != 2 or shape[0] != len(self.schedule.event_ns) or shape[1] < 1:
+            raise ValueError('Cash execution prices must align with the event and asset axes')
+        for name in CASH_ARRAY_FIELDS:
+            value = getattr(self, name)
             if value is not None:
                 owned = np.array(value, order='C', copy=True)
+                if owned.shape != shape:
+                    raise ValueError('Cash execution arrays must share the event and asset axes')
                 owned.flags.writeable = False
-                object.__setattr__(self, field.name, owned)
+                object.__setattr__(self, name, owned)
 
+    @property
+    def shape(self):
+        return self.schedule.decision_count, self.open_raw.shape[1]
 
     @property
     def snapshot(self):
-        digest=hashlib.sha256()
-        for field in fields(self):
-            value=getattr(self,field.name)
-            digest.update(field.name.encode())
+        digest = hashlib.sha256(self.schedule.snapshot.encode())
+        for name in CASH_ARRAY_FIELDS:
+            value = getattr(self, name)
+            digest.update(name.encode())
             if value is not None:
                 digest.update(str((value.shape, value.dtype.str)).encode())
                 digest.update(value.tobytes())
@@ -741,32 +813,28 @@ class ExecutionSpec:
     def symmetric(self) -> bool:
         return self.cost_sell is None and self.block is None and self.carry is None
 
-    def rows(self, end: int) -> 'ExecutionSpec':
-        return replace(self, **{f.name: getattr(self, f.name)[:end] for f in fields(self) if getattr(self, f.name) is not None})
+    def prefix(self, measurements: int, decisions: int) -> ExecutionSpec:
+        schedule = self.schedule.prefix(measurements, decisions)
+        end = len(schedule.event_ns)
+        return replace(self, schedule=schedule,
+            **{name: getattr(self, name)[:end] for name in CASH_ARRAY_FIELDS if getattr(self, name) is not None})
 
 
-PERPETUAL_MODEL = 'linear_usdt_isolated_daily_collateral_hourly_mark_touch_v1'
-PERPETUAL_EVENT_FIELDS = ('event_times_ms', 'day_index', 'rebalance')
-PERPETUAL_PANEL_FIELDS = ('trade_open', 'mark_open', 'mark_high', 'mark_low', 'mark_close',
+PERPETUAL_MODEL = 'linear_usdt_isolated_event_mark_touch_v2'
+PERPETUAL_ARRAY_FIELDS = ('trade_open', 'mark_open', 'mark_high', 'mark_low', 'mark_close',
                 'funding_rate', 'funding_mark', 'maintenance_rate', 'fee_rate', 'liquidation_fee')
-PERPETUAL_ARRAY_FIELDS = PERPETUAL_EVENT_FIELDS + PERPETUAL_PANEL_FIELDS
+
 
 @dataclass(frozen=True)
 class PerpetualSpec:
-    """Owned read-only host arrays for T daily targets and E hourly events.
+    """Owned prices/rates (E,S) and independent decision/measurement mappings.
 
-    event_times_ms/day_index are int64 (E,), UTC bar-start milliseconds and
-    indices in [0, days); rebalance is bool (E,). Price and rate arrays are
-    float64 (E,S): prices use USDT per asset unit, funding_rate is the signed
-    settlement fraction, and maintenance/fee/liquidation_fee are fractions of
-    mark/traded notional. The loader validates a complete, ordered event grid.
-    Intrabar first-liquidation timestamps identify the bar, not a known tick.
-    leverage determines isolated collateral; gross_limit separately bounds
-    target notional/equity and can be lower than leverage.
+    Prices use USDT per asset unit. Funding, maintenance and fees are notional
+    fractions. Funding is applied before target updates at each event. Intrabar
+    liquidation timestamps identify the bar, not a known tick. Leverage controls
+    isolated collateral; gross_limit separately bounds target notional/equity.
     """
-    event_times_ms: HostArray
-    day_index: HostArray
-    rebalance: HostArray
+    schedule: ExecutionSchedule
     trade_open: HostArray
     mark_open: HostArray
     mark_high: HostArray
@@ -778,13 +846,16 @@ class PerpetualSpec:
     fee_rate: HostArray
     liquidation_fee: HostArray
     leverage: float
-    days: int
     gross_limit: float
 
     def __post_init__(self):
+        shape = np.asarray(self.trade_open).shape
+        if len(shape) != 2 or shape[0] != len(self.schedule.event_ns) or shape[1] < 1:
+            raise ValueError('Perpetual prices must align with the event and asset axes')
         for name in PERPETUAL_ARRAY_FIELDS:
-            dtype = np.int64 if name in PERPETUAL_EVENT_FIELDS[:2] else np.bool_ if name == 'rebalance' else np.float64
-            owned = np.array(getattr(self, name), dtype=dtype, order='C', copy=True)
+            owned = np.array(getattr(self, name), dtype=np.float64, order='C', copy=True)
+            if owned.shape != shape:
+                raise ValueError('Perpetual arrays must share the event and asset axes')
             owned.flags.writeable = False
             object.__setattr__(self, name, owned)
         ratio = self.trade_open / self.mark_open
@@ -794,24 +865,24 @@ class PerpetualSpec:
 
     @property
     def shape(self):
-        return self.days, self.trade_open.shape[1]
+        return self.schedule.decision_count, self.trade_open.shape[1]
 
     @property
     def snapshot(self):
         digest = hashlib.sha256(PERPETUAL_MODEL.encode())
-        for definition in fields(self):
-            value = getattr(self, definition.name)
-            digest.update(definition.name.encode())
-            if definition.name in PERPETUAL_ARRAY_FIELDS:
-                digest.update(str((value.shape, value.dtype.str)).encode())
-                digest.update(value.tobytes())
-            else:
-                digest.update(str(value).encode())
+        digest.update(self.schedule.snapshot.encode())
+        digest.update(str((self.leverage, self.gross_limit)).encode())
+        for name in PERPETUAL_ARRAY_FIELDS:
+            value = getattr(self, name)
+            digest.update(name.encode())
+            digest.update(str((value.shape, value.dtype.str)).encode())
+            digest.update(value.tobytes())
         return digest.hexdigest()
 
-    def rows(self, end):
-        stop = int(np.searchsorted(self.day_index, end))
-        return replace(self, **{name: getattr(self, name)[:stop] for name in PERPETUAL_ARRAY_FIELDS}, days=end)
+    def prefix(self, measurements: int, decisions: int) -> PerpetualSpec:
+        schedule = self.schedule.prefix(measurements, decisions)
+        end = len(schedule.event_ns)
+        return replace(self, schedule=schedule, **{name: getattr(self, name)[:end] for name in PERPETUAL_ARRAY_FIELDS})
 
 
 @dataclass(frozen=True)
@@ -1117,8 +1188,8 @@ class FoldView:
 class FoldResult:
     """Realized net-return signs in a half-open UTC ns measurement interval.
 
-    Bounds label daily closing measurements, not next-open fills. The terminal
-    stop is one nanosecond after the final measurement when no next row exists.
+    Bounds are statistics period boundaries, not decisions or fills. The
+    terminal stop is the final period start plus its declared duration.
     Mean returns/signs follow registered candidate order. Invalid returns have
     a missing mean and sign zero; valid zero means also have sign zero.
     """
