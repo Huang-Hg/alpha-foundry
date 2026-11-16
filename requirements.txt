@@ -8,3 +8,5 @@ paramiko>=3          # cloud evaluation service over SSH
 # The validated Colab CUDA 13 runtime uses: pip install cupy-cuda13x
 
 jsonschema>=4
+# Policy models and optimizers are Python-owned; install a CUDA-enabled wheel for GPU mining.
+torch>=2.6,<3

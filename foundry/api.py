@@ -87,8 +87,9 @@ def mine(output: str | Path, *, session=None, proposers=None, **parameters: Unpa
             cfg = port.settings.search
             if proposers is None:
                 factory = GfnProposer if cfg.mode == 'gfn' else RandomProposer
+                placement = {'device': 'cuda' if port.settings.execution.backend == 'cuda' else 'cpu'} if cfg.mode == 'gfn' else {}
                 proposers = (factory(port.vocabulary, cfg.seed, cfg.max_tokens, port.settings.expr.max_cost,
-                    cfg.max_ts_depth, port.window_caps, len(CONTEXT_NAMES)),)
+                    cfg.max_ts_depth, port.window_caps, len(CONTEXT_NAMES), **placement),)
             signature = hashlib.sha256(json.dumps(dict(snapshot=port.context.snapshot.id,
                 parameters=asdict(port.settings)), sort_keys=True).encode()).hexdigest()
             telemetry = FileTelemetrySink(directory, ROOT / 'var' / 'monitor' / 'live.json', telemetry_bytes)

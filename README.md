@@ -100,6 +100,8 @@ Here `port` is the service port, or the local end of your tunnel. See [remote se
 
 `foundry.Candidate`, `ExternalProposer` and `CandidateGrid` connect your own programs to discovery without requiring a formula representation. The [integration guide](guides/research.md#strategy-discovery) includes examples for each workflow.
 
+Built-in GFlowNet mining learns which formulas to propose using a Python/PyTorch model. With `backend="cuda"`, policy inference and training run on the GPU alongside accelerated strategy evaluation; every proposed strategy still passes the same portfolio admission rules.
+
 Evaluation leaves the portfolio unchanged. To submit a reviewed batch:
 
 ```python

@@ -30,7 +30,7 @@ jobs:
         working-directory: guides/benchmarks/parallel-cpu-20261116
         run: sha256sum -c SHA256SUMS
       - name: Verify discovery evidence
-        working-directory: guides/benchmarks/gfn-l4-20261116
+        working-directory: guides/benchmarks/gfn-torch-l4-20261116
         run: sha256sum -c SHA256SUMS
       - name: Verify selected data snapshots
         run: sha256sum -c data/SHA256SUMS
@@ -76,16 +76,21 @@ jobs:
           tracked = {p.as_posix() for folder in ('foundry', 'validation')
                      for p in Path(folder).rglob('*') if p.suffix in suffixes}
           recorded = {name for name in manifest if name.startswith(('foundry/', 'validation/'))}
-          if tracked != recorded | {'validation/benchmarks/discovery.py'}:
+          removed = {'foundry/search/proposer/src/gfn.cpp'}
+          added = {'validation/benchmarks/discovery.py', 'foundry/search/proposer/model.py', 'foundry/search/proposer/sampling.py'}
+          migration = removed | added | {'foundry/api.py', 'foundry/__main__.py', 'foundry/search/driver.py',
+              'foundry/search/proposer/gfn.py', 'foundry/search/proposer/random.py',
+              'validation/test_policy.py', 'validation/test_architecture.py', 'build.sh', 'requirements.txt'}
+          if tracked != (recorded - removed) | added:
               raise SystemExit('Source coverage changed; publish a new authorized cloud run')
           with tarfile.open(root / 'source.tar.gz') as archive:
               for name, digest in manifest.items():
                   measured = archive.extractfile(name).read()
                   if hashlib.sha256(measured).hexdigest() != digest:
                       raise SystemExit(f'CPU evidence checksum failed: {name}')
-                  if name not in {'foundry/api.py', 'foundry/__main__.py'} and canonical(Path(name).read_bytes()) != canonical(measured):
+                  if name not in migration and canonical(Path(name).read_bytes()) != canonical(measured):
                       raise SystemExit(f'Cloud evidence is stale for: {name}')
-          discovery = Path('guides/benchmarks/gfn-l4-20261116')
+          discovery = Path('guides/benchmarks/gfn-torch-l4-20261116')
           latest = json.loads((discovery / 'measured/plan.json').read_text())['source_sha256']
           smoke = json.loads((discovery / 'smoke/plan.json').read_text())['source_sha256']
           if tracked != set(latest) or smoke != latest:
@@ -94,6 +99,8 @@ jobs:
               result = json.loads((discovery / stage / 'summary.json').read_text())
               if not result['passed'] or result['epochs'] != epochs or result['ordinary_proposals'] != epochs * batch or not result['policy_changed']:
                   raise SystemExit('Discovery learning trajectory is incomplete')
+              if result['policy_device'] != 'cuda' or result['policy_dtype'] != 'float32':
+                  raise SystemExit('Policy training did not use CUDA FP32')
           with tarfile.open(discovery / 'source.tar.gz') as archive:
               for name, digest in latest.items():
                   measured = archive.extractfile(name).read()
@@ -132,8 +139,8 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
               output.write('This job verifies saved Colab evidence; it does not execute numerical tests.\n\n')
               output.write(report)
-              discovery_base = base.replace('parallel-cpu-20261116', 'gfn-l4-20261116')
-              discovery_report = Path('guides/benchmarks/gfn-l4-20261116/README.md').read_text()
+              discovery_base = base.replace('parallel-cpu-20261116', 'gfn-torch-l4-20261116')
+              discovery_report = Path('guides/benchmarks/gfn-torch-l4-20261116/README.md').read_text()
               discovery_report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + discovery_base + match[1] + ')', discovery_report)
               output.write('\n\n' + discovery_report)
       - name: Preserve benchmark evidence
@@ -142,7 +149,7 @@ jobs:
           name: benchmark-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             guides/benchmarks/parallel-cpu-20261116/
-            guides/benchmarks/gfn-l4-20261116/
+            guides/benchmarks/gfn-torch-l4-20261116/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

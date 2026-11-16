@@ -100,6 +100,8 @@ with foundry.connect(("127.0.0.1", port)) as session:
 
 `foundry.Candidate`、`ExternalProposer` 和 `CandidateGrid` 让自己的程序直接参与策略发现，无需先转换成公式。完整接入示例见[发现流程指南](guides/research.zh-CN.md#策略发现)。
 
+内置 GFlowNet 挖掘通过 Python/PyTorch 模型学习下一批应探索的公式。使用 `backend="cuda"` 时，策略网络推理、训练和策略评价都由 GPU 加速；生成的策略仍须通过相同的组合硬准入规则。
+
 评价不会修改组合。审阅结果后，可以单独提交：
 
 ```python

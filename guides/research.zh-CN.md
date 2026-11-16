@@ -313,4 +313,6 @@ python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512}}' \
 
 直接调用现有 `foundry.mine()`，测量采样、CUDA 候选评价、奖励反馈、GFN 训练、有序准入、CEM 重配及 checkpoint 的完整流程。候选规模通过 `Search` 调整；报告同时列出阶段累计时间与端到端墙钟时间，训练与提交/重配的重叠不能重复相加。
 
-现有 GFN 是 C++ 主机神经策略核，使用 Trajectory Balance 和配对教师更新；行情张量与回测在 CUDA。`backend="cuda"` 不代表 GFN 参数训练也迁到了 GPU。该基准不启动独立 CPU 对照，不替换 GFN，也不把学习过程中同一历史窗口的准入结果称为样本外收益。
+GFN 模型定义、Trajectory Balance、配对教师和带梯度裁剪的 SGD 均在 Python/PyTorch 中实现。使用 `backend="cuda"` 时，批量网络推理和 FP32 训练使用独立 CUDA 流；CPU 处理语法、采样元数据与公式文本。CPU/portable 会话明确选择 PyTorch CPU 设备。直接构造 `GfnProposer(..., device="cuda")` 默认使用 CUDA，不静默回退。随机提案器不需要神经网络。
+
+32 单元 tanh 网络、初始字段/算子概率分配、奖励、探针门控和准入条件保持不变。NumPy 随机采样与 FP32 训练会改变旧原生学习器的随机轨迹，同一 seed 不保证相同公式。检查点采用 `foundry-gfn-torch-v1`，只包含 JSON 和数值数组，不使用 pickle，明确拒绝旧原生检查点；SGD 无动量状态。仅保留当前批次的前缀和合法动作掩码，空间为 `O(B × L × (F + A))`，不建立历史回放缓存。此基准不运行独立 CPU 对照，也不将同一历史窗口的自适应准入视为样本外收益。

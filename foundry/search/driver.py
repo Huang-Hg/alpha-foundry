@@ -1,4 +1,4 @@
-"""Injected discovery lifecycle with CPU training overlapping portfolio commands."""
+"""Injected discovery lifecycle with policy training overlapping portfolio commands."""
 from collections import Counter
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
