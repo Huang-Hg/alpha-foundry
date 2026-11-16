@@ -16,8 +16,9 @@ from foundry.types import ArrayBatch, ArraySource
 from dataclasses import asdict
 from foundry.types import Formula, EqualWeight
 from foundry.portfolio.library import Library, Member, PROTOCOL
+from foundry.types import ProgramDescriptor, ProgramSource, TensorState
 from foundry.types import ContextConflict
-from foundry.numeric.semantics import BACKTEST_SEMANTIC_VERSION
+from foundry.numeric.semantics import BACKTEST_SEMANTIC_VERSION, ORDER_SEMANTIC_VERSION
 from foundry.config import Settings
 from foundry.numeric.semantics import MOMENTS_SEMANTIC_VERSION
 from foundry.ops.registry import OPS_SEMANTIC_VERSION
@@ -173,8 +174,8 @@ class FileLibraryStore:
         return Library(tuple(member_from_json(m) for m in record['members']), study)
 
     def commit(self, expected, replacement):
-        if any(isinstance(m.source, ArraySource) and m.source.scope for m in replacement.members):
-            raise ValueError('portfolio publication requires retained array sources')
+        if any(isinstance(m.source, (ArraySource, ProgramSource)) and m.source.scope for m in replacement.members):
+            raise ValueError('portfolio publication requires retained candidate sources')
         self.path.parent.mkdir(parents=True, exist_ok=True)
         lock = self.path.with_suffix('.lock')
         try:
@@ -202,8 +203,8 @@ class MemoryLibraryStore:
         return self.library
 
     def commit(self, expected, replacement):
-        if any(isinstance(m.source, ArraySource) and m.source.scope for m in replacement.members):
-            raise ValueError('portfolio publication requires retained array sources')
+        if any(isinstance(m.source, (ArraySource, ProgramSource)) and m.source.scope for m in replacement.members):
+            raise ValueError('portfolio publication requires retained candidate sources')
         if self.library.version != expected.version:
             raise ContextConflict('portfolio changed')
         self.library = replacement
@@ -233,13 +234,20 @@ def study_snapshot(loaded: LoadedStudy, settings: Settings, precision: Precision
                   evaluation='in_sample_research', decision=loaded.market.decision_clock,
                   execution=loaded.market.execution_clock, allocation=loaded.market.allocation, precision=precision)
     identity = digest(dict(data=values['data_snapshot'], execution=values['execution_snapshot'],
-        program_execution=None if loaded.program_spec is None else loaded.program_spec.snapshot,
+        program_execution=None if loaded.program_spec is None else (loaded.program_spec.snapshot, ORDER_SEMANTIC_VERSION),
         semantics=values['implementation'], configuration=configuration, window=asdict(loaded.study),
         allocation=asdict(loaded.market.allocation), decision=values['decision'], clock=values['execution']))
     return StudySnapshot(id=identity, **values)
 
 
 def source_from_json(record):
+    if record['kind'] == 'program':
+        descriptor = record['descriptor']
+        states = tuple(TensorState(item['name'], item['dtype'], tuple(item['shape']))
+                       for item in descriptor['state_schema'])
+        restored = ProgramDescriptor(**dict(descriptor, state_schema=states,
+            features=tuple(descriptor['features']), devices=tuple(descriptor['devices'])))
+        return ProgramSource(**dict(record, descriptor=restored))
     factory = {'formula': Formula, 'scores': ArraySource, 'targets': ArraySource,
                'equal_weight': EqualWeight}[record['kind']]
     return factory(**record)

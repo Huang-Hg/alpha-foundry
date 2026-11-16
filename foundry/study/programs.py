@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
+from foundry.numeric.semantics import ORDER_SEMANTIC_VERSION
+
 from foundry.types import (
     AccountSnapshot,
     BarExecution,
@@ -28,7 +30,7 @@ if TYPE_CHECKING:
     from foundry.study.resources import Runtime
 
 
-MODEL = 'bar_orders_actual_account_v1'
+MODEL = ORDER_SEMANTIC_VERSION
 LATENCY = ('Orders are emitted only at the configured decision clock and become '
            'eligible at its compiled next base-bar open. Feedback follows every '
            'completed base bar and cannot emit orders; protection based on a '
@@ -88,7 +90,7 @@ def _plan(runtime: Runtime, descriptor: ProgramDescriptor) -> ProgramPlan:
     return ProgramPlan(device, f'explicit_{device.kind}_program_and_bar_execution', precision,
         spec.market, MODEL, execution.bar_path, execution.participation, B, H,
         execution.order_capacity, execution.command_capacity, state_bytes, window_bytes,
-        execution.command_capacity + 4 * execution.order_capacity + S,
+        execution.command_capacity + S + 4 * execution.order_capacity + 2 * (execution.order_capacity + S),
         ('market', 'limit', 'stop', 'cancel', 'amend'), LATENCY,
         'Missing or nonpositive crypto OHLC quotes cannot execute orders; spot valuation carries the last valid close, with zero before first listing.',
         identity)
@@ -105,7 +107,7 @@ def _empty(runtime: Runtime, batch: int) -> OrderCommands:
 
 
 def _event(runtime: Runtime, descriptor: ProgramDescriptor, decision: int,
-           account: AccountSnapshot) -> ProgramEvent:
+           account: AccountSnapshot, owner_quantity: FloatArray) -> ProgramEvent:
     """Copy a bounded visible window; no slice retains a future panel base."""
     xp, pipeline = runtime.backend.xp, runtime.pipeline
     start, stop = max(0, decision + 1 - descriptor.history), decision + 1
@@ -119,7 +121,7 @@ def _event(runtime: Runtime, descriptor: ProgramDescriptor, decision: int,
             value.flags.writeable = False
         eligibility.flags.writeable = False
     return ProgramEvent(int(pipeline.clock.decision_ns[decision]), history,
-                        MappingProxyType(features), eligibility, account)
+                        MappingProxyType(features), eligibility, account, owner_quantity)
 
 
 def simulate(runtime: Runtime, context: ResearchContext,
@@ -139,7 +141,9 @@ def simulate(runtime: Runtime, context: ResearchContext,
             else:
                 stream = None
             run = program.open(ProgramContext(descriptor, tuple(runtime.panel.assets), planned,
-                xp, stream, runtime.settings.account.initial_cash))
+                xp, stream, xp.full(descriptor.batch_size, runtime.settings.account.initial_cash, dtype=xp.float64),
+                descriptor.batch_size, xp.arange(descriptor.batch_size, dtype=xp.int64),
+                xp.ones(descriptor.batch_size, dtype=xp.float64), 0))
             if not isinstance(run, ProgramRun):
                 raise TypeError('program.open must return a ProgramRun with on_event, on_feedback and close')
             cleanup.callback(run.close)
@@ -147,7 +151,7 @@ def simulate(runtime: Runtime, context: ResearchContext,
             account = executor.snapshot()
             for event in range(first_event, len(spec.schedule.event_ns)):
                 decision = int(spec.schedule.decision_index[event])
-                commands = (run.on_event(_event(runtime, descriptor, decision, account))
+                commands = (run.on_event(_event(runtime, descriptor, decision, account, executor.owner_quantities(0)))
                             if decision >= runtime.pipeline.decision_start else empty)
                 feedback = executor.advance(event, commands)
                 account = feedback.account

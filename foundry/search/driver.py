@@ -37,7 +37,7 @@ class MiningDriver:
         if session.resident.persistent and not self.cfg.accept:
             raise ValueError('a persistent discovery session requires search.accept=True; use an in-memory session otherwise')
         if self.cfg.noise_control and self.cfg.seed_portfolio != 'equal':
-            raise ValueError('The noise control delays every expression book: set search.seed_portfolio=equal')
+            raise ValueError('Noise control delays candidate observations or intents: set search.seed_portfolio=equal')
         if self.cfg.seed_portfolio == 'equal' and self.cfg.accept:
             raise ValueError('An equal-weight experiment cannot overwrite the production portfolio')
         if self.cfg.objective == 'single' and (self.cfg.accept or self.cfg.noise_control):

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from foundry.rpc import schema
 from foundry.rpc.codec import candidate_from_json, decode_bundle, from_json, json_value
 from foundry.study.store import publish
-from foundry.types import CandidateGrid, ContextConflict, FamilySeed, SessionBackend
+from foundry.types import CandidateGrid, ContextConflict, FamilySeed, SessionBackend, ProgramReference
 
 if TYPE_CHECKING:
     import socket
@@ -405,6 +405,10 @@ class Server:
             result = self.backend.refresh()
         elif method == 'research.register_batch':
             result = self.backend.register(decode_bundle(payload), parameters['context'])
+        elif method == 'research.register_program':
+            result = self.backend.register_program(from_json(ProgramReference, parameters['program']), parameters['context'])
+        elif method == 'research.plan_program':
+            result = self.backend.plan_program(from_json(ProgramReference, parameters['program']), parameters['context'])
         elif method == 'research.release_batch':
             self.backend.release(parameters['lease'])
             return None

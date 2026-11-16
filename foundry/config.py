@@ -59,6 +59,7 @@ class Account:
     leverage: float = 1.
     gross_limit: float = 1.
     initial_cash: float = 1.
+    composition: Literal['shared', 'independent'] = 'shared'
 
     def __post_init__(self) -> None:
         if self.margin not in ('cash', 'isolated'):
@@ -70,12 +71,15 @@ class Account:
             raise ValueError('Cash accounts require leverage=1')
         if not math.isfinite(self.initial_cash) or self.initial_cash <= 0:
             raise ValueError('Initial quote cash must be positive and finite')
+        if self.composition not in ('shared', 'independent'):
+            raise ValueError('Account composition must be shared or independent')
 
 
 @dataclass(frozen=True)
 class Execution:
     """Bar fill rule; next_open means the next base bar after the decision."""
     fill: Literal['next_open'] = 'next_open'
+    model: Literal['targets', 'orders'] = 'targets'
     precision: Literal['paired', 'mixed'] = 'paired'
     bar_path: Literal['open_low_high_close', 'open_high_low_close'] = 'open_low_high_close'
     participation: float = 1.
@@ -87,6 +91,8 @@ class Execution:
     def __post_init__(self) -> None:
         if self.fill != 'next_open':
             raise ValueError('The target execution plan supports only next_open fills')
+        if self.model not in ('targets', 'orders'):
+            raise ValueError('Execution model must be targets or orders')
         if self.precision not in ('paired', 'mixed'):
             raise ValueError('Execution precision must be paired or mixed')
         if self.bar_path not in ('open_low_high_close', 'open_high_low_close'):
@@ -355,6 +361,11 @@ def configure(**parameters: Unpack[Parameters]) -> Settings:
             raise TypeError(f'{public_name} requires {kind.__name__}')
     selected = factories[name](**parameters)
     account = groups['account']
+    execution = groups['execution']
+    if execution.model == 'orders' and name not in ('crypto_spot', 'crypto_perpetual'):
+        raise ValueError('The orders model requires crypto Bar execution; equity settlement and corporate actions are unavailable')
+    if account.composition == 'independent' and execution.model != 'orders':
+        raise ValueError('Independent capital accounts require Execution(model="orders")')
     if name in ('us_equity', 'a_share') and groups['clock'] != Clock():
         raise ValueError('Equity data and execution plans currently require daily decision and statistics clocks')
     if (name == 'crypto_perpetual') != (account.margin == 'isolated'):

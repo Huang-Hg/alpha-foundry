@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, fields, replace
 from contextlib import AbstractContextManager
 from datetime import datetime
 import hashlib
+import json
 import re
 from types import ModuleType
 from typing import Callable, Generic, Literal, Mapping, Protocol, Sequence, TypeAlias, TypeVar, runtime_checkable
@@ -108,7 +109,7 @@ class ExecutionRiskBatch:
     means payment. Isolated-loss caps record the liquidation adjustment that
     prevents negative isolated buckets from consuming free cash. Events are
     uint8 (B,E,S), with open/funding/rebalance/intrabar stage bits 1/2/4/8.
-    Remaining arrays are (B,); UTC timestamps are int64 milliseconds, with -1
+    Remaining arrays are (B,); UTC timestamps are int64 nanoseconds, with -1
     meaning no liquidation. Max gross leverage may be infinite at nonpositive
     equity before liquidation; the JSON boundary represents nonfinite values
     as null while the device result preserves the value.
@@ -124,6 +125,7 @@ class ExecutionRiskBatch:
     ending_equity: FloatArray
     max_gross_leverage: FloatArray
     model: str
+    gross_sampling: str = 'account_event_samples'
 
 
 @dataclass(frozen=True)
@@ -302,7 +304,53 @@ class EqualWeight:
         return 0.
 
 
-Source = Formula | ArraySource | EqualWeight
+@dataclass(frozen=True)
+class ProgramReference:
+    """Explicit deployed artifact and bounded canonical JSON parameters."""
+    artifact_digest: str
+    parameters: str = '{}'
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.artifact_digest, str) or re.fullmatch('[0-9a-f]{64}', self.artifact_digest) is None:
+            raise ValueError('Program artifacts require a lowercase SHA256 digest')
+        validate_program_parameters(self.parameters)
+
+
+def validate_program_parameters(parameters: str) -> None:
+    """Validate the immutable parameter payload at its external boundary."""
+    if not isinstance(parameters, str) or len(parameters.encode('utf-8')) > 65536:
+        raise ValueError('Program parameters require at most 64KiB of canonical JSON')
+    value = json.loads(parameters)
+    if not isinstance(value, dict) or json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
+                                                allow_nan=False) != parameters:
+        raise ValueError('Program parameters require a canonical finite JSON object')
+
+
+@dataclass(frozen=True)
+class ProgramSource:
+    """Replay identity for one original program variant; scope denotes a lease."""
+    descriptor: ProgramDescriptor
+    variant: int
+    snapshot: str
+    scope: str = ''
+    complexity: float = 0.
+    kind: Literal['program'] = 'program'
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.descriptor, ProgramDescriptor):
+            raise TypeError('Program sources require a typed descriptor')
+        if type(self.variant) is not int or not 0 <= self.variant < self.descriptor.batch_size:
+            raise ValueError('Program variant must identify an original descriptor row')
+        if not isinstance(self.snapshot, str) or not self.snapshot or not isinstance(self.scope, str):
+            raise ValueError('Program sources require a snapshot and string scope')
+        if not 0 <= self.complexity <= 1 or self.kind != 'program':
+            raise ValueError('Program complexity must be in [0,1] and kind must be program')
+
+    def normalized_complexity(self, ast_cost: int, max_cost: int) -> float:
+        return self.complexity
+
+
+Source = Formula | ArraySource | ProgramSource | EqualWeight
 
 
 @dataclass(frozen=True)
@@ -373,11 +421,16 @@ class YearMetrics:
 
 @dataclass(frozen=True)
 class Metrics:
-    """Common research metrics; turnover/exposure/max_single_weight use targets.
+    """Common research metrics with an explicit activity measurement basis.
 
-    Turnover is mean absolute change per decision of the target book, not executed
-    notional. margin_bps uses this same target turnover denominator. Derivative
-    realized fees and actual account leverage are reported separately in risk.
+    target_book measures target changes per decision and sampled target exposure.
+    executed_fills sums each bar's actual filled absolute notional divided by
+    account equity after opening mark/funding/risk and before commands, then
+    divides by research decision count. Independent accounts aggregate filled
+    notional and opening equity, including unallocated cash, before the ratio.
+    Exposure uses actual account positions.
+    margin_bps uses the reported turnover denominator. Yearly attendance measures
+    exposure-active periods; derivative cashflows are reported separately in risk.
     """
     sharpe: float
     ann_ret: float
@@ -392,6 +445,7 @@ class Metrics:
     yearly: tuple[YearMetrics, ...]
     span: str
     n_periods: int
+    activity_basis: Literal['target_book', 'executed_fills'] = 'target_book'
 
 
 @dataclass(frozen=True)
@@ -410,11 +464,12 @@ class RiskSummary:
     bankrupt: bool
     ending_equity: float
     max_gross_leverage: float
+    gross_sampling: str = 'account_event_samples'
 
 
 @dataclass(frozen=True)
 class StatsRow:
-    book: Array
+    book: FloatArray | None
     returns: Array
     metrics: Metrics
     valid_returns: bool
@@ -435,6 +490,7 @@ class EvaluationRow:
     metrics: Metrics | None = None
     risk: RiskSummary | None = None
     view: tuple[float, float, float] = (float('nan'), float('nan'), float('nan'))
+    behavior_digest: str | None = None
 
 
 @dataclass(frozen=True)
@@ -528,6 +584,7 @@ class CandidateReport:
 class EvaluationReport:
     context: ResearchContext
     rows: tuple[CandidateReport, ...]
+    lease: str = ''
 
 
 @dataclass(frozen=True)
@@ -699,12 +756,13 @@ class SessionBackend(Protocol[ResidentValue]):
     def refresh(self) -> ResearchContext: ...
     def grid(self) -> DataGrid: ...
     def describe(self) -> dict: ...
-    def plan_program(self, program: StrategyProgram, context: str) -> ProgramPlan: ...
-    def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation: ...
+    def plan_program(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramPlan: ...
+    def simulate(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramSimulation: ...
     def evaluate(self, candidates: tuple[Candidate, ...], context: str) -> EvaluationReport: ...
     def evaluate_device(self, candidates: tuple[Candidate, ...], context: str) -> DeviceBatch: ...
     def commit(self, candidates: tuple[Candidate, ...], context: str) -> CommitReport: ...
     def register(self, batch: ArrayBatch, context: str) -> RegisteredBatch: ...
+    def register_program(self, program: StrategyProgram | ProgramReference, context: str) -> RegisteredBatch: ...
     def retain(self, candidates: tuple[Candidate, ...], context: str) -> RegisteredBatch: ...
     def release(self, lease: str) -> None: ...
     def diagnose(self, context: str) -> Diagnostics: ...
@@ -903,8 +961,8 @@ class ReweightResult:
 @dataclass(frozen=True)
 class PortfolioView:
     """Borrowed read-only books and return statistics for a fixed portfolio."""
-    U: FloatArray
-    W: FloatArray
+    U: FloatArray | None
+    W: FloatArray | None
     rr: FloatArray
     p: FloatArray
     metrics: Metrics
@@ -917,6 +975,7 @@ class PortfolioView:
     seed: bool
     keys: tuple[Source, ...]
     version: str
+    mean_exposure: float
 
 
 @dataclass(frozen=True)
@@ -1275,8 +1334,9 @@ class OrderStage(IntEnum):
 class OrderCommands:
     """Owned command columns (B,K), resident on the selected execution device.
 
-    Action zero pads unused slots. New IDs increase strictly within each
-    account, and (owner,id) identifies an order. Amend replaces its remaining
+    Action zero pads unused slots. Positive new IDs increase strictly within
+    each assigned owner namespace, and (owner,id) identifies an order. Internal
+    negative target-child IDs cannot be cancelled by programs. Amend replaces its remaining
     quantity and conditions and resets priority. Prices are quote currency per
     asset unit; reservation_price values funding requirements, not a fill cap.
     valid_until is inclusive UTC ns aligned to a compiled base-bar open, or
@@ -1335,9 +1395,14 @@ class AccountSnapshot:
 class ExecutionFeedback:
     """Detached bounded audit columns (B,F), valid entries counted by (B,).
 
-    Each base event is delivered once. F is K + 4*Q + S, independent of
+    Each base event is delivered once. F is bounded by
+    K + M*S + 4*Q + (M+1)*(Q+S), where M is owner count, independent of
     history length. Sequence is stable within each account; quantities are
-    unsigned fills, prices are quote/unit, fees are quote currency. Account
+    unsigned fills except owner-attributed LIQUIDATED rows, whose quantities
+    are signed owner contributions. A global liquidation row has owner=-1,
+    unsigned aggregate quantity and the global fee; owner rows allocate that
+    fee by absolute contribution. Do not sum global and owner fees twice.
+    Prices are quote/unit and fees are quote currency. Account
     reflects all event stages, including its final close valuation.
     """
     account: AccountSnapshot
@@ -1356,6 +1421,30 @@ class ExecutionFeedback:
     remaining: FloatArray
     event_ns: int
     available_ns: int
+
+
+class AccountExecutionPort(Protocol):
+    """Owned native account replacement point for bounded chronological replay.
+
+    Arrays reside on the selected device. Commands/targets use batch B, owner M
+    and asset S axes; snapshots and measured results detach their buffers.
+    """
+    batch: int
+    feedback_capacity: int
+
+    def configure_targets(self, units: tuple[str, ...], coefficients: FloatArray) -> None: ...
+    def advance(self, event: int, commands: OrderCommands, *, targets: FloatArray | None = None,
+                update_mask: Array | None = None) -> ExecutionFeedback: ...
+    def snapshot(self) -> AccountSnapshot: ...
+    def owner_quantities(self, owner: int | None = None) -> FloatArray: ...
+    def activity(self) -> FloatArray: ...
+    def bar_activity(self) -> FloatArray: ...
+    def risk(self, normalization: float) -> ExecutionRiskBatch: ...
+    def returns(self) -> FloatArray: ...
+    def equity(self) -> FloatArray: ...
+    def active(self) -> Array: ...
+    def behavior_digests(self) -> tuple[str, ...]: ...
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -1491,7 +1580,7 @@ class ProgramDescriptor:
     """
     id: str
     artifact_digest: str
-    parameter_digest: str
+    parameters: str = '{}'
     state_schema: tuple[TensorState, ...] = ()
     features: tuple[str, ...] = ()
     history: int = 1
@@ -1499,15 +1588,13 @@ class ProgramDescriptor:
     devices: tuple[Literal['cpu', 'cuda'], ...] = ('cpu',)
     seed: int = 0
     fit_at: int = NO_INFORMATION
-    protocol: int = 1
+    protocol: int = 2
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id:
             raise ValueError('Programs require a nonempty stable ID')
-        if any(not isinstance(value, str) or re.fullmatch('[0-9a-f]{64}', value) is None
-               for value in (self.artifact_digest, self.parameter_digest)):
-            raise ValueError('Program artifacts and parameters require lowercase SHA256 digests')
-        if self.protocol != 1:
+        ProgramReference(self.artifact_digest, self.parameters)
+        if self.protocol != 2:
             raise ValueError('Unsupported program protocol')
         if any(not isinstance(value, tuple) for value in (self.state_schema, self.features, self.devices)):
             raise TypeError('Program schemas, features and devices require immutable tuples')
@@ -1523,6 +1610,10 @@ class ProgramDescriptor:
         if (any(not isinstance(item, TensorState) for item in self.state_schema)
                 or len({item.name for item in self.state_schema}) != len(self.state_schema)):
             raise ValueError('Program state schema requires unique typed tensor names')
+
+    @property
+    def parameter_digest(self) -> str:
+        return hashlib.sha256(self.parameters.encode('utf-8')).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -1554,13 +1645,26 @@ class ProgramContext:
 
     CUDA callbacks must order their work on stream, including framework
     interop such as a PyTorch ExternalStream. Private state stays on device.
+    batch_size is the effective run count; descriptor.batch_size describes the
+    original candidate batch. variant_indices is resident int64 (B,), while
+    initial_cash and intent_coefficients are resident floating (B,) arrays.
+    Shared accounts scale emitted order quantities once as unscaled intents.
+    To close an actual owner quantity in full, emit that quantity divided by
+    intent_coefficients; emitting the actual quantity without this conversion
+    requests a scaled partial close. Independent accounts scale initial funding
+    and expose intent_coefficients=1, so their order quantities are literal.
+    owner is the fixed command namespace for this member.
     """
     descriptor: ProgramDescriptor
     assets: tuple[str, ...]
     plan: ProgramPlan
     xp: ModuleType
     stream: int | None
-    initial_cash: float
+    initial_cash: FloatArray
+    batch_size: int
+    variant_indices: IntArray
+    intent_coefficients: FloatArray
+    owner: int
 
 
 @dataclass(frozen=True)
@@ -1570,12 +1674,15 @@ class ProgramEvent:
     history_times is host int64 UTC ns and contains no future coordinates.
     Feature windows own their buffers so array bases cannot expose later
     observations. eligibility has the same bounded history and asset axes.
+    owner_quantity is resident signed (B,S) attribution in the actual account;
+    it does not replace the aggregate actual account or confer separate cash.
     """
     decision_ns: int
     history_times: NDArray[np.int64]
     features: Mapping[str, FloatArray]
     eligibility: BoolArray
     account: AccountSnapshot
+    owner_quantity: FloatArray
 
 
 @runtime_checkable
@@ -1596,6 +1703,39 @@ class StrategyProgram(Protocol):
     @property
     def descriptor(self) -> ProgramDescriptor: ...
     def open(self, context: ProgramContext) -> ProgramRun: ...
+
+
+@dataclass(frozen=True)
+class ProgramArtifact:
+    """Trusted deployed loader over integrity-checked bytes and explicit semantics.
+
+    The semantic version identifies the preinstalled implementation. The loader
+    interprets the payload and parameters; it must never execute supplied source
+    or deserialize Python objects. Its returned descriptor must bind this digest.
+    """
+    payload: bytes
+    semantic_version: str
+    build: Callable[[bytes, str, str], StrategyProgram]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.payload, bytes) or not self.payload:
+            raise ValueError('Program artifacts require nonempty immutable bytes')
+        if not isinstance(self.semantic_version, str) or not self.semantic_version or not callable(self.build):
+            raise ValueError('Program artifacts require explicit implementation semantics and a trusted loader')
+
+    @property
+    def digest(self) -> str:
+        version = self.semantic_version.encode('utf-8')
+        return hashlib.sha256(len(version).to_bytes(8, 'big') + version + self.payload).hexdigest()
+
+
+class ProgramCatalog(Protocol):
+    """Trusted deployment control plane; no runtime state is persisted.
+
+    resolve verifies version-bound artifact bytes and canonical parameters before
+    invoking the preinstalled loader. DeployedPrograms implements this contract.
+    """
+    def resolve(self, reference: ProgramReference) -> StrategyProgram: ...
 
 
 @dataclass(frozen=True)

@@ -33,8 +33,10 @@ from foundry.types import ArrayBatch, Formula
 from foundry.types import (Candidate, ContextConflict, DataGrid, EvaluationReport,
                                    FamilySeed, RegisteredBatch, WeightReport)
 from foundry.types import SessionBackend, CandidateGrid, FamilyResult, Diagnostics, DiscoveryReport, ExecutionSchedule
-from foundry.types import ProgramPlan, ProgramSimulation, StrategyProgram
+from foundry.types import ProgramPlan, ProgramSimulation, StrategyProgram, ProgramReference, ProgramSource, ProgramCatalog, SimulationResult
 from foundry.study import programs
+from foundry.study.program_registry import ProgramRegistry
+from foundry.study.replay_evaluation import ReplayEvaluation
 
 
 if TYPE_CHECKING:
@@ -45,25 +47,41 @@ Tensor = TypeVar('Tensor', bound=Array)
 
 
 class Ledger:
-    def __init__(self, pipeline: Pipeline, store: LibraryStore[Library], arrays: ArrayStore):
-        self.pipeline, self.store, self.arrays = pipeline, store, arrays
+    def __init__(self, runtime: Runtime, store: LibraryStore[Library], arrays: ArrayStore,
+                 registry: ProgramRegistry | None = None):
+        pipeline = runtime.pipeline
+        self.runtime, self.pipeline, self.store, self.arrays = runtime, pipeline, store, arrays
+        self.programs = (ProgramRegistry(pipeline.candidate_batch, pipeline.context.id)
+                         if registry is None else registry)
+        self.replay = ReplayEvaluation(runtime, arrays, self.programs)
+        self.orders = runtime.settings.execution.model == 'orders'
         library = store.read(pipeline.study)
-        for part in pipeline.batches(tuple(member.source for member in library.members)):
-            self._prepare_sources(part)
-            pipeline.members(part)
+        if not self.orders:
+            for part in pipeline.batches(tuple(member.source for member in library.members)):
+                self._prepare_sources(part)
+                pipeline.members(part)
         self.portfolio = self._build_portfolio(library)
 
     def _build_portfolio(self, library: Library) -> Portfolio:
         pipeline = self.pipeline
         with pipeline.resources.scope():
             members = library.members or (SEED,)
+            if self.orders:
+                coefficients = pipeline.xp.asarray([[member.weight for member in members]])
+                _, rows, replayed = self.replay.simulate(tuple(member.source for member in members), coefficients)
+                measured = rows[0]
+                reference = Reference.build(None, measured, pipeline.recency_weights, pipeline.ppy, members,
+                    not library.members, pipeline.backend, pipeline.portfolio_cfg, library.version,
+                    mean_exposure=float(replayed.mean_net[0]))
+                return Portfolio(library, reference)
             books = [book for book, _ in pipeline.members(tuple(m.source for m in members))]
             xp = pipeline.xp
             U = xp.sum(xp.stack(books) * xp.asarray([m.weight for m in members])[:, None, None], axis=0)
             U[:pipeline.decision_start] = 0
             measured = pipeline.metrics([cap_book(U, pipeline.allocation, xp)])[0]
             reference = Reference.build(U, measured, pipeline.recency_weights, pipeline.ppy, members,
-                not library.members, pipeline.backend, pipeline.portfolio_cfg, library.version)
+                not library.members, pipeline.backend, pipeline.portfolio_cfg, library.version,
+                mean_exposure=float(measured.book.sum(axis=1).mean()))
             return Portfolio(library, reference)
 
     def _admit(self, rows, portfolio: Portfolio):
@@ -74,15 +92,58 @@ class Ledger:
             for part in pipeline.batches(valid):
                 ids, measured = zip(*part)
                 plan = admission.plan(measured, portfolio.reference)
-                result = pipeline.blend(plan.books, plan.reference_book, plan.owners, plan.weights.ravel())
+                if self.orders:
+                    result = self._order_trials(measured, portfolio, plan.weights)
+                else:
+                    books = pipeline.xp.ascontiguousarray(pipeline.xp.stack([row.book for row in measured]))
+                    result = pipeline.blend(books, pipeline.xp.asarray(portfolio.reference.U, dtype=pipeline.xp.float64),
+                                            plan.owners, plan.weights.ravel())
                 proposals = admission.proposals(measured, portfolio.reference, plan, result, pipeline.ppy,
-                    f'{pipeline.spec.backend}-{pipeline.precision}', pipeline.to_host)
+                    f'{pipeline.backend.name}-{pipeline.settings.execution.precision}' if self.orders
+                    else f'{pipeline.spec.backend}-{pipeline.precision}', pipeline.to_host)
                 selected.update(zip(ids, proposals))
             return admission.admit(rows, selected)
+
+    def _order_trials(self, rows, portfolio: Portfolio, shares: FloatArray) -> SimulationResult:
+        """Batch new variants over one owner slot; bound live accounts per replay chunk."""
+        xp = self.pipeline.xp
+        current = portfolio.library.members or (SEED,)
+        sources = tuple(member.source for member in current)
+        prepared = self.replay.members(sources)
+        base = xp.asarray([member.weight for member in current])
+        groups: dict[ProgramSource | int, list[int]] = {}
+        for i, row in enumerate(rows):
+            source = row.source
+            identity = replace(source, scope='') if isinstance(source, (ArraySource, ProgramSource)) else source
+            key = replace(source, variant=0) if isinstance(source, ProgramSource) and identity not in sources else i
+            groups.setdefault(key, []).append(i)
+        B, K = shares.shape
+        returns = xp.empty((B, K, len(portfolio.reference.rr)), dtype=xp.float64)
+        statistics = xp.empty((B, K, 5), dtype=xp.float64)
+        for indices in groups.values():
+            source = rows[indices[0]].source
+            identity = replace(source, scope='') if isinstance(source, (ArraySource, ProgramSource)) else source
+            existing = identity in sources
+            at = sources.index(identity) if existing else len(sources)
+            members = prepared if existing else prepared + self.replay.members((source,))
+            if len(indices) > 1:
+                variants = xp.repeat(xp.asarray([rows[i].source.variant for i in indices], dtype=xp.int64), K)
+                members = members[:-1] + (replace(members[-1], variant_indices=variants),)
+            index = xp.asarray(indices, dtype=xp.int64)
+            part = shares[index].ravel()
+            weights = xp.zeros((len(part), len(members)), dtype=xp.float64)
+            weights[:, :len(current)] = (1 - part[:, None]) * base
+            weights[:, at] += part
+            result, _, _ = self.replay.simulate_members(members, weights, report=False)
+            returns[index] = result.returns.reshape(len(indices), K, -1)
+            statistics[index] = result.statistics.reshape(len(indices), K, 5)
+        return SimulationResult(returns.reshape(B*K, -1), statistics.reshape(B*K, 5), None)
 
     def _prepare_sources(self, sources):
         pipeline = self.pipeline
         with pipeline.resources.scope():
+            if any(isinstance(source, ProgramSource) for source in sources):
+                raise ValueError('Program candidates require Execution(model="orders") before opening the session')
             arrays = tuple(source for source in dict.fromkeys(sources) if isinstance(source, ArraySource))
             for part in pipeline.batches(arrays):
                 values, missing = [], False
@@ -108,13 +169,30 @@ class Ledger:
         pipeline = self.pipeline
         with pipeline.resources.scope():
             pipeline.validate_batch(batch)
+            if pipeline.inputs.count + self.programs.count + len(batch.ids) > pipeline.candidate_batch:
+                raise ValueError('Resident candidate capacity exceeded; release a batch or split the input')
             token, lease = pipeline.inputs.register(batch)
-            pipeline.register_arrays(lease.sources, lease.batch.values, owned=True)
+            if not self.orders:
+                pipeline.register_arrays(lease.sources, lease.batch.values, owned=True)
             candidates = tuple(Candidate(identity, source) for identity, source in zip(batch.ids, lease.sources))
             return RegisteredBatch(self.context, candidates, token)
 
+    def register_program(self, program: StrategyProgram | ProgramReference, context_id: str) -> RegisteredBatch:
+        self.require_context(context_id)
+        if not self.orders:
+            raise ValueError('Program candidates require Execution(model="orders") before opening the session')
+        token, candidates = self.programs.register(program, occupied=self.pipeline.inputs.count)
+        with ExitStack() as cleanup:
+            cleanup.callback(self.programs.release, token)
+            programs.plan(self.runtime, self.programs.read(candidates[0].source))
+            cleanup.pop_all()
+        return RegisteredBatch(self.context, candidates, token)
+
     def release_batch(self, token: str) -> None:
         with self.pipeline.resources.scope():
+            if self.programs.owns(token):
+                self.programs.release(token)
+                return
             sources = self.pipeline.inputs.release(token)
             self.pipeline.cache.arrays.drop(sources)
 
@@ -139,8 +217,16 @@ class Ledger:
                 saved = tuple(replace(source, scope='') for source in part)
                 self.arrays.put(host, saved)
                 pipeline.inputs.retained.update(zip(part, saved))
-            return RegisteredBatch(self.context, tuple(Candidate(c.id, pipeline.inputs.retained[c.source])
-                if isinstance(c.source, ArraySource) and c.source.scope else c for c in candidates), '')
+            sources = {}
+            for candidate in candidates:
+                source = candidate.source
+                if isinstance(source, ProgramSource):
+                    sources[source] = self.programs.retain(source)
+                elif isinstance(source, ArraySource) and source.scope:
+                    sources[source] = pipeline.inputs.retained[source]
+                else:
+                    sources[source] = source
+            return RegisteredBatch(self.context, tuple(Candidate(c.id, sources[c.source]) for c in candidates), '')
 
     @property
     def context(self):
@@ -161,11 +247,16 @@ class Ledger:
         rows, verdicts = [], []
         for lo in range(0, len(sources), self.pipeline.candidate_batch):
             part = sources[lo:lo + self.pipeline.candidate_batch]
-            self._prepare_sources(part)
-            measured = self.pipeline.evaluate_sources(part, report=report, delayed=delayed)
+            measured = self._evaluate_sources(part, report=report, delayed=delayed)
             rows.extend(measured)
             verdicts.extend(self._admit(measured, self.portfolio))
         return DeviceBatch(tuple(rows), tuple(verdicts))
+
+    def _evaluate_sources(self, sources, *, report=True, delayed=False):
+        if self.orders:
+            return self.replay.evaluate(sources, report=report, delayed=delayed)
+        self._prepare_sources(sources)
+        return self.pipeline.evaluate_sources(sources, report=report, delayed=delayed)
 
     def evaluate(self, candidates, context_id):
         self.require_context(context_id)
@@ -190,8 +281,7 @@ class Ledger:
         for lo in range(0, len(candidates), self.pipeline.candidate_batch):
             part = candidates[lo:lo + self.pipeline.candidate_batch]
             sources = tuple(c.source for c in part)
-            self._prepare_sources(sources)
-            rows = self.pipeline.evaluate_sources(sources, report=True)
+            rows = self._evaluate_sources(sources, report=True)
             at = 0
             while at < len(part):
                 # Same version: read-only trial batches can run together. After
@@ -207,8 +297,11 @@ class Ledger:
                     if verdict.passed:
                         durable = self.retain((candidate,), before.id).candidates[0].source
                         row = replace(row, source=durable)
-                        self.pipeline.retain_member(row)
-                        working = self._build_portfolio(working.accepted(row, verdict))
+                        if not self.orders:
+                            self.pipeline.retain_member(row)
+                        successor = (working.library.allocate(row.source, verdict.proposal.weight) if self.orders
+                                     else working.accepted(row, verdict))
+                        working = self._build_portfolio(successor)
                         # An early acceptance invalidates speculative suffixes.
                         # Use its observed distance for the next version.
                         if adaptive:
@@ -232,8 +325,7 @@ class Ledger:
             self.require_context(context_id)
             xp = self.pipeline.xp
             matrix = self.validate_weights(weights)
-            _, books, _ = self.member_states(context_id)
-            result = self.trial_weights(matrix, xp.stack(books), context_id)
+            result = self.weight_trials(matrix, context_id)
             host = self.pipeline.to_host
             return WeightReport(self.context, tuple(tuple(row) for row in host(matrix).tolist()),
                                 tuple(host(result.feasible).tolist()), tuple(host(result.utility).tolist()),
@@ -247,15 +339,37 @@ class Ledger:
             raise ValueError('weights must be a nonempty (trials, portfolio members) matrix')
         if not bool(xp.isfinite(matrix).all()) or bool((matrix < 0).any()):
             raise ValueError('portfolio component weights must be finite and nonnegative')
+        if self.runtime.settings.account.composition == 'independent' and bool((matrix.sum(1) > 1).any()):
+            raise ValueError('Independent account capital allocations cannot exceed total initial cash')
         return matrix
 
     def member_states(self, context_id):
         with self.pipeline.resources.scope():
             self.require_context(context_id)
+            if self.orders:
+                raise ValueError('Order portfolios expose member_returns; account-dependent programs have no static books')
             from_seed = self.portfolio.library.members
             members = from_seed or (SEED,)
             states = self.pipeline.members([m.source for m in members])
             return [m.weight for m in members], [b for b, _ in states], self.pipeline.xp.stack([r for _, r in states])
+
+    def member_returns(self, context_id):
+        if self.orders:
+            self.require_context(context_id)
+            members = self.portfolio.library.members or (SEED,)
+            rows = self.replay.evaluate(tuple(member.source for member in members), report=False)
+            return tuple(member.weight for member in members), self.pipeline.xp.stack([row.returns for row in rows])
+        weights, _, returns = self.member_states(context_id)
+        return tuple(weights), returns
+
+    def weight_trials(self, weights, context_id):
+        self.require_context(context_id)
+        if self.orders:
+            members = self.portfolio.library.members or (SEED,)
+            result, _, _ = self.replay.simulate(tuple(member.source for member in members), weights, report=False)
+            return self._weight_metrics(result.returns, result.statistics[:, 3], self.portfolio.reference)
+        _, books, _ = self.member_states(context_id)
+        return self.trial_weights(weights, self.pipeline.xp.stack(books), context_id)
 
 
     def trial_weights(self, weights, books, context_id):
@@ -277,14 +391,25 @@ class Ledger:
             return ReweightResult(self.context, self.context, False, 0)
         pipeline = self.pipeline
         with pipeline.resources.scope():
-            weights, books, _ = self.member_states(context_id)
-            resident_books = pipeline.xp.stack(books)
+            if self.orders:
+                members = self.portfolio.library.members
+                weights = [member.weight for member in members]
+                prepared = self.replay.members(tuple(member.source for member in members))
+            else:
+                weights, books, _ = self.member_states(context_id)
+                resident_books = pipeline.xp.stack(books)
             proposals = optimize(weights, prepare_weights(), xp=pipeline.xp, to_host=pipeline.to_host,
-                iterations=iterations, count=count, seed=seed, batch_size=pipeline.candidate_batch)
+                iterations=iterations, count=count, seed=seed, batch_size=pipeline.candidate_batch,
+                capital_budget=self.runtime.settings.account.composition == 'independent')
             try:
                 trial = next(proposals)
                 while True:
-                    trial = proposals.send(self.trial_weights(trial, resident_books, context_id))
+                    if self.orders:
+                        result, _, _ = self.replay.simulate_members(prepared, trial, report=False)
+                        score = self._weight_metrics(result.returns, result.statistics[:, 3], self.portfolio.reference)
+                    else:
+                        score = self.trial_weights(trial, resident_books, context_id)
+                    trial = proposals.send(score)
             except StopIteration as completed:
                 result = completed.value
             if not result.weights:
@@ -301,6 +426,7 @@ class Ledger:
             current = original.library.members or (SEED,)
             if values.shape != (len(current),) or not bool(xp.isfinite(values).all()) or bool((values < 0).any()):
                 raise ValueError('weights must be one finite nonnegative value per portfolio member')
+            self.validate_weights(values[None])
             members = tuple(Member(m.source, float(w)) for m, w in zip(current, values) if w > 0)
             if not members:
                 members = (Member(SEED.source, 0.),)
@@ -331,7 +457,7 @@ class LocalBackend:
     def refresh(self):
         with self.runtime.resources.scope():
             previous = self.research
-            replacement = Ledger(self.runtime.pipeline, previous.store, previous.arrays)
+            replacement = Ledger(self.runtime, previous.store, previous.arrays, previous.programs)
             previous.portfolio = replacement.portfolio
         return self.research.context
 
@@ -342,14 +468,22 @@ class LocalBackend:
     def describe(self):
         return self._describe(self.research)
 
-    def plan_program(self, program: StrategyProgram, context: str) -> ProgramPlan:
+    def plan_program(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramPlan:
         self.research.require_context(context)
         with self.runtime.resources.scope():
+            if isinstance(program, ProgramReference):
+                program = self.research.programs.resolve(program)
             return programs.plan(self.runtime, program)
 
-    def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation:
+    def simulate(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramSimulation:
         self.research.require_context(context)
+        if isinstance(program, ProgramReference):
+            program = self.research.programs.resolve(program)
         return programs.simulate(self.runtime, self.research.context, program)
+
+    def register_program(self, program: StrategyProgram | ProgramReference, context: str) -> RegisteredBatch:
+        with self.runtime.resources.scope():
+            return self.research.register_program(program, context)
 
     def evaluate(self, candidates, context):
         return evaluation_report(self.research.evaluate(candidates, context))
@@ -395,6 +529,7 @@ class LocalBackend:
         return ResidentPort(self.research)
 
     def close(self):
+        self.research.programs.close()
         self.runtime.close()
 
 
@@ -459,18 +594,25 @@ class Session:
             raise TypeError('provide a nonempty batch of typed candidates or formulas')
         if any(not isinstance(value.id, str) or not value.id for value in candidates) or len({value.id for value in candidates}) != len(candidates):
             raise ValueError('candidate IDs must be nonempty and unique')
-        if any(not isinstance(value.source, (Formula, ArraySource, EqualWeight)) for value in candidates):
+        if any(not isinstance(value.source, (Formula, ArraySource, ProgramSource, EqualWeight)) for value in candidates):
             raise TypeError('candidate sources must use a published source type')
         return tuple(candidates)
 
-    def evaluate(self, inputs: CandidateInput) -> EvaluationReport:
+    def evaluate(self, inputs: CandidateInput | StrategyProgram | ProgramReference) -> EvaluationReport:
+        if isinstance(inputs, (StrategyProgram, ProgramReference)):
+            registered = self.register(inputs)
+            with ExitStack() as cleanup:
+                cleanup.callback(self.release, registered)
+                report = self._backend.evaluate(registered.candidates, self._context.id)
+                cleanup.pop_all()
+            return replace(report, lease=registered.lease)
         return self._backend.evaluate(self._candidates(inputs), self._context.id)
 
-    def plan_program(self, program: StrategyProgram) -> ProgramPlan:
+    def plan_program(self, program: StrategyProgram | ProgramReference) -> ProgramPlan:
         """Inspect devices, bounded state and order latency before simulation."""
         return self._backend.plan_program(program, self._context.id)
 
-    def simulate(self, program: StrategyProgram) -> ProgramSimulation:
+    def simulate(self, program: StrategyProgram | ProgramReference) -> ProgramSimulation:
         """Audit a fresh actual account; portfolio admission requires replay."""
         return self._backend.simulate(program, self._context.id)
 
@@ -488,14 +630,24 @@ class Session:
                       else tuple(Candidate(row.id, row.source) for row in report.rows))
         result = self._backend.commit(candidates, report.context.id)
         self._context = result.context
+        if isinstance(report, EvaluationReport) and report.lease:
+            self.release(report)
         return result
 
-    def register(self, values: FloatArray, *, kind: Literal['scores', 'targets'],
-                 ids: Sequence[str], grid: DataGrid, producer: str, observed_at: IntArray,
-                 fit_at: IntArray, complexity: Sequence[float] | None = None,
+    def register(self, values: FloatArray | StrategyProgram | ProgramReference, *, kind: Literal['scores', 'targets'] | None = None,
+                 ids: Sequence[str] | None = None, grid: DataGrid | None = None, producer: str | None = None,
+                 observed_at: IntArray | None = None, fit_at: IntArray | None = None, complexity: Sequence[float] | None = None,
                  unit: Literal['score', 'equity_fraction', 'quantity', 'notional'] = 'score',
                  update_mask: BoolArray | None = None) -> RegisteredBatch:
         """Own a bounded resident batch until release; this command does not persist it."""
+        if isinstance(values, (StrategyProgram, ProgramReference)):
+            if any(value is not None for value in (kind, ids, grid, producer, observed_at, fit_at, complexity, update_mask)) or unit != 'score':
+                raise TypeError('Program registration takes only its program or deployed reference')
+            registered = self._backend.register_program(values, self._context.id)
+            self._leases.add(registered.lease)
+            return registered
+        if any(value is None for value in (kind, ids, grid, producer, observed_at, fit_at)):
+            raise TypeError('Array registration requires kind, ids, grid, producer, observed_at and fit_at')
         batch = ArrayBatch(kind, tuple(ids), values, grid.snapshot, producer, grid.decision_times, grid.assets,
                            observed_at, fit_at, None if complexity is None else tuple(complexity), unit, update_mask)
         registered = self._backend.register(batch, self._context.id)
@@ -506,9 +658,9 @@ class Session:
         """Return durable candidate references; the original lease still needs release."""
         return self._backend.retain(self._candidates(inputs), self._context.id)
 
-    def release(self, batch: RegisteredBatch) -> None:
+    def release(self, batch: RegisteredBatch | EvaluationReport) -> None:
         """End a resident lease; retained references remain usable after release."""
-        if not isinstance(batch, RegisteredBatch) or not batch.lease:
+        if not isinstance(batch, (RegisteredBatch, EvaluationReport)) or not batch.lease:
             raise ValueError('release requires a registered resident batch lease')
         self._backend.release(batch.lease)
         self._leases.discard(batch.lease)
@@ -724,17 +876,24 @@ class ResidentPort:
     def reference(self) -> PortfolioView:
         self.context
         ref = self.__ledger.portfolio.reference
-        return PortfolioView(self._readonly(ref.U), self._readonly(ref.W), self._readonly(ref.rr), self._readonly(ref.p),
-            ref.metrics, ref.sharpe, ref.cagr, ref.maxdd, ref.wsharpe, ref.recent_growth, ref.n, ref.seed, ref.keys, ref.version)
+        return PortfolioView(None if ref.U is None else self._readonly(ref.U),
+            None if ref.W is None else self._readonly(ref.W), self._readonly(ref.rr), self._readonly(ref.p),
+            ref.metrics, ref.sharpe, ref.cagr, ref.maxdd, ref.wsharpe, ref.recent_growth, ref.n, ref.seed, ref.keys,
+            ref.version, ref.mean_exposure)
 
     def member_states(self):
         weights, books, returns = self.__ledger.member_states(self.context.id)
         return tuple(weights), tuple(self._readonly(book) for book in books), self._readonly(returns)
 
+    def member_returns(self) -> tuple[tuple[float, ...], FloatArray]:
+        weights, returns = self.__ledger.member_returns(self.context.id)
+        return weights, self._readonly(returns)
+
     def evaluate(self, candidates: tuple[Candidate, ...], *, report=True, delayed=False) -> DeviceBatch:
         batch = self.__ledger.evaluate_device(tuple(c.source for c in candidates), self.context.id, report=report, delayed=delayed)
-        rows = tuple(replace(row, book=self._readonly(row.book), returns=self._readonly(row.returns))
-                     if row.book is not None else replace(row) for row in batch.rows)
+        rows = tuple(replace(row, book=None if row.book is None else self._readonly(row.book),
+                             returns=None if row.returns is None else self._readonly(row.returns))
+                     for row in batch.rows)
         return DeviceBatch(rows, batch.verdicts)
 
     def fingerprints(self, books: FloatArray) -> tuple:
@@ -742,14 +901,14 @@ class ResidentPort:
         return tuple(self.__ledger.pipeline.fingerprints(books))
 
     def trial_weights(self, weights: FloatArray) -> WeightTrials:
-        _, books, _ = self.member_states()
         with self.__ledger.pipeline.resources.scope():
             matrix = self.__ledger.validate_weights(weights)
-            return self.__ledger.trial_weights(matrix, self.xp.stack(books), self.context.id)
+            return self.__ledger.weight_trials(matrix, self.context.id)
 
 
 def open_session(settings: Settings, portfolio, describe: Callable[[Ledger], dict], discovery: DiscoveryServices,
-                 *, initial: PortfolioReport | None = None, persist: bool = True) -> Session:
+                 *, initial: PortfolioReport | None = None, persist: bool = True,
+                 programs: ProgramCatalog | None = None) -> Session:
     from foundry.study.resources import configured_study, open_runtime
     study = configured_study(settings)
     with ExitStack() as cleanup:
@@ -767,7 +926,9 @@ def open_session(settings: Settings, portfolio, describe: Callable[[Ledger], dic
             library = disk.read(study) if disk is not None else Library((), study)
         store = disk if disk is not None and persist else MemoryLibraryStore(library)
         arrays = FileArrayStore(path(settings.portfolio.artifact_dir))
+        registry = ProgramRegistry(runtime.pipeline.candidate_batch, runtime.pipeline.context.id, programs)
+        cleanup.callback(registry.close)
         with runtime.resources.scope():
-            session = Session(LocalBackend(runtime, Ledger(runtime.pipeline, store, arrays), describe, discovery))
+            session = Session(LocalBackend(runtime, Ledger(runtime, store, arrays, registry), describe, discovery))
         cleanup.pop_all()
         return session

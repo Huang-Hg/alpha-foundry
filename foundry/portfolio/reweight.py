@@ -42,7 +42,8 @@ class ReweightProposal:
 
 def optimize(base: FloatArray, kernel: WeightKernel, *, xp: ModuleType,
              to_host: Callable[[Array], HostArray], iterations: int = 3,
-             count: int = 32, seed: int = 1, batch_size: int = 256
+             count: int = 32, seed: int = 1, batch_size: int = 256,
+             capital_budget: bool = False
              ) -> Generator[FloatArray, WeightTrials, ReweightProposal]:
     """Yield resident (B,N) trial weights and receive their hard admission scores.
 
@@ -59,6 +60,8 @@ def optimize(base: FloatArray, kernel: WeightKernel, *, xp: ModuleType,
         deletes = xp.broadcast_to(base, (len(base), len(base))).copy()
         deletes[xp.arange(len(base)), xp.arange(len(base))] = 0
         trials = xp.concatenate((weights, base[None], deletes))
+        if capital_budget:
+            trials = trials / xp.maximum(trials.sum(1), 1)[:, None]
         score_parts = []
         for lo in range(0, len(trials), batch_size):
             part = trials[lo:lo + batch_size]

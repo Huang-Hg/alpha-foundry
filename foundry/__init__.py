@@ -8,16 +8,17 @@ from foundry.search.objective import Discovery
 from foundry.search.proposer.external import ExternalProposer
 from foundry.search.proposer.gfn import GfnProposer
 from foundry.search.proposer.random import RandomProposer
+from foundry.study.program_registry import DeployedPrograms
 from foundry.types import Candidate, CandidateGrid, DataGrid, Fold, Formula, NO_INFORMATION
 from foundry.types import (AccountSnapshot, ExecutionFeedback, OrderAction, OrderCommands, OrderReason,
                            OrderSnapshot, OrderStage, OrderStatus, OrderType, ProgramContext,
                            ProgramDescriptor, ProgramEvent, ProgramPlan, ProgramRun, ProgramSimulation,
-                           StrategyProgram, TensorState)
+                           StrategyProgram, TensorState, ProgramArtifact, ProgramCatalog, ProgramReference, ProgramSource)
 
 __all__ = ('Account', 'Clock', 'Execution', 'Sizing', 'NO_INFORMATION',
            'AccountSnapshot', 'ExecutionFeedback', 'OrderAction', 'OrderCommands', 'OrderReason',
            'OrderSnapshot', 'OrderStage', 'OrderStatus', 'OrderType', 'ProgramContext',
            'ProgramDescriptor', 'ProgramEvent', 'ProgramPlan', 'ProgramRun', 'ProgramSimulation',
-           'StrategyProgram', 'TensorState',
+           'StrategyProgram', 'TensorState', 'DeployedPrograms', 'ProgramArtifact', 'ProgramCatalog', 'ProgramReference', 'ProgramSource',
            'CPU', 'open', 'connect', 'serve', 'export', 'schema', 'mine', 'import_perpetual', 'benchmark', 'DataGrid',
            'Discovery', 'ExternalProposer', 'GfnProposer', 'RandomProposer', 'Candidate', 'CandidateGrid', 'Formula', 'Fold', 'walk_forward', 'CUDA', 'Admission', 'Operators', 'Search', 'Single', 'Monitor')

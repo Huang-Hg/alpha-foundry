@@ -23,7 +23,7 @@ from foundry.types import (
     Array, ArrayBatch, Candidate, CandidateGrid, CommitReport, ContextConflict, DataGrid, Diagnostics, EvaluationReport,
     FamilyResult, FamilySeed, PortfolioReport, RegisteredBatch, ResearchContext,
     ReweightResult, WeightCommit, WeightReport,
-    ProgramPlan, ProgramSimulation, StrategyProgram,
+    ProgramPlan, ProgramSimulation, StrategyProgram, ProgramReference,
 )
 
 if TYPE_CHECKING:
@@ -242,8 +242,10 @@ class RemoteBackend:
     def evaluate(self, candidates: tuple[Candidate, ...], context: str) -> EvaluationReport:
         return self._call('research.evaluate', dict(context=context, candidates=[asdict(c) for c in candidates]), EvaluationReport)
 
-    def plan_program(self, program: StrategyProgram, context: str) -> ProgramPlan:
-        raise ValueError('Program instances require an in-process session; remote programs require explicit versioned artifact deployment')
+    def plan_program(self, program: StrategyProgram | ProgramReference, context: str) -> ProgramPlan:
+        if not isinstance(program, ProgramReference):
+            raise TypeError('Remote programs require an explicit deployed ProgramReference')
+        return self._call('research.plan_program', dict(context=context, program=asdict(program)), ProgramPlan)
 
     def simulate(self, program: StrategyProgram, context: str) -> ProgramSimulation:
         raise ValueError('Program instances require an in-process session; remote programs require explicit versioned artifact deployment')
@@ -260,6 +262,11 @@ class RemoteBackend:
     def register(self, batch: ArrayBatch, context: str) -> RegisteredBatch:
         payload = encode_bundle(batch)
         return self._call('research.register_batch', dict(context=context, bytes=len(payload)), RegisteredBatch, payload)
+
+    def register_program(self, program: StrategyProgram | ProgramReference, context: str) -> RegisteredBatch:
+        if not isinstance(program, ProgramReference):
+            raise TypeError('Remote registration requires an explicit deployed ProgramReference')
+        return self._call('research.register_program', dict(context=context, program=asdict(program)), RegisteredBatch)
 
     def retain(self, candidates: tuple[Candidate, ...], context: str) -> RegisteredBatch:
         return self._call('research.retain', dict(context=context, candidates=[asdict(c) for c in candidates]), RegisteredBatch)

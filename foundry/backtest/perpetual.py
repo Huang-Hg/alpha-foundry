@@ -37,7 +37,8 @@ def simulation_result(arrays, statistics):
 
 def concatenate_results(results, start, xp):
     risk = ExecutionRiskBatch(*(xp.concatenate([getattr(r.risk, f.name) for r in results])
-                                for f in fields(ExecutionRiskBatch)[:-1]), PERPETUAL_MODEL)
+                                for f in fields(ExecutionRiskBatch) if f.name not in ('model', 'gross_sampling')),
+                              PERPETUAL_MODEL, results[0].risk.gross_sampling)
     return SimulationResult(xp.concatenate([r.returns[:, start:] for r in results]),
                             xp.concatenate([r.statistics for r in results]), risk)
 

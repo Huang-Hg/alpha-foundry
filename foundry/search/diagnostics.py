@@ -145,7 +145,7 @@ def diagnose(port: ResidentPort, archive: Archive | None = None, *, gate: Single
     """Describe portfolio gaps without changing the portfolio or archive."""
     with port.scope():
         xp, ref = port.xp, port.reference
-        weights, _, member_returns = port.member_states()
+        weights, member_returns = port.member_returns()
         r, weights = ref.rr, xp.asarray(weights)
         reference_vectors, _ = standardized(xp.concatenate((ref.rr[None], member_returns)), xp)
         archive_vectors = xp.empty((0, len(ref.rr))) if archive is None else archive.vectors(port)
@@ -155,7 +155,7 @@ def diagnose(port: ResidentPort, archive: Archive | None = None, *, gate: Single
         member_vol = member_returns.std(1)
         values = xp.concatenate((xp.asarray([ref.wsharpe / 3, ref.sharpe / 3, ref.recent_growth, ref.cagr]),
             xp.stack((xp.sum(weights * weights), xp.sum(weights * member_vol) * port.ppy ** .5,
-                      xp.mean(xp.sum(ref.W, axis=1)), xp.asarray(len(weights) / 40))),
+                      xp.asarray(ref.mean_exposure), xp.asarray(len(weights) / 40))),
             means / xp.maximum(sig, 1e-8),
             xp.stack((xp.asarray(0. if archive is None else len(archive.items) / max(1, archive.capacity)),
                       xp.mean(archive_vectors @ reference_vectors[0]) if len(archive_vectors) else xp.asarray(0.)))))

@@ -2,6 +2,7 @@
  * All numerical decisions use R (FP32 or paired FP32); double is interchange.
  * A synchronized linear OHLC path defines order/mark crossing chronology. */
 #pragma once
+#include "order_digest.hpp"
 #ifdef __CUDACC__
 #define ORDER_FN __device__ __forceinline__
 #else
@@ -13,8 +14,8 @@ enum { TRADE_OPEN,TRADE_HIGH,TRADE_LOW,TRADE_CLOSE,VOLUME,MARK_OPEN,MARK_HIGH,MA
        FEE_BUY,FEE_SELL,FUNDING_RATE,FUNDING_MARK,MAINTENANCE,LIQ_FEE,QTY_STEP,PRICE_TICK,PANELS };
 enum { BUY_ALLOWED,SELL_ALLOWED,QUOTE_VALID,RULES };
 enum { QUANTITY,MARGIN,LAST_MARK,ENTRY,ASSET_VALUES };
-enum { CASH,EQUITY,PREVIOUS,RESERVED,REALIZED,FEES,FUNDING,LIQUIDATION_FEES,ISOLATED_LOSS,MAX_GROSS,MEASUREMENT_RETURN,MEASUREMENT_EQUITY,CASH_VALUES };
-enum { HIGH_ID,NEXT_SEQUENCE,LIQUIDATIONS,BANKRUPT,META_VALUES };
+enum { CASH,EQUITY,PREVIOUS,RESERVED,REALIZED,FEES,FUNDING,LIQUIDATION_FEES,ISOLATED_LOSS,MAX_GROSS,MEASUREMENT_RETURN,MEASUREMENT_EQUITY,BAR_TRADED_NOTIONAL,OPENING_EQUITY,CASH_VALUES };
+enum { UNUSED_HIGH_ID,NEXT_SEQUENCE,LIQUIDATIONS,BANKRUPT,FIRST_LIQUIDATION,META_VALUES };
 enum { ID,OWNER,ASSET,SIDE,TYPE,EXPIRY,PRIORITY,REDUCE,ATTEMPTED,ORDER_INTS };
 enum { REMAINING,PRICE,RESERVATION_PRICE,ORDER_RESERVE,TOTAL_QUANTITY,RESERVED_QUANTITY,ORDER_VALUES };
 enum { ACTION,C_OWNER,C_ID,C_ASSET,C_SIDE,C_TYPE,C_EXPIRY,C_REDUCE,COMMAND_INTS };
@@ -24,6 +25,7 @@ enum { A_QUANTITY,A_PRICE,A_FEE,A_REMAINING,AUDIT_VALUES };
 enum { ACCEPTED=1,PARTIAL=2,FILLED=3,CANCELLED=4,REJECTED=5,EXPIRED=6,LIQUIDATED=7 };
 enum { NONE=0,CAPACITY=1,INSUFFICIENT_FUNDS=2,NOT_TRADABLE=3,UNKNOWN_ORDER=4,INVALID_ORDER=5,
        GROSS_LIMIT=6,REDUCE_ONLY=7,EXPIRED_REASON=8,LIQUIDATION_REASON=9 };
+enum { TURNOVER,GROSS_SUM,NET_SUM,MAX_ASSET,FILL_COUNT,MEASUREMENTS,ACTIVITY_VALUES };
 enum { COMMAND_STAGE=1,OPEN_STAGE=2,FIRST_STAGE=3,SECOND_STAGE=4,CLOSE_STAGE=5,FUNDING_STAGE=6,LIQUIDATION_STAGE=7 };
 
 template<class R> ORDER_FN R absolute(R x) {return x<R(0.)?-x:x;}
@@ -47,7 +49,7 @@ template<class R> ORDER_FN bool on_grid(R amount,R step) {
 struct Input {
     const double* panels;
     const unsigned char* rules;
-    long long assets,capacity,commands,audit_capacity,time;
+    long long assets,capacity,commands,audit_capacity,time,owners;
     int isolated,path,measured;
     double leverage,gross_limit,participation;
 };
@@ -63,11 +65,25 @@ struct State {
     long long* audit_ints;
     double* audit_values;
     long long* audit_count;
+    double* owner_quantity;
+    long long* owner_highwater;
+    const double* targets;
+    const unsigned char* target_updates;
+    const long long* target_units;
+    const double* coefficients;
+    double* pending_targets;
+    unsigned char* target_dirty;
+    double* activity;
+    unsigned int* digest;
 };
 
 template<class R> struct Account {
     Input in;
     State st;
+    ORDER_FN R owned(long long owner,long long a) const {return R(st.owner_quantity[owner*in.assets+a]);}
+    ORDER_FN void set_owned(long long owner,long long a,R value) {st.owner_quantity[owner*in.assets+a]=double(value);}
+    ORDER_FN void hash_integer(long long value) {foundry_order_digest::integer(st.digest,(unsigned long long)value);}
+    ORDER_FN void hash_number(R value) {foundry_order_digest::number(st.digest,double(value));}
     ORDER_FN R panel(int f,long long a) const {return R(in.panels[f*in.assets+a]);}
     ORDER_FN R asset(long long a,int f) const {return R(st.assets[a*ASSET_VALUES+f]);}
     ORDER_FN void set_asset(long long a,int f,R value) {st.assets[a*ASSET_VALUES+f]=double(value);}
@@ -78,6 +94,8 @@ template<class R> struct Account {
     ORDER_FN void set_ov(long long q,int f,R value) {st.order_values[q*ORDER_VALUES+f]=double(value);}
     ORDER_FN void audit(long long owner,long long id,long long a,int status,int reason,int stage,
                         R quantity=R(0.),R price=R(0.),R fee=R(0.),R remaining=R(0.)) {
+        hash_integer(status);hash_integer(reason);hash_integer(stage);hash_integer(owner);hash_integer(id);hash_integer(a);
+        hash_number(quantity);hash_number(price);hash_number(fee);hash_number(remaining);
         const long long row=(*st.audit_count)++;
         long long* i=st.audit_ints+row*AUDIT_INTS;
         double* v=st.audit_values+row*AUDIT_VALUES;
@@ -91,11 +109,11 @@ template<class R> struct Account {
             if(q!=except&&st.order_ints[q*ORDER_INTS+ID])value+=ov(q,ORDER_RESERVE);
         return value;
     }
-    ORDER_FN R reserved_quantity(long long a,int side,long long except=-1) const {
+    ORDER_FN R reserved_quantity(long long a,int side,long long except=-1,long long owner=-1) const {
         R value(0.);
         for(long long q=0;q<in.capacity;++q) {
             const long long* i=st.order_ints+q*ORDER_INTS;
-            if(q!=except&&i[ID]&&i[ASSET]==a&&i[SIDE]==side)value+=ov(q,RESERVED_QUANTITY);
+            if(q!=except&&i[ID]&&i[ASSET]==a&&i[SIDE]==side&&(owner<0||i[OWNER]==owner))value+=ov(q,RESERVED_QUANTITY);
         }
         return value;
     }
@@ -114,6 +132,7 @@ template<class R> struct Account {
         const R eq=equity(),g=gross();
         set_cash(EQUITY,eq);set_cash(RESERVED,reserved());
         if(eq>R(0.))set_cash(MAX_GROSS,maximum(cash(MAX_GROSS),g/eq));
+        else if(g>R(0.))set_cash(MAX_GROSS,R(1.)/R(0.));
     }
     ORDER_FN void terminal(long long q,int status,int reason,int stage) {
         audit(oi(q,OWNER),oi(q,ID),oi(q,ASSET),status,reason,stage,R(0.),R(0.),R(0.),ov(q,REMAINING));
@@ -136,9 +155,17 @@ template<class R> struct Account {
         set_cash(ISOLATED_LOSS,cash(ISOLATED_LOSS)+maximum(-balance,R(0.)));
         set_asset(a,QUANTITY,R(0.));set_asset(a,MARGIN,R(0.));set_asset(a,ENTRY,R(0.));
         ++st.meta[LIQUIDATIONS];
+        if(st.meta[FIRST_LIQUIDATION]<0)st.meta[FIRST_LIQUIDATION]=in.time;
         audit(-1,0,a,LIQUIDATED,LIQUIDATION_REASON,stage,absolute(q),mark,fee);
+        R claims(0.);for(long long owner=0;owner<in.owners;++owner)claims+=absolute(owned(owner,a));
+        for(long long owner=0;owner<in.owners;++owner) {
+            const R contribution=owned(owner,a);
+            if(contribution!=R(0.))audit(owner,0,a,LIQUIDATED,LIQUIDATION_REASON,stage,contribution,mark,
+                claims>R(0.)?fee*absolute(contribution)/claims:R(0.));
+            set_owned(owner,a,R(0.));st.target_dirty[owner*in.assets+a]=0;
+        }
         for(long long order=0;order<in.capacity;++order)
-            if(oi(order,ID)&&oi(order,ASSET)==a&&oi(order,REDUCE))
+            if(oi(order,ID)&&oi(order,ASSET)==a&&(oi(order,REDUCE)||oi(order,ID)<0))
                 terminal(order,CANCELLED,REDUCE_ONLY,stage);
     }
     ORDER_FN void mark(long long a,R price) {
@@ -146,18 +173,19 @@ template<class R> struct Account {
         set_asset(a,LAST_MARK,price);
     }
     ORDER_FN void risk(int stage) {
+        refresh();
         if(!in.isolated)return;
         for(long long a=0;a<in.assets;++a)
             if(asset(a,QUANTITY)!=R(0.)&&asset(a,MARGIN)<=panel(MAINTENANCE,a)*absolute(asset(a,QUANTITY))*asset(a,LAST_MARK))
                 liquidate(a,stage);
     }
-    ORDER_FN void command(long long k) {
-        const long long* c=st.command_ints+k*COMMAND_INTS;
-        const double* v=st.command_values+k*COMMAND_VALUES;
+    ORDER_FN void command_values(const long long* c,const double* v,bool target=false) {
         if(!c[ACTION])return;
+        hash_integer(100);for(int f=0;f<COMMAND_INTS;++f)hash_integer(c[f]);
+        for(int f=0;f<COMMAND_VALUES;++f)foundry_order_digest::number(st.digest,v[f]);
         long long found=-1,slot=-1;
         for(long long q=0;q<in.capacity;++q) {
-            if(oi(q,ID)==c[C_ID])found=q;
+            if(oi(q,ID)==c[C_ID]&&oi(q,OWNER)==c[C_OWNER])found=q;
             if(!oi(q,ID)&&slot<0)slot=q;
         }
         if(c[ACTION]!=1) {
@@ -167,10 +195,10 @@ template<class R> struct Account {
             if(c[ACTION]==2) {terminal(found,CANCELLED,NONE,COMMAND_STAGE);return;}
             slot=found;
         } else {
-            if(c[C_ID]<=st.meta[HIGH_ID]) {
+            if(!target&&c[C_ID]<=st.owner_highwater[c[C_OWNER]]) {
                 audit(c[C_OWNER],c[C_ID],c[C_ASSET],REJECTED,INVALID_ORDER,COMMAND_STAGE);return;
             }
-            st.meta[HIGH_ID]=c[C_ID];
+            if(!target)st.owner_highwater[c[C_OWNER]]=c[C_ID];
         }
         const long long a=c[C_ASSET];
         const R quantity(v[C_QUANTITY]),price(v[C_PRICE]),estimate(v[C_RESERVATION_PRICE]);
@@ -181,17 +209,22 @@ template<class R> struct Account {
         else if(!on_grid(quantity,panel(QTY_STEP,a)))reason=INVALID_ORDER;
         else if(c[C_TYPE]!=1&&!on_grid(price,panel(PRICE_TICK,a)))reason=INVALID_ORDER;
         const bool reducing=(!in.isolated&&c[C_SIDE]<0)||c[C_REDUCE];
+        const R owner_position=owned(c[C_OWNER],a);
         const R owned=asset(a,QUANTITY);
         const R available=owned*R(double(c[C_SIDE]))<R(0.)
             ?maximum(absolute(owned)-reserved_quantity(a,int(c[C_SIDE]),slot),R(0.)):R(0.);
+        const R owner_available=owner_position*R(double(c[C_SIDE]))<R(0.)
+            ?maximum(absolute(owner_position)-reserved_quantity(a,int(c[C_SIDE]),slot,c[C_OWNER]),R(0.)):R(0.);
         const R closing=minimum(quantity,available);
         R reserve(0.);
         if(!reason&&reducing) {
             if((owned==R(0.)||owned*R(double(c[C_SIDE]))>=R(0.))
-                    ||quantity>available)reason=REDUCE_ONLY;
+                    ||quantity>available||quantity>owner_available)reason=REDUCE_ONLY;
         } else if(!reason) {
             reserve=required_reserve(a,int(c[C_SIDE]),quantity,estimate,closing);
-            if(reserve>cash()-reserved(slot))reason=INSUFFICIENT_FUNDS;
+            if(reserve>cash()-reserved(slot)) {
+                if(target)reserve=maximum(cash()-reserved(slot),R(0.));else reason=INSUFFICIENT_FUNDS;
+            }
         }
         if(reason) {
             audit(c[C_OWNER],c[C_ID],a,REJECTED,reason,COMMAND_STAGE,R(0.),R(0.),R(0.),quantity);return;
@@ -233,10 +266,11 @@ template<class R> struct Account {
     ORDER_FN void fill(long long order,R price,R* capacity,int stage) {
         const long long a=oi(order,ASSET);const int side=int(oi(order,SIDE));
         const R original=ov(order,REMAINING);
+        const long long owner=oi(order,OWNER);
         if(!in.rules[(side>0?BUY_ALLOWED:SELL_ALLOWED)*in.assets+a])return;
         if(oi(order,REDUCE)) {
             const R owned=asset(a,QUANTITY);
-            if(owned==R(0.)||owned*R(double(side))>=R(0.)) {
+            if(owned==R(0.)||owned*R(double(side))>=R(0.)||this->owned(owner,a)*R(double(side))>=R(0.)) {
                 terminal(order,REJECTED,REDUCE_ONLY,stage);return;
             }
         }
@@ -246,6 +280,7 @@ template<class R> struct Account {
         const R available_closing=maximum(absolute(owned)-other_closing,R(0.));
         const bool locked=owned*R(double(side))<R(0.)&&other_closing>R(0.);
         if(oi(order,REDUCE)||locked)amount=minimum(amount,available_closing);
+        if(oi(order,REDUCE))amount=minimum(amount,maximum(absolute(this->owned(owner,a))-reserved_quantity(a,side,order,owner),R(0.)));
         amount=quantize(amount,panel(QTY_STEP,a));
         if(amount<=R(0.))return;
         int reason=NONE;
@@ -261,6 +296,9 @@ template<class R> struct Account {
         }
         if(amount>R(0.)) {
             const R old=asset(a,QUANTITY),delta=R(double(side))*amount,next=old+delta;
+            set_cash(BAR_TRADED_NOTIONAL,cash(BAR_TRADED_NOTIONAL)+amount*price);
+            st.activity[FILL_COUNT]=double(R(st.activity[FILL_COUNT])+R(1.));
+            set_owned(owner,a,this->owned(owner,a)+delta);
             const R fee=amount*price*panel(side>0?FEE_BUY:FEE_SELL,a);
             const R change=cash_change(a,side,amount,price);
             if(in.isolated) {
@@ -288,7 +326,33 @@ template<class R> struct Account {
         if(!full&&oi(order,ID))terminal(order,REJECTED,reason,stage);
         else if(oi(order,ID)&&cash()<reserved())terminal(order,REJECTED,INSUFFICIENT_FUNDS,stage);
         else if(oi(order,ID)&&oi(order,REDUCE)&&asset(a,QUANTITY)==R(0.))terminal(order,REJECTED,REDUCE_ONLY,stage);
-        if(in.isolated)risk(stage);
+        risk(stage);
+    }
+    ORDER_FN void targets(long long owner) {
+        const R basis=equity();
+        for(long long a=0;a<in.assets;++a) {
+            const long long index=owner*in.assets+a;
+            if(st.target_updates[index]) {
+                hash_integer(101);hash_integer(owner);hash_integer(a);hash_integer(st.target_units[owner]);
+                foundry_order_digest::number(st.digest,st.targets[index]);
+                foundry_order_digest::number(st.digest,st.coefficients[owner]);
+                st.pending_targets[index]=st.targets[index];st.target_dirty[index]=1;
+                for(long long q=0;q<in.capacity;++q)
+                    if(oi(q,ID)<0&&oi(q,OWNER)==owner&&oi(q,ASSET)==a)terminal(q,CANCELLED,NONE,COMMAND_STAGE);
+            }
+            if(!st.target_dirty[index]||!in.rules[QUOTE_VALID*in.assets+a])continue;
+            const R price=panel(TRADE_OPEN,a);
+            R desired=R(st.pending_targets[index])*R(st.coefficients[owner]);
+            if(st.target_units[owner]==0)desired*=basis/price;
+            else if(st.target_units[owner]==2)desired/=price;
+            const R delta=desired-owned(owner,a);
+            st.target_dirty[index]=0;
+            const R quantity=quantize(absolute(delta),panel(QTY_STEP,a));
+            if(quantity<=R(0.))continue;
+            const long long c[COMMAND_INTS]={1,owner,-(a+1),a,delta>R(0.)?1:-1,1,-1,0};
+            const double v[COMMAND_VALUES]={double(quantity),0.,double(price)};
+            command_values(c,v,true);
+        }
     }
     ORDER_FN R path_value(bool mark_price,long long a,int point) const {
         int field;
@@ -302,6 +366,19 @@ template<class R> struct Account {
     }
     ORDER_FN void run(R* capacity) {
         *st.audit_count=0;
+        hash_integer(in.time);
+        set_cash(BAR_TRADED_NOTIONAL,R(0.));set_cash(OPENING_EQUITY,R(0.));
+        if(st.meta[BANKRUPT]) {
+            for(long long k=0;k<in.commands;++k) {
+                const long long* c=st.command_ints+k*COMMAND_INTS;
+                if(c[ACTION])audit(c[C_OWNER],c[C_ID],c[C_ASSET],REJECTED,INSUFFICIENT_FUNDS,COMMAND_STAGE);
+            }
+            if(in.measured) {
+                set_cash(MEASUREMENT_RETURN,R(0.));set_cash(MEASUREMENT_EQUITY,R(0.));
+                st.activity[MEASUREMENTS]=double(R(st.activity[MEASUREMENTS])+R(1.));
+            }
+            return;
+        }
         for(long long q=0;q<in.capacity;++q)oi(q,ATTEMPTED)=0;
         for(long long a=0;a<in.assets;++a) {
             mark(a,panel(MARK_OPEN,a));
@@ -315,9 +392,16 @@ template<class R> struct Account {
             }
             risk(FUNDING_STAGE);
         }
+        set_cash(OPENING_EQUITY,equity());
         for(long long q=0;q<in.capacity;++q)
             if(oi(q,ID)&&oi(q,EXPIRY)>=0&&oi(q,EXPIRY)<in.time)terminal(q,EXPIRED,EXPIRED_REASON,COMMAND_STAGE);
-        for(long long k=0;k<in.commands;++k)command(k);
+        for(long long owner=0;owner<in.owners;++owner) {
+            targets(owner);
+            for(long long k=0;k<in.commands;++k) {
+                const long long* command=st.command_ints+k*COMMAND_INTS;
+                if(command[C_OWNER]==owner)command_values(command,st.command_values+k*COMMAND_VALUES);
+            }
+        }
         // At each segment, find the next chronological crossing across all assets.
         for(int segment=0;segment<3;++segment) {
             R cursor(0.);
@@ -379,19 +463,54 @@ template<class R> struct Account {
             risk(segment==0?FIRST_STAGE:segment==1?SECOND_STAGE:CLOSE_STAGE);
         }
         refresh();
+        if(cash(OPENING_EQUITY)>R(0.))st.activity[TURNOVER]=double(R(st.activity[TURNOVER])+cash(BAR_TRADED_NOTIONAL)/cash(OPENING_EQUITY));
         if(cash(EQUITY)<=R(0.)) {
             st.meta[BANKRUPT]=1;
             for(long long q=0;q<in.capacity;++q)if(oi(q,ID))terminal(q,REJECTED,INSUFFICIENT_FUNDS,CLOSE_STAGE);
             set_cash(CASH,R(0.));
             for(long long a=0;a<in.assets;++a) {set_asset(a,QUANTITY,R(0.));set_asset(a,MARGIN,R(0.));set_asset(a,ENTRY,R(0.));}
+            for(long long owner=0;owner<in.owners;++owner)for(long long a=0;a<in.assets;++a)set_owned(owner,a,R(0.));
             refresh();
         }
+        hash_integer(102);for(long long f=0;f<CASH_VALUES;++f)hash_number(cash(int(f)));
+        for(long long a=0;a<in.assets;++a)for(int f=0;f<ASSET_VALUES;++f)hash_number(asset(a,f));
+        for(long long owner=0;owner<in.owners;++owner)for(long long a=0;a<in.assets;++a)hash_number(owned(owner,a));
         if(in.measured) {
             const R nav=cash(EQUITY),previous=cash(PREVIOUS);
             set_cash(MEASUREMENT_RETURN,previous>R(0.)?nav/previous-R(1.):R(0.));
             set_cash(MEASUREMENT_EQUITY,nav);set_cash(PREVIOUS,nav);
+            R net(0.),maximum_asset(0.);for(long long a=0;a<in.assets;++a) {
+                const R exposure=nav>R(0.)?asset(a,QUANTITY)*asset(a,LAST_MARK)/nav:R(0.);
+                net+=exposure;maximum_asset=maximum(maximum_asset,absolute(exposure));
+            }
+            st.activity[GROSS_SUM]=double(R(st.activity[GROSS_SUM])+(nav>R(0.)?gross()/nav:R(0.)));
+            st.activity[NET_SUM]=double(R(st.activity[NET_SUM])+net);st.activity[MAX_ASSET]=double(maximum(R(st.activity[MAX_ASSET]),maximum_asset));
+            st.activity[MEASUREMENTS]=double(R(st.activity[MEASUREMENTS])+R(1.));
         }
     }
 };
+template<class R> ORDER_FN void sample_independent(const double* quantity,const double* equities,
+    const double* marks,R unallocated,long long M,long long S,double* state,double* output) {
+    R nav=unallocated,gross(0.),net(0.),largest(0.);
+    for(long long m=0;m<M;++m)nav+=R(equities[m]);
+    for(long long a=0;a<S;++a) {
+        R asset_net(0.);for(long long m=0;m<M;++m) {
+            const R nominal=R(quantity[m*S+a])*R(marks[a]);gross+=absolute(nominal);asset_net+=nominal;
+        }
+        net+=asset_net;largest=maximum(largest,absolute(asset_net));
+    }
+    const R g=nav>R(0.)?gross/nav:R(0.),n=nav>R(0.)?net/nav:R(0.);
+    const R max_asset=nav>R(0.)?largest/nav:R(0.);
+    state[0]=double(R(state[0])+g);state[1]=double(R(state[1])+n);
+    state[2]=double(maximum(R(state[2]),max_asset));state[3]=double(R(state[3])+R(1.));
+    state[4]=double(maximum(R(state[4]),g));
+    output[0]=double(nav);output[1]=double(g);output[2]=double(n);output[3]=double(max_asset);output[4]=gross>R(0.)?1.:0.;
+    const R previous(state[6]);output[5]=previous>R(0.)?double(nav/previous-R(1.)):0.;state[6]=double(nav);
+}
+template<class R> ORDER_FN void independent_turnover(const double* values,R unallocated,long long M,double* state) {
+    R traded(0.),opening=unallocated;
+    for(long long m=0;m<M;++m) {traded+=R(values[m*2]);opening+=R(values[m*2+1]);}
+    if(opening>R(0.))state[5]=double(R(state[5])+traded/opening);
+}
 } // namespace foundry_orders
 #undef ORDER_FN

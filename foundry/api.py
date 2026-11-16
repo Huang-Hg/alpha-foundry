@@ -3,15 +3,16 @@ from pathlib import Path
 from typing import Unpack
 
 from foundry.config import Parameters, configure
+from foundry.types import ProgramCatalog
 
 
-def open(portfolio: str | Path | None = None, **parameters: Unpack[Parameters]):
+def open(portfolio: str | Path | None = None, *, programs: ProgramCatalog | None = None, **parameters: Unpack[Parameters]):
     """Open an explicitly parameterized session; an omitted portfolio stays in memory."""
     from foundry.study.session import open_session, DiscoveryServices
     from foundry.search.diagnostics import diagnose_current
     from foundry.search.robustness import judge_family
     from foundry.rpc.codec import describe
-    return open_session(configure(**parameters), portfolio, describe, DiscoveryServices(diagnose_current, judge_family))
+    return open_session(configure(**parameters), portfolio, describe, DiscoveryServices(diagnose_current, judge_family), programs=programs)
 
 
 def connect(address: tuple[str, int] | None = None):
@@ -27,10 +28,10 @@ def connect(address: tuple[str, int] | None = None):
         return session
 
 
-def serve(portfolio: str | Path = 'production/library.json', **parameters: Unpack[Parameters]):
+def serve(portfolio: str | Path = 'production/library.json', *, programs: ProgramCatalog | None = None, **parameters: Unpack[Parameters]):
     """Serve a parameterized research session until explicitly stopped."""
     from foundry.rpc.server import Server
-    with open(portfolio, **parameters) as session:
+    with open(portfolio, programs=programs, **parameters) as session:
         backend = session._backend
         return Server(backend).run()
 

@@ -4,9 +4,12 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
+from typing import cast
 
 from foundry.config import SearchConfig
-from foundry.search.archive import Archive, BehaviorState, standardized
+from foundry.search.archive import (
+    Archive, BehaviorIdentity, BehaviorState, ReplayBehavior, TargetBehavior, same_behavior, standardized,
+)
 from foundry.search.diagnostics import (
     CalibrationPopulation,
     calibrate,
@@ -219,7 +222,7 @@ class Discovery:
         self.best_score = -float('inf')
         self.counters = dict.fromkeys(self.COUNTERS + (('g3',) if self.objective.name == 'single' else ()), 0)
         with self.port.scope():
-            self.weights, self.books, self.member_returns = self.port.member_states()
+            _, self.member_returns = self.port.member_returns()
             xp = self.port.xp
             self.reference_vectors, self.reference_valid = standardized(xp.concatenate((self.ref.rr[None], self.member_returns)), xp)
             self.archive_vectors = archive.vectors(self.port)
@@ -282,14 +285,21 @@ class Discovery:
     def _score(self, valid: tuple[tuple[Candidate, EvaluationRow, Verdict], ...]) -> None:
         xp = self.port.xp
         candidates, rows, verdicts = zip(*valid)
-        books, returns = xp.stack([row.book for row in rows]), xp.stack([row.returns for row in rows])
+        returns = xp.stack([row.returns for row in rows])
+        targets = [(i, row.book) for i, row in enumerate(rows) if row.book is not None]
+        identities: dict[int, BehaviorIdentity] = {
+            i: ReplayBehavior(cast(str, row.behavior_digest)) for i, row in enumerate(rows) if row.book is None}
+        if targets:
+            books = xp.stack([book for _, book in targets])
+            identities.update((i, TargetBehavior(fingerprint, books[j]))
+                              for j, ((i, _), fingerprint) in enumerate(zip(targets, self.port.fingerprints(books))))
         behavior = self._behavior(returns)
         scored = self.objective.score(ScoringBatch(self.port, self.ref, self.member_returns,
                                                   candidates, rows, verdicts, returns, behavior, self.rho_max))
         nonzero = self.port.to_host(behavior.nonzero).tolist()
-        staged: OrderedDict[Candidate, tuple[int, int]] = OrderedDict()
-        for i, (report, fingerprint, has_returns) in enumerate(zip(scored.rows, self.port.fingerprints(books), nonzero)):
-            duplicate = self.archive.duplicate(fingerprint, books[i], self.version, self.port)
+        staged: OrderedDict[Candidate, int] = OrderedDict()
+        for i, (report, has_returns) in enumerate(zip(scored.rows, nonzero)):
+            duplicate = self.archive.duplicate(identities[i], self.version, self.port)
             accepted = report.passed and not duplicate
             result = replace(report, log_reward=-10. if duplicate else report.log_reward,
                              passed=accepted, duplicate=duplicate)
@@ -305,15 +315,18 @@ class Discovery:
             if accepted and result.utility > self.best_score:
                 self.best, self.best_score = result.candidate, result.utility
             if not duplicate and has_returns:
-                staged[result.candidate] = (fingerprint, i)
+                staged[result.candidate] = i
                 staged.move_to_end(result.candidate)
-        for fingerprint, i in staged.values():
+        for i in staged.values():
             candidate = candidates[i]
+            identity = identities[i]
             for previous in tuple(key for key, state in self.pending.items()
-                                  if state.fingerprint == fingerprint and bool(xp.array_equal(books[i], state.book))):
+                                  if same_behavior(identity, state.behavior, xp)):
                 del self.pending[previous]
             if self.archive.capacity:
-                self.pending[candidate] = BehaviorState(candidate, fingerprint, books[i].copy(), returns[i].copy(),
+                owned = (TargetBehavior(identity.fingerprint, identity.book.copy())
+                         if isinstance(identity, TargetBehavior) else identity)
+                self.pending[candidate] = BehaviorState(candidate, owned, returns[i].copy(),
                                                         self.version, self.port.context.snapshot.id)
                 self.pending.move_to_end(candidate)
                 while len(self.pending) > self.archive.capacity:

@@ -18,17 +18,38 @@ def standardized(returns: FloatArray, xp: ModuleType) -> tuple[FloatArray, BoolA
 
 
 @dataclass(frozen=True)
-class BehaviorState:
-    candidate: Candidate
+class TargetBehavior:
+    """Static target identity retains exact equality after the native hash filter."""
     fingerprint: int
     book: FloatArray
+
+
+@dataclass(frozen=True)
+class ReplayBehavior:
+    """A streamed execution digest owns no candidate account or event history."""
+    digest: str
+
+
+BehaviorIdentity = TargetBehavior | ReplayBehavior
+
+
+def same_behavior(left: BehaviorIdentity, right: BehaviorIdentity, xp: ModuleType) -> bool:
+    if isinstance(left, TargetBehavior) and isinstance(right, TargetBehavior):
+        return left.fingerprint == right.fingerprint and bool(xp.array_equal(left.book, right.book))
+    return isinstance(left, ReplayBehavior) and isinstance(right, ReplayBehavior) and left.digest == right.digest
+
+
+@dataclass(frozen=True)
+class BehaviorState:
+    candidate: Candidate
+    behavior: BehaviorIdentity
     returns: FloatArray
     portfolio_version: str
     snapshot: str
 
 
 class Archive:
-    """Bounded candidate keys with cross-modality book equality verification."""
+    """Bounded exact target identities and streamed replay identities with common returns."""
 
     def __init__(self, capacity: int = 32):
         if capacity < 0:
@@ -47,14 +68,14 @@ class Archive:
 
     def retained(self, candidates: Sequence[Candidate]) -> None:
         """Replace live source references after persistence, preserving behavior/version."""
-        self.items = OrderedDict((candidate, BehaviorState(candidate, state.fingerprint, state.book,
+        self.items = OrderedDict((candidate, BehaviorState(candidate, state.behavior,
             state.returns, state.portfolio_version, state.snapshot))
             for candidate, state in zip(candidates, self.items.values()))
 
-    def duplicate(self, fingerprint: int, book: FloatArray, portfolio_version: str,
+    def duplicate(self, behavior: BehaviorIdentity, portfolio_version: str,
                   port: ResidentPort) -> bool:
-        return any(state.fingerprint == fingerprint and state.portfolio_version == portfolio_version
-                   and bool(port.xp.array_equal(book, state.book)) for state in self.items.values())
+        return any(state.portfolio_version == portfolio_version
+                   and same_behavior(behavior, state.behavior, port.xp) for state in self.items.values())
 
     def vectors(self, port: ResidentPort) -> FloatArray:
         if any(state.snapshot != port.context.snapshot.id for state in self.items.values()):

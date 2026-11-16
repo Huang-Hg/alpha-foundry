@@ -77,7 +77,7 @@ class Executor:
             self.calls['cpu'] += 1
             result = self.host_executor.simulate(cp.asnumpy(W), self.host_executor.device_spec(spec.host), start, ppy, 'native')
             risk = replace(result.risk, **{f.name: cp.asarray(getattr(result.risk, f.name))
-                           for f in fields(result.risk) if f.name != 'model'})
+                           for f in fields(result.risk) if f.name not in ('model', 'gross_sampling')})
             return replace(result, returns=cp.asarray(result.returns), statistics=cp.asarray(result.statistics), risk=risk)
         self.calls['cuda'] += 1
         return self.simulate_device(W, spec, start, ppy)

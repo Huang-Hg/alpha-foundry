@@ -10,7 +10,7 @@ from foundry.types import (
     Candidate, CandidateGrid, CommitReport, Diagnostics, EvaluationReport, FamilyResult,
     FamilySeed, Metrics, PortfolioReport, RegisteredBatch, ResearchContext, ReweightResult,
     RiskSummary, WeightCommit, WeightReport,
-    ProgramDescriptor, ProgramPlan,
+    ProgramDescriptor, ProgramPlan, ProgramReference, ProgramSource,
 )
 
 HOST = '127.0.0.1'
@@ -25,14 +25,15 @@ MAX_RESPONSE_BYTES = 1 << 30
 MAX_PENDING = 64
 HEARTBEAT_SECONDS = 10.
 BUNDLE = 'candidate-batch-v3'
-CHECKPOINT_FORMAT = 'candidate-discovery-v5'
+CHECKPOINT_FORMAT = 'candidate-discovery-v6'
 
 REPORT_NOTES = {
     Metrics: {
-        'turnover': 'Mean over consecutive research-window decisions of sum(abs(target[t]-target[t-1])); target-book fraction per decision, not executed notional.',
-        'exposure': 'Research-window mean of sum(abs(target book sampled at each statistics close)); target notional/equity ratio, not actual account leverage.',
-        'max_single_weight': 'Maximum absolute decision target-book value over the research window; target notional/equity ratio.',
-        'margin_bps': 'ann_ret / max(turnover * decision_periods_per_year, 1e-12) * 1e4; basis points per annualized target-turnover proxy, not realized margin or execution profit per trade.',
+        'turnover': 'target_book measures target-book absolute changes per decision. executed_fills sums each bar actual filled absolute notional / account equity after opening mark/funding/risk before commands, then divides by research decision count; independent accounts aggregate notional and opening equity including unallocated cash before the ratio.',
+        'exposure': 'Research-window mean gross notional/equity exposure, sampled from targets under target_book or the actual account under executed_fills.',
+        'max_single_weight': 'Maximum absolute asset notional/equity ratio in the declared activity basis.',
+        'margin_bps': 'ann_ret / max(turnover * decision_periods_per_year, 1e-12) * 1e4; basis points per annualized reported turnover.',
+        'activity_basis': 'target_book uses target-book turnover/exposure; executed_fills uses actual filled notional turnover and actual account exposure. Yearly attendance measures exposure-active periods.',
     },
     RiskSummary: {
         'model': 'Stable execution-account model identifier, including collateral timing and liquidation assumptions.',
@@ -44,7 +45,8 @@ REPORT_NOTES = {
         'first_liquidation_ns': 'Full-run first liquidation event-bar timestamp in UTC nanoseconds; -1 means none. Intrabar events identify the containing base bar, not the exact touch or fill time.',
         'bankrupt': 'Full-run account bankruptcy flag; not an isolated-position liquidation flag.',
         'ending_equity': 'Final full-run account equity in initial-NAV units (initial NAV=1).',
-        'max_gross_leverage': 'Maximum full-run actual gross notional/account equity ratio sampled at mark open before liquidation, after target update, and at mark close; not an intrabar maximum. Adverse prices can exceed the entry limit; infinity at nonpositive equity serializes as null.',
+        'max_gross_leverage': 'Maximum actual gross notional/account equity ratio on the grid declared by gross_sampling; never an upper bound substituted for an observed aggregate maximum. Infinity at nonpositive equity serializes as null.',
+        'gross_sampling': 'account_event_samples preserves account-event sampling at mark open before liquidation, after target update, and mark close. statistics_closes denotes the exact aggregate independent-account ratio sampled at statistics closes. Neither value claims an intrabar maximum.',
     },
 }
 
@@ -63,6 +65,16 @@ def schema_for(kind):
     if is_dataclass(kind):
         properties = {name: schema_for(annotation) for name, annotation in get_type_hints(kind).items()}
         schema = dict(type='object', properties=properties, required=list(properties), additionalProperties=False)
+        if kind in (ProgramDescriptor, ProgramReference):
+            properties['artifact_digest'].update(pattern='^[0-9a-f]{64}$')
+            properties['parameters'].update(maxLength=65536, contentMediaType='application/json',
+                description='Canonical finite JSON object: sorted keys, compact separators and unescaped Unicode; UTF-8 payload at most 64KiB.')
+        if kind is ProgramDescriptor:
+            properties['protocol'] = dict(const=2)
+        if kind is ProgramSource:
+            properties['variant'].update(minimum=0)
+            properties['snapshot'].update(minLength=1)
+            properties['complexity'].update(minimum=0, maximum=1)
         if kind in REPORT_NOTES:
             schema['description'] = kind.__doc__.strip()
             for name, note in REPORT_NOTES[kind].items():
@@ -106,6 +118,8 @@ METHODS = {
     'research.refresh': object_schema({}),
     'research.register_batch': object_schema(dict(context=TEXT,
         bytes=dict(type='integer', minimum=1, maximum=MAX_ARRAY_BYTES))),
+    'research.register_program': object_schema(dict(context=TEXT, program=schema_for(ProgramReference))),
+    'research.plan_program': object_schema(dict(context=TEXT, program=schema_for(ProgramReference))),
     'research.retain': object_schema(dict(context=TEXT, candidates=dict(type='array', minItems=1, items=CANDIDATE))),
     'research.release_batch': object_schema(dict(lease=TEXT)),
     'research.evaluate': object_schema(dict(context=TEXT, candidates=dict(type='array', minItems=1, items=CANDIDATE))),
@@ -130,6 +144,8 @@ RESPONSES = {
     'research.evaluate': schema_for(EvaluationReport),
     'research.commit': schema_for(CommitReport),
     'research.register_batch': schema_for(RegisteredBatch),
+    'research.register_program': schema_for(RegisteredBatch),
+    'research.plan_program': schema_for(ProgramPlan),
     'research.retain': schema_for(RegisteredBatch),
     'research.release_batch': schema_for(type(None)),
     'research.diagnose': schema_for(Diagnostics),
@@ -191,15 +207,19 @@ def describe():
         parameters=dict(oneOf=variants), defaults=defaults, responses=RESPONSES,
         workflow=['research.describe -> context.id',
                   'research.register_batch(context, bytes) + binary bundle -> resident candidates and lease',
+                  'research.register_program(context, deployed artifact reference + canonical parameters) -> resident candidates and lease',
                   'research.evaluate(context, candidates)',
                   'research.diagnose(context) / research.judge_family(context, families)',
                   'research.commit(context, candidates) / research.reweight(context, iterations, count, seed) -> new context.id',
                   'research.retain(context, candidates) -> durable references; research.release_batch(lease) -> null',
                   'research.refresh -> current context after an explicit conflict'],
-        programs=dict(transport='in_process', descriptor=schema_for(ProgramDescriptor), plan=schema_for(ProgramPlan),
+        programs=dict(transport='deployed_artifact_reference', descriptor=schema_for(ProgramDescriptor), plan=schema_for(ProgramPlan),
+            reference=schema_for(ProgramReference),
             methods=dict(plan_program='Validate a StrategyProgram and return its execution plan without opening state',
-                         simulate='Open fresh private state and return resident actual-account audit arrays'),
+                         simulate='In-process fresh private state and resident actual-account audit arrays',
+                         register='Bounded local StrategyProgram or deployed ProgramReference lease',
+                         evaluate='Program candidates share the public evaluate/commit/retain/release workflow'),
             returns='ProgramSimulation: resident returns/equity (B,V), immutable period-start UTC ns (V,), final AccountSnapshot',
-            scope='Crypto spot and isolated linear perpetual Bar orders; simulation is not an admission report'),
+            scope='Program candidates participate in evaluation/admission/replay; remote registration requires a caller-deployed artifact catalog. No source execution or Python object deserialization.'),
         binary='register_batch carries exactly params.bytes bytes after the JSON request newline; 1GiB encoded and decoded limits; no pickle',
         python='with foundry.open() as session: report = session.evaluate(formulas); session.commit(report)')

@@ -22,7 +22,7 @@ from dataclasses import dataclass, replace
 from foundry.numeric import metrics as M
 from foundry.portfolio.reference import Reference
 from foundry.types import (
-    Array, ArraySource, BoolArray, ConstraintCheck, EvaluationRow, FloatArray, HostArray,
+    Array, ArraySource, ProgramSource, BoolArray, ConstraintCheck, EvaluationRow, FloatArray, HostArray,
     IntArray, Proposal, SimulationResult, Verdict, WeightMetrics,
 )
 
@@ -65,10 +65,8 @@ def weight_metrics(rr: FloatArray, dd: FloatArray, ref: Reference, ppy: float,
 
 @dataclass(frozen=True)
 class TrialPlan:
-    """Resident candidate books (B,T,S), reference (T,S), and sorted weights (B,K)."""
+    """Resident trial ownership, return moments and sorted coefficient grid (B,K)."""
 
-    books: FloatArray
-    reference_book: FloatArray
     owners: IntArray
     weights: FloatArray
     unique: BoolArray
@@ -81,7 +79,6 @@ class TrialPlan:
 def plan(rows: Sequence[EvaluationRow], ref: Reference) -> TrialPlan:
     """Prepare additive grid and tangency trials without executing market rules."""
     xp, cfg = ref.xp, ref.cfg
-    W = xp.ascontiguousarray(xp.stack([r.book for r in rows]))
     R = xp.stack([r.returns for r in rows])
     q, p = ref.rr, ref.p
     ma, mq = xp.sum(R * p, axis=1), xp.sum(q * p)
@@ -98,8 +95,7 @@ def plan(rows: Sequence[EvaluationRow], ref: Reference) -> TrialPlan:
     weights = xp.sort(xp.concatenate((grid, suggestion[:, None]), axis=1), axis=1)
     unique = xp.concatenate((xp.ones((B, 1), dtype=xp.bool_), weights[:, 1:] != weights[:, :-1]), axis=1)
     owners = xp.repeat(xp.arange(B, dtype=xp.int32), K)
-    qW = xp.asarray(ref.U, dtype=xp.float64)
-    return TrialPlan(W, qW, owners, weights, unique, ma, va, vq, cov)
+    return TrialPlan(owners, weights, unique, ma, va, vq, cov)
 
 
 def proposals(rows: Sequence[EvaluationRow], ref: Reference, trials: TrialPlan,
@@ -116,7 +112,7 @@ def proposals(rows: Sequence[EvaluationRow], ref: Reference, trials: TrialPlan,
     ws, sh, cagr, growth, dd = measured.wsharpe, measured.sharpe, measured.cagr, measured.recent_growth, measured.maxdd
     delta, required, checks, utility = measured.delta, measured.required, measured.checks, measured.utility
     valid = measured.valid & unique
-    identities = (replace(r.source, scope='') if isinstance(r.source, ArraySource) else r.source for r in rows)
+    identities = (replace(r.source, scope='') if isinstance(r.source, (ArraySource, ProgramSource)) else r.source for r in rows)
     new = xp.asarray([source not in ref.keys for source in identities])
     capacity = xp.broadcast_to(~((ref.n >= cfg.max_members) & new)[:, None], weights.shape)
     feasible = checks.all(2) & valid & capacity

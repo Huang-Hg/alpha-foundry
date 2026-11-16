@@ -7,8 +7,9 @@ from types import ModuleType
 import numpy as np
 
 from foundry.config import Account, Execution
+from foundry.numeric.semantics import ORDER_SEMANTIC_VERSION
 from foundry.types import (
-    AccountSnapshot, Array, BarExecution, ExecutionFeedback, FloatArray, OrderCommands, OrderSnapshot,
+    AccountSnapshot, Array, BarExecution, ExecutionFeedback, ExecutionRiskBatch, FloatArray, OrderCommands, OrderSnapshot,
 )
 
 
@@ -42,7 +43,7 @@ def prepare_data(spec: BarExecution, array_module: ModuleType = np) -> PreparedD
 
 
 class OrderRuntime:
-    """Own O(B*(S+Q+K)) mutable state and O(B*V) measured output.
+    """Own O(B*(M*S+Q+K+F)) mutable state and O(B*V) measured output.
 
     Each advance processes one complete base bar. Commands originate at its
     compiled decision cutoff; callbacks and causal feature windows are owned by
@@ -52,13 +53,14 @@ class OrderRuntime:
 
     def __init__(self, spec: BarExecution, account: Account, execution: Execution,
                  batch: int = 1, precision: str = 'paired', *, native: ModuleType,
-                 prepared_data: PreparedData, start_event: int = 0):
+                 prepared_data: PreparedData, start_event: int = 0, owner_count: int = 1,
+                 initial_cash: FloatArray | None = None):
         self.native = native
-        self._initialize(spec, account, execution, batch, precision, np, prepared_data, start_event)
+        self._initialize(spec, account, execution, batch, precision, np, prepared_data, start_event, owner_count, initial_cash)
 
     def _initialize(self, spec: BarExecution, account: Account, execution: Execution,
                     batch: int, precision: str, xp: ModuleType, prepared_data: PreparedData,
-                    start_event: int) -> None:
+                    start_event: int, owner_count: int, initial_cash: FloatArray | None) -> None:
         if not isinstance(spec, BarExecution):
             raise TypeError('Order execution requires a compiled BarExecution')
         if spec.market not in ('crypto_spot', 'crypto_perpetual'):
@@ -73,19 +75,40 @@ class OrderRuntime:
             raise ValueError('Prepared order market data must belong to this spec and backend')
         if type(start_event) is not int or not 0 <= start_event < len(spec.schedule.event_ns):
             raise ValueError('Order runtime start event must lie inside the compiled event clock')
+        if type(owner_count) is not int or owner_count < 1:
+            raise ValueError('Order account owner_count must be a positive integer')
+        capital = xp.full(batch, account.initial_cash, dtype=xp.float64) if initial_cash is None else xp.asarray(initial_cash, dtype=xp.float64)
+        if capital.shape != (batch,) or bool(xp.any(~xp.isfinite(capital) | (capital < 0))):
+            raise ValueError('Private account capital requires finite nonnegative quote amounts (B,)')
+        self.owner_count = owner_count
         self.spec, self.account, self.execution = spec, account, execution
         self.xp, self.batch, self.precision = xp, batch, precision
         self.assets = spec.trade_open.shape[1]
         self.capacity, self.command_capacity = execution.order_capacity, execution.command_capacity
-        self.feedback_capacity = self.command_capacity + 4*self.capacity + self.assets
+        self.feedback_capacity = (self.command_capacity + owner_count*self.assets + 4*self.capacity
+                                  + (owner_count+1)*(self.capacity+self.assets))
         self.cursor, self.closed = start_event, False
         self._panels, self._rules = prepared_data.panels, prepared_data.rules
         self._event_times = prepared_data.event_ns
         self._assets = xp.zeros((batch, self.assets, 4), dtype=xp.float64)
         self._assets[:, :, 2] = self._panels[start_event, 5]
-        self._cash = xp.zeros((batch, 12), dtype=xp.float64)
-        self._cash[:, :3] = account.initial_cash
-        self._meta = xp.zeros((batch, 4), dtype=xp.int64)
+        self._cash = xp.zeros((batch, 14), dtype=xp.float64)
+        self._cash[:, :3] = capital[:, None]
+        self._meta = xp.zeros((batch, 5), dtype=xp.int64)
+        self._meta[:, 3] = capital <= 0
+        self._meta[:, 4] = -1
+        self._owners = xp.zeros((batch, owner_count, self.assets), dtype=xp.float64)
+        self._highwater = xp.zeros((batch, owner_count), dtype=xp.int64)
+        self._targets = xp.zeros_like(self._owners)
+        self._updates = xp.zeros(self._owners.shape, dtype=xp.uint8)
+        self._units = xp.zeros(owner_count, dtype=xp.int64)
+        self._coefficients = xp.ones((batch, owner_count), dtype=xp.float64)
+        self._pending_targets = xp.zeros_like(self._owners)
+        self._target_dirty = xp.zeros(self._owners.shape, dtype=xp.uint8)
+        self._activity = xp.zeros((batch, 6), dtype=xp.float64)
+        self._digest = xp.zeros((batch, 26), dtype=xp.uint32)
+        self._digest[:, :8] = xp.asarray((0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+            0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19), dtype=xp.uint32)
         self._oi = xp.zeros((batch, self.capacity, 9), dtype=xp.int64)
         self._ov = xp.zeros((batch, self.capacity, 6), dtype=xp.float64)
         self._ci = xp.zeros((batch, self.command_capacity, 8), dtype=xp.int64)
@@ -95,7 +118,11 @@ class OrderRuntime:
         self._count = xp.zeros(batch, dtype=xp.int64)
         shape = (batch, spec.schedule.measurement_count)
         self._returns = xp.zeros(shape, dtype=xp.float64)
-        self._equity = xp.full(shape, account.initial_cash, dtype=xp.float64)
+        self._equity = xp.broadcast_to(capital[:, None], shape).copy()
+        self._active = xp.zeros(shape, dtype=xp.bool_)
+        self._risk_flows = xp.zeros((batch, spec.schedule.measurement_count, 4), dtype=xp.float64)
+        self._risk_counts = xp.zeros(shape, dtype=xp.int64)
+        self._risk_previous = xp.zeros((batch, 5), dtype=xp.float64)
 
     def _ensure_open(self) -> None:
         if self.closed:
@@ -156,7 +183,7 @@ class OrderRuntime:
         active = commands.action != 0
         new = active & (commands.action != 2)
         invalid = (commands.action < 0) | (commands.action > 3)
-        invalid |= active & ((commands.owner < 0) | (commands.id <= 0))
+        invalid |= active & ((commands.owner < 0) | (commands.owner >= self.owner_count) | (commands.id <= 0))
         invalid |= new & ((commands.asset < 0) | (commands.asset >= self.assets)
             | ((commands.side != 1) & (commands.side != -1))
             | (commands.type < 1) | (commands.type > 3)
@@ -188,17 +215,52 @@ class OrderRuntime:
 
     def _step(self, event: int, measured: bool) -> None:
         inputs = (self._panels[event], self._rules[event], self._assets, self._cash,
-                  self._meta, self._oi, self._ov, self._ci, self._cv, self._ai, self._av, self._count)
+                  self._meta, self._oi, self._ov, self._ci, self._cv, self._ai, self._av, self._count,
+                  self._owners, self._highwater, self._targets, self._updates, self._units, self._coefficients,
+                  self._pending_targets, self._target_dirty, self._activity, self._digest)
         self.native.step(inputs, int(self.spec.schedule.event_ns[event]),
             int(self.account.margin == 'isolated'), int(self.execution.bar_path == 'open_high_low_close'),
             int(measured), self.account.leverage, self.account.gross_limit, self.execution.participation, self.precision)
 
-    def advance(self, event: int, commands: OrderCommands) -> ExecutionFeedback:
+    def configure_targets(self, units: tuple[str, ...], coefficients: FloatArray) -> None:
+        """Bind immutable member units and per-trial intent scales before replay."""
+        self._ensure_open()
+        if len(units) != self.owner_count or any(unit not in ('equity_fraction', 'quantity', 'notional') for unit in units):
+            raise ValueError('Target units must name one supported unit per owner')
+        values = self.xp.asarray(coefficients, dtype=self.xp.float64)
+        if values.shape != (self.batch, self.owner_count) or bool(self.xp.any(~self.xp.isfinite(values) | (values < 0))):
+            raise ValueError('Intent coefficients require finite nonnegative (B,M) values')
+        self._units[:] = self.xp.asarray([('equity_fraction', 'quantity', 'notional').index(unit) for unit in units], dtype=self.xp.int64)
+        self._coefficients[:] = values
+
+    def owner_quantities(self, owner: int | None = None) -> FloatArray:
+        """Detach bounded signed owner contributions (B,M,S), whose sum is net quantity."""
+        self._ensure_open()
+        if owner is not None and (type(owner) is not int or not 0 <= owner < self.owner_count):
+            raise ValueError('Owner index must lie inside the declared owner namespace')
+        return self._detached(self._owners if owner is None else self._owners[:, owner])
+
+    def advance(self, event: int, commands: OrderCommands, *, targets: FloatArray | None = None,
+                update_mask: Array | None = None) -> ExecutionFeedback:
         """Advance exactly the next base event and detach its bounded audit."""
         self._ensure_open()
         if type(event) is not int or event != self.cursor or event >= len(self.spec.schedule.event_ns):
             raise ValueError('Order events must advance consecutively within the compiled schedule')
         self._commands(commands)
+        self._updates.fill(0)
+        if targets is not None:
+            values = self.xp.asarray(targets)
+            if values.shape != self._targets.shape or values.dtype not in (self.xp.dtype('float32'), self.xp.dtype('float64')):
+                raise ValueError('Target event values require floating (B,M,S) coordinates')
+            if bool(self.xp.any(~self.xp.isfinite(values))) or (self.account.margin == 'cash' and bool(self.xp.any(values < 0))):
+                raise ValueError('Targets must be finite and cash targets cannot be negative')
+            mask = self.xp.ones(values.shape, dtype=self.xp.bool_) if update_mask is None else self.xp.asarray(update_mask)
+            if mask.shape != values.shape or mask.dtype != self.xp.dtype('bool'):
+                raise ValueError('Target updates require bool (B,M,S) coordinates')
+            self._targets[:] = values
+            self._updates[:] = mask
+        elif update_mask is not None:
+            raise ValueError('Target update masks require event target values')
         self._ai.fill(0)
         self._av.fill(0)
         measurement = int(self.spec.schedule.measurement_index[event])
@@ -207,6 +269,13 @@ class OrderRuntime:
         if measured:
             self._returns[:, measurement] = self._cash[:, 10]
             self._equity[:, measurement] = self._cash[:, 11]
+            self._active[:, measurement] = self.xp.any(self._assets[:, :, 0] != 0, axis=1)
+            cumulative = self.xp.stack((self._cash[:, 6], self._cash[:, 5], self._cash[:, 7],
+                                        self._cash[:, 8], self._meta[:, 2]), axis=1)
+            delta = cumulative - self._risk_previous
+            self._risk_flows[:, measurement] = delta[:, :4]
+            self._risk_counts[:, measurement] = delta[:, 4].astype(self.xp.int64)
+            self._risk_previous[:] = cumulative
         self.cursor += 1
         return ExecutionFeedback(self.snapshot(), self._detached(self._count),
             *[self._detached(self._ai[:, :, index]) for index in (1, 2, 3, 4, 5, 6, 7, 0)],
@@ -221,9 +290,47 @@ class OrderRuntime:
         self._ensure_open()
         return self._detached(self._equity)
 
+    def active(self) -> Array:
+        self._ensure_open()
+        return self._detached(self._active)
+
+    def bar_activity(self) -> FloatArray:
+        """Detach current bar traded notional and opening equity in quote units."""
+        self._ensure_open()
+        return self._detached(self._cash[:, 12:14])
+
+    def activity(self) -> FloatArray:
+        """Running [turnover,gross sum,net sum,max asset,fill count,valuations]."""
+        self._ensure_open()
+        return self._detached(self._activity)
+
+    def risk(self, normalization: float) -> ExecutionRiskBatch:
+        """Measured flows in initial-NAV units; event audits remain streaming only."""
+        self._ensure_open()
+        xp = self.xp
+        flows = self._risk_flows / normalization
+        return ExecutionRiskBatch(*(self._detached(flows[:, :, i]) for i in range(4)),
+            self._detached(self._risk_counts), xp.empty((self.batch, 0, self.assets), dtype=xp.uint8),
+            self._detached(self._meta[:, 4]), self._detached(self._meta[:, 3].astype(xp.bool_)),
+            self._detached(self._cash[:, 1] / normalization), self._detached(self._cash[:, 9]),
+            ORDER_SEMANTIC_VERSION)
+
+    def _finish_digest(self, state: Array) -> None:
+        self.native.digest(state)
+
+    def behavior_digests(self) -> tuple[str, ...]:
+        """Finalize detached SHA-256 states without closing or modifying the account."""
+        self._ensure_open()
+        state = self._digest.copy()
+        self._finish_digest(state)
+        host = np.asarray(state[:, :8]) if self.backend == 'cpu' else self.xp.asnumpy(state[:, :8])
+        return tuple(''.join(f'{int(word):08x}' for word in row) for row in host)
+
     def close(self) -> None:
         if not self.closed:
             self.closed = True
             for name in ('_panels', '_rules', '_event_times', '_assets', '_cash', '_meta', '_oi', '_ov',
-                         '_ci', '_cv', '_ai', '_av', '_count', '_returns', '_equity'):
+                         '_ci', '_cv', '_ai', '_av', '_count', '_returns', '_equity', '_owners', '_highwater',
+                         '_targets', '_updates', '_units', '_coefficients', '_pending_targets', '_target_dirty',
+                         '_activity', '_digest', '_active', '_risk_flows', '_risk_counts', '_risk_previous'):
                 delattr(self, name)

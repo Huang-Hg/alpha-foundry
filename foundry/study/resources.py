@@ -5,6 +5,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from types import ModuleType, TracebackType
+import os
 from typing import TYPE_CHECKING, Literal, Self, cast
 
 import numpy as np
@@ -30,6 +31,7 @@ from foundry.study.pipeline import DeviceResources, Pipeline
 from foundry.study.store import study_snapshot
 from foundry.study.identity import DeviceHasher, host_leaves
 from foundry.types import (
+    AccountExecutionPort,
     ComputeDevice,
     Array,
     HostArray,
@@ -263,7 +265,8 @@ class Runtime:
         return self.loaded.window
 
     def open_program_account(self, batch: int, precision: Literal['mixed', 'paired'],
-                             start_event: int) -> orders.OrderRuntime | orders_cuda.OrderRuntime:
+                             start_event: int, *, owner_count: int = 1,
+                             initial_cash: FloatArray | None = None) -> AccountExecutionPort:
         """Create a private account from this runtime's explicitly prepared backend."""
         spec = cast(BarExecution, self.loaded.program_spec)
         data = cast(orders.PreparedData, self.program_data)
@@ -271,10 +274,80 @@ class Runtime:
             return orders_cuda.OrderRuntime(spec, self.settings.account, self.settings.execution,
                 batch=batch, precision=precision, array_module=self.backend.xp,
                 prepared=cast(orders_cuda.PreparedBackend, self.program_backend),
-                prepared_data=data, start_event=start_event)
+                prepared_data=data, start_event=start_event, owner_count=owner_count, initial_cash=initial_cash)
         return orders.OrderRuntime(spec, self.settings.account, self.settings.execution,
             batch=batch, precision=precision, native=cast(ModuleType, self.program_native),
-            prepared_data=data, start_event=start_event)
+            prepared_data=data, start_event=start_event, owner_count=owner_count, initial_cash=initial_cash)
+
+    def replay_batch_size(self, members: int, state_bytes: int = 0, statistics: int | None = None) -> int:
+        """Expose a conservative actual-owner replay cap before allocating trials.
+
+        state_bytes is the sum of declared private tensor/window bytes per trial.
+        Three account-sized allocations cover live state, detached callback/audit
+        views and returned measured buffers. Shared market/input panels are already
+        resident and excluded. CUDA uses the same ten-percent free-memory trial
+        allowance as the target planner; host uses ten percent of available pages.
+        """
+        if type(members) is not int or members < 0 or type(state_bytes) is not int or state_bytes < 0:
+            raise ValueError('Replay capacity requires nonnegative member and private-state counts')
+        V = self.pipeline.schedule.measurement_count if statistics is None else statistics
+        if type(V) is not int or V < 1:
+            raise ValueError('Replay statistics count must be positive')
+        S = len(self.panel.assets)
+        Q, K = self.settings.execution.order_capacity, self.settings.execution.command_capacity
+        independent = self.settings.account.composition == 'independent'
+        M = 1 if independent else max(members, 1)
+        accounts = max(members, 1) if independent else 1
+        F = K + M*S + 4*Q + (M+1)*(Q+S)
+        account_bytes = (S*40 + 14*8 + 5*8 + M*S*26 + M*24 + Q*120 + K*88
+                         + F*96 + 8 + V*65 + 40 + 48 + 104)
+        per_trial = 3*accounts*account_bytes + state_bytes + 7*8 + V*32
+        if self.resources.placement.kind == 'cuda':
+            free, _ = self.backend.xp.cuda.runtime.memGetInfo()
+            reusable = cast(CudaResources, self.resources).pool.free_bytes()
+            budget = int((free+reusable)*.10)
+        else:
+            budget = int(os.sysconf('SC_AVPHYS_PAGES')*os.sysconf('SC_PAGE_SIZE')*.10)
+        limit = budget//per_trial
+        if limit < 1:
+            raise RuntimeError(f'One replay trial requires {per_trial} bytes, above its {budget}-byte allocation budget')
+        return min(max(self.pipeline.candidate_batch, self.pipeline.trial_batch), limit)
+
+    def independent_turnover(self, values: FloatArray, unallocated: FloatArray, state: FloatArray) -> None:
+        """Accumulate actual quote turnover over the aggregate bar-opening NAV."""
+        xp = self.backend.xp
+        packed = xp.ascontiguousarray(values, dtype=xp.float64)
+        if self.resources.placement.kind == 'cuda':
+            module = cast(orders_cuda.PreparedBackend, self.program_backend).module
+            module.get_function('orders_independent_turnover')(((len(packed)+31)//32,), (32,),
+                (packed, unallocated, state, np.int64(len(packed)), np.int64(packed.shape[1])))
+        else:
+            cast(ModuleType, self.program_native).independent_turnover(packed, unallocated, state)
+
+    def sample_independent(self, quantities: FloatArray, equities: FloatArray, unallocated: FloatArray,
+                           event: int, state: FloatArray) -> FloatArray:
+        """Accumulate a real aggregate valuation with the prepared paired backend."""
+        xp = self.backend.xp
+        q, e = xp.ascontiguousarray(quantities, dtype=xp.float64), xp.ascontiguousarray(equities, dtype=xp.float64)
+        marks = cast(orders.PreparedData, self.program_data).panels[event, 8]
+        if self.resources.placement.kind == 'cuda':
+            output = xp.empty((len(q), 6), dtype=xp.float64)
+            module = cast(orders_cuda.PreparedBackend, self.program_backend).module
+            module.get_function('orders_sample_independent')(((len(q)+31)//32,), (32,),
+                (q, e, marks, unallocated, state, output, np.int64(len(q)), np.int64(q.shape[1]), np.int64(q.shape[2])))
+            return output
+        return cast(ModuleType, self.program_native).sample_independent(q, e, marks, unallocated, state)
+
+    def order_statistics(self, returns: FloatArray) -> FloatArray:
+        """Use the explicitly prepared paired statistics path for actual accounts."""
+        values = self.backend.xp.ascontiguousarray(returns, dtype=self.backend.xp.float64)
+        if self.resources.placement.kind == 'cuda':
+            output = self.backend.xp.empty((len(values), 5), dtype=self.backend.xp.float64)
+            module = cast(orders_cuda.PreparedBackend, self.program_backend).module
+            module.get_function('k_statistics_paired')((len(values),), (128,),
+                (values, np.int32(values.shape[1]), np.int32(0), np.float64(self.pipeline.ppy), output))
+            return output
+        return cast(ModuleType, self.program_native).statistics(values, self.pipeline.ppy)
 
     def close(self) -> None:
         self.pipeline.close()
@@ -336,6 +409,8 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             cleanup.callback(executor.close)
             loaded = load_study(settings, study, backend)
             cleanup.callback(loaded.panel.release)
+            if settings.execution.model == 'orders' and loaded.program_spec is None:
+                raise ValueError('The orders model requires compiled crypto Bar execution; equity settlement and corporate actions are unavailable')
             program_data, program_backend, program_native = None, None, None
             if loaded.program_spec is not None:
                 program_data = orders.prepare_data(loaded.program_spec, backend.xp)
@@ -344,8 +419,8 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
                 else:
                     from foundry.backtest import _orders
                     program_native = _orders
-            context = study_snapshot(loaded, settings, plan_precision(settings.execution.precision,
-                                      executor.precisions))
+            precisions = frozenset({'mixed', 'paired'}) if settings.execution.model == 'orders' else executor.precisions
+            context = study_snapshot(loaded, settings, plan_precision(settings.execution.precision, precisions))
             pipeline = Pipeline(loaded, backend, executor, resources, settings, context)
             cleanup.callback(pipeline.close)
         runtime = Runtime(settings, loaded, backend, executor, resources, pipeline,

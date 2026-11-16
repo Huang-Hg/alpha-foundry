@@ -11,8 +11,8 @@ from foundry.types import Backend, FloatArray, Metrics, ReturnMeasure, Source, S
 class Reference:
     """Resident (T,S) books and (T,) returns share the supplied backend's device."""
 
-    U: FloatArray
-    W: FloatArray
+    U: FloatArray | None
+    W: FloatArray | None
     rr: FloatArray
     p: FloatArray
     metrics: Metrics
@@ -28,11 +28,12 @@ class Reference:
     cfg: PortfolioConfig
     measure: ReturnMeasure
     version: str
+    mean_exposure: float
 
     @staticmethod
-    def build(U: FloatArray, measured: StatsRow, p: FloatArray, ppy: float,
+    def build(U: FloatArray | None, measured: StatsRow, p: FloatArray, ppy: float,
               members: tuple[Member, ...], seed: bool, backend: Backend,
-              cfg: PortfolioConfig, version: str) -> 'Reference':
+              cfg: PortfolioConfig, version: str, *, mean_exposure: float) -> 'Reference':
         """Derive reference moments without owning evaluation or mutable state."""
         xp = backend.xp
         moments = backend.measure(measured.returns, p, ppy)
@@ -40,4 +41,4 @@ class Reference:
         return Reference(U, measured.book, measured.returns, p, measured.metrics,
                          measured.metrics.sharpe, measured.metrics.cagr, measured.metrics.maxdd,
                          ws, growth, len(members), seed, tuple(m.source for m in members),
-                         xp, cfg, backend.measure, version)
+                         xp, cfg, backend.measure, version, mean_exposure)

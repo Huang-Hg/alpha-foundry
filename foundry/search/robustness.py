@@ -7,7 +7,7 @@ kept the best of what it tried). So every formula (the seed) is expanded and its
            4 such slots (5^k points), +-1 rung beyond (3^k), a seeded sample of GRID_CAP points past that
   fields   every field replaced, one at a time, by each other field of its category: does the formula need THIS
            field, or would any series of that kind do?
-  twins    a seeded sample of the grid again with every signal delayed 1-3 years (stateless forward delay): same structure,
+  twins    a seeded sample of the grid again with source observations or intents causally delayed (stateless replay): same structure,
            costs and exposure, no information about the days it trades - how often admission passes on noise here
 Every variant goes through production admission against the current portfolio and is read as the change it makes
 to the portfolio: full-period Sharpe (the gain, primary), CAGR and max drawdown. Verdict per seed:
@@ -37,7 +37,7 @@ GRID_CAP = 2187                                      # 3^7 grid points per seed;
 TWIN_SAMPLE = 256                                    # twins only estimate the pass rate on noise
 MIN_PASS_RATE = .25
 MIN_TWIN_RATIO = 3.
-MIN_ATTEND = .05                                     # a book in cash on 95%+ of days buys its Sharpe with a few lucky days
+MIN_ATTEND = .05                                     # actual or target exposure must attend at least 5% of measured periods
 SEED = 7
 
 
@@ -244,7 +244,11 @@ def judge(planned: FamilyPlan, real: Mapping[Candidate, FamilyPoint], twin: Mapp
 
 
 def judge_family(resident: ResidentPort, seeds: Sequence[FamilySeed | CandidateGrid]) -> FamilyResult:
-    """Judge explicit candidate lattices and formula families against one context."""
+    """Judge source lattices against one context, replaying causal delayed twins.
+
+    Attendance comes from the row's declared activity basis: static target
+    exposure or actual replay exposure, rather than the number of fills.
+    """
     context = resident.context
     categories = {field: names for names in resident.categories.values() for field in names}
     planned = plan(seeds, categories, resident.formula_error)

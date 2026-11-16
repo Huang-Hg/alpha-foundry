@@ -7,7 +7,7 @@ import hashlib
 from dataclasses import replace
 
 from foundry.search.proposer.batch import BatchOwner
-from foundry.types import ArraySource, Candidate, ComputeDevice, LearningFeedback, ProposalBatch, ProposalRequest, RegisteredBatch, TrainingResult
+from foundry.types import ArraySource, Candidate, ComputeDevice, LearningFeedback, ProgramSource, ProposalBatch, ProposalRequest, RegisteredBatch, TrainingResult
 
 
 class ExternalProposer:
@@ -21,7 +21,7 @@ class ExternalProposer:
                              if isinstance(batch, RegisteredBatch) else tuple(batch) for batch in batches)
         if any(not batch or any(not isinstance(candidate, Candidate) for candidate in batch) for batch in self.batches):
             raise ValueError('External proposals require nonempty Candidate batches')
-        identities = tuple(tuple(replace(c, source=replace(c.source, scope='')) if isinstance(c.source, ArraySource)
+        identities = tuple(tuple(replace(c, source=replace(c.source, scope='')) if isinstance(c.source, (ArraySource, ProgramSource))
                                  else c for c in batch) for batch in self.batches)
         self.signature = hashlib.sha256(repr(identities).encode()).hexdigest()
 
