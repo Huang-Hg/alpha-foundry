@@ -4,6 +4,8 @@
 
 Foundry evaluates formulas, model signals and target allocations through one session. The same market rules and portfolio admission decisions apply to manual research, AI agents, formula miners and external model searches.
 
+Who proposes a candidate does not determine its representation. A person, an agent or an ML program can supply either a formula or numerical arrays produced by arbitrary Python/CUDA code. Numerical factors do not need to be expressed in Foundry's formula vocabulary.
+
 ## Public Python API
 
 ```python
@@ -24,6 +26,8 @@ with foundry.open(
 ```
 
 `evaluate` accepts a formula string, a sequence of formulas, an ID-to-formula mapping, a `Candidate`, a candidate sequence or a registered batch. Reports carry metrics, account risks and structured admission decisions. A rejected candidate is a result, not a failure of the whole batch.
+
+For a successful evaluation, `row.ok` is true and `row.metrics` holds results such as `sharpe` and `exposure`. Admission is separate: inspect `row.decision.passed`, `reason` and `stopped_at`; `ok=True` can accompany `passed=False`. `foundry.export` writes typed reports. Discovery metadata from `foundry.schema()` and `session.describe()` is already a dictionary; serialize it with `json.dumps`.
 
 | Operation | Purpose | Portfolio effect |
 | --- | --- | --- |
@@ -125,7 +129,7 @@ foundry.import_perpetual(
 
 The importer acquires public USD-M archives, verifies checksums and retains source records. Open the output with `market="crypto_perpetual"` and matching dates. Existing datasets get asset order from their manifests; `symbols` selects new acquisition. A different provider must satisfy the explicit event contract in [`market/perpetual.py`](../foundry/market/perpetual.py).
 
-## External models and target positions
+## Numerical factors, model signals and target positions
 
 `session.grid` gives ordered dates, assets and snapshot identity. Arrays use shape `(B,T,S)`: candidates, dates, assets. This example registers three zero-signal candidates to demonstrate the interface; replace them with your actual outputs and information cutoffs.
 
@@ -152,6 +156,10 @@ with foundry.open() as session:
 | `signals` | Scores converted to positions by Foundry | Floating values; NaN may mark missing signals |
 | `target_weights` | Equity or spot long-only asset weights | Finite, nonnegative, total exposure at most 1, zero outside eligibility |
 | `target_exposure` | Perpetual signed notional/equity targets | Finite, gross exposure within configured leverage, zero outside eligibility |
+
+Signal magnitude directly controls exposure. For each eligible asset, cash markets use `clip(signal, 0, 1) / N`; short-enabled markets use `clip(signal, -1, 1) / N`, where `N` is that day's eligible asset count. Missing and ineligible signals contribute zero. Foundry does not rank these arrays or rescale them to full investment. With 100 eligible assets and a signal of `0.01` on each, cash exposure is 1%, not 100%. Apply your own causal score calibration before registration, or supply `target_weights` / `target_exposure` to specify allocations directly. Any fitted calibration must be included in `fit_through`.
+
+An [independent agent integration](integrations/agent-l4-20261116/README.md) exercised this path with custom numerical factors and a GPU-trained ridge model, then adapted them using returned feedback.
 
 Values must be floating arrays. Observation and fitting cutoffs are integer arrays `(B,T)`, using study row indices no later than decision row `t`; `-1` means no observations or fitting were used. Do not use `-1` for a trained model merely to satisfy validation. Daily close decisions execute no earlier than the next open.
 

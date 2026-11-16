@@ -4,6 +4,8 @@
 
 Foundry 用同一个会话评价公式、模型信号和目标持仓。人工研究、AI Agent、公式挖掘器与外部模型搜索共用市场规则和组合准入结论。
 
+候选由谁提出，与它如何表示是两个独立维度。人类、Agent 和机器学习程序都可以提供公式，也都可以提供任意 Python/CUDA 程序生成的数值数组；非公式因子无需改写成 Foundry 的公式语法。
+
 ## 公开 Python 接口
 
 ```python
@@ -24,6 +26,8 @@ with foundry.open(
 ```
 
 `evaluate` 接受公式字符串、公式序列、ID 到公式的映射、`Candidate`、候选序列或已注册批次。报告包含指标、账户风险和结构化准入结论；某个候选被拒绝不会中断整个批次。
+
+评价成功时，`row.ok` 为 true，`row.metrics` 包含 `sharpe`、`exposure` 等指标。准入要单独查看 `row.decision.passed`、`reason` 和 `stopped_at`；`ok=True` 不代表 `passed=True`。`foundry.export` 用于导出强类型报告；`foundry.schema()` 和 `session.describe()` 已返回字典，使用 `json.dumps` 序列化即可。
 
 | 操作 | 用途 | 对组合的影响 |
 | --- | --- | --- |
@@ -125,7 +129,7 @@ foundry.import_perpetual(
 
 导入器获取公开 USD-M 归档、验证校验和并保存来源记录。读取时使用 `market="crypto_perpetual"`、对应目录与日期。已有数据的资产顺序由 manifest 决定；`symbols` 用于新数据采集。其他供应商需满足 [`market/perpetual.py`](../foundry/market/perpetual.py) 的显式事件契约。
 
-## 外部模型与目标持仓
+## 数值因子、模型信号与目标持仓
 
 `session.grid` 提供日期、资产顺序和快照身份。数组形状为 `(B,T,S)`，分别表示候选、日期、资产。下面注册三个零信号候选以演示接口；实际接入时替换为模型输出和真实信息截止点。
 
@@ -152,6 +156,10 @@ with foundry.open() as session:
 | `signals` | 由 Foundry 转换为持仓的评分 | 浮点值；允许 NaN 表示缺失信号 |
 | `target_weights` | 股票或现货的多头资产权重 | 有限、非负、总敞口不超过 1，不具资格资产为零 |
 | `target_exposure` | 永续有符号名义金额/权益比例 | 有限、总绝对敞口不超过配置杠杆，不具资格资产为零 |
+
+信号幅度直接影响敞口。对每个具资格资产，现金市场使用 `clip(signal, 0, 1) / N`，允许做空的市场使用 `clip(signal, -1, 1) / N`；`N` 是当日具资格资产数量。缺失或不具资格的信号贡献为零。Foundry 不会自动对这些数组排名或归一化到满仓。若有 100 个具资格资产，每个信号都是 `0.01`，现金市场总敞口就是 1%，不是 100%。可在注册前自行进行因果评分校准，或使用 `target_weights` / `target_exposure` 直接指定持仓；校准过程若有拟合，必须计入 `fit_through`。
+
+[独立 Agent 接入记录](integrations/agent-l4-20261116/README.zh-CN.md) 使用真实数值因子和 GPU 岭回归模型跑通了这条路径，并根据返回的反馈调整候选。
 
 数值必须是浮点数组。观测和拟合截止点为 `(B,T)` 整数数组，使用研究网格行号且不晚于决策行 `t`；`-1` 表示未使用观测或拟合。已训练模型不能为了通过检查而伪报 `-1`。日线收盘决策最早在下一开盘执行。
 
