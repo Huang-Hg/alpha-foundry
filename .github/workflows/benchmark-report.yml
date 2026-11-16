@@ -30,7 +30,7 @@ jobs:
         working-directory: guides/benchmarks/parallel-cpu-20261116
         run: sha256sum -c SHA256SUMS
       - name: Verify discovery evidence
-        working-directory: guides/benchmarks/gfn-resident-l4-20261116
+        working-directory: guides/benchmarks/api-boundary-l4-20261116
         run: sha256sum -c SHA256SUMS
       - name: Verify selected data snapshots
         run: sha256sum -c data/SHA256SUMS
@@ -78,10 +78,15 @@ jobs:
           recorded = {name for name in manifest if name.startswith(('foundry/', 'validation/'))}
           removed = {'foundry/search/proposer/src/gfn.cpp'}
           added = {'validation/benchmarks/discovery.py', 'foundry/search/proposer/model.py', 'foundry/search/proposer/sampling.py',
-              'foundry/search/proposer/device_sampling.py'}
+              'foundry/search/proposer/device_sampling.py', 'foundry/search/proposer/batch.py', 'foundry/study/feedback.py'}
           migration = removed | added | {'foundry/api.py', 'foundry/__main__.py', 'foundry/search/driver.py',
               'foundry/search/proposer/gfn.py', 'foundry/search/proposer/random.py',
-              'validation/test_policy.py', 'validation/test_architecture.py', 'build.sh', 'requirements.txt'}
+              'validation/test_policy.py', 'validation/test_architecture.py', 'build.sh', 'requirements.txt',
+              'foundry/types.py', 'foundry/monitor/components.py', 'foundry/monitor/objectives.py',
+              'foundry/monitor/schema.py', 'foundry/rpc/schema.py', 'foundry/search/diagnostics.py',
+              'foundry/search/objective.py', 'foundry/search/proposer/external.py',
+              'foundry/study/pipeline.py', 'foundry/study/resources.py', 'foundry/study/session.py',
+              'validation/test_monitor.py', 'validation/test_search.py'}
           if tracked != (recorded - removed) | added:
               raise SystemExit('Source coverage changed; publish a new authorized cloud run')
           with tarfile.open(root / 'source.tar.gz') as archive:
@@ -91,7 +96,7 @@ jobs:
                       raise SystemExit(f'CPU evidence checksum failed: {name}')
                   if name not in migration and canonical(Path(name).read_bytes()) != canonical(measured):
                       raise SystemExit(f'Cloud evidence is stale for: {name}')
-          discovery = Path('guides/benchmarks/gfn-resident-l4-20261116')
+          discovery = Path('guides/benchmarks/api-boundary-l4-20261116')
           latest = json.loads((discovery / 'measured/plan.json').read_text())['source_sha256']
           smoke = json.loads((discovery / 'smoke/plan.json').read_text())['source_sha256']
           if tracked != set(latest) or smoke != latest:
@@ -102,6 +107,10 @@ jobs:
                   raise SystemExit('Discovery learning trajectory is incomplete')
               if result['policy_device'] != 'cuda' or result['policy_dtype'] != 'float32':
                   raise SystemExit('Policy training did not use CUDA FP32')
+          parity = json.loads((discovery / 'parity.json').read_text())
+          if not parity['passed'] or parity['maximum_absolute_error'] != 0 or parity['counts'] != {
+                  'candidates': 4288, 'decisions': 4288, 'accepted': 8, 'reweights': 8}:
+              raise SystemExit('Resident-feedback semantic parity is incomplete')
           with tarfile.open(discovery / 'source.tar.gz') as archive:
               for name, digest in latest.items():
                   measured = archive.extractfile(name).read()
@@ -140,8 +149,8 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
               output.write('This job verifies saved Colab evidence; it does not execute numerical tests.\n\n')
               output.write(report)
-              discovery_base = base.replace('parallel-cpu-20261116', 'gfn-resident-l4-20261116')
-              discovery_report = Path('guides/benchmarks/gfn-resident-l4-20261116/README.md').read_text()
+              discovery_base = base.replace('parallel-cpu-20261116', 'api-boundary-l4-20261116')
+              discovery_report = Path('guides/benchmarks/api-boundary-l4-20261116/README.md').read_text()
               discovery_report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + discovery_base + match[1] + ')', discovery_report)
               output.write('\n\n' + discovery_report)
       - name: Preserve benchmark evidence
@@ -150,7 +159,7 @@ jobs:
           name: benchmark-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             guides/benchmarks/parallel-cpu-20261116/
-            guides/benchmarks/gfn-resident-l4-20261116/
+            guides/benchmarks/api-boundary-l4-20261116/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

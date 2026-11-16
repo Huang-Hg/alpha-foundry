@@ -99,7 +99,7 @@ class Portfolio(Objective):
 
     def footnotes(self, st):
         return [(label, num(reading(st, 'counters.' + key))) for label, key in
-                (('行为重复', 'behavior_duplicates'), ('探针评价', 'probe_evaluations'))]
+                (('行为重复', 'behavior_duplicates'), ('辅助评价', 'auxiliary_evaluations'))]
 
 
 def sharpe_cell(report, st, bg):
@@ -150,7 +150,7 @@ class Single(Objective):
         anchor = [('锚', f"ρ {gate['anchor_correlation']:g} ↔ Sharpe {gate['anchor_sharpe']:g}")] if 'anchor_sharpe' in gate else []
         return anchor + [('κ', num(gate.get('required_appraisal'), '.3f')), ('先验均值', num(gate.get('prior_mean'), '+.3f')),
                          ('收缩', num(gate.get('shrinkage'), '.3f')), ('行为重复', num(reading(st, 'counters.behavior_duplicates'))),
-                         ('探针评价', num(reading(st, 'counters.probe_evaluations')))]
+                         ('辅助评价', num(reading(st, 'counters.auxiliary_evaluations')))]
 
 
 OBJECTIVES = {objective.key: objective for objective in (Portfolio(), Single())}

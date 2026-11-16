@@ -1,9 +1,13 @@
 """Uniform legal formula proposals with the same candidate and checkpoint contract."""
-from collections.abc import Sequence
+from __future__ import annotations
+
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 import json
 
+from foundry.search.proposer.batch import BatchOwner
 from foundry.search.proposer.sampling import Sampler
-from foundry.types import Candidate, Formula, ProposalBatch, TrainingResult
+from foundry.types import Candidate, ComputeDevice, Formula, LearningFeedback, ProposalBatch, ProposalRequest, TrainingResult
 
 
 class RandomProposer:
@@ -11,27 +15,48 @@ class RandomProposer:
                  max_ts_depth: int, window_caps: tuple[int, int], context_size: int,
                  *, name: str = 'random') -> None:
         self.name = name
-        self.sampler = Sampler(fields, seed, max_tokens, max_cost, max_ts_depth, window_caps, context_size)
+        self.grammar = (tuple(fields), seed, max_tokens, max_cost, max_ts_depth, window_caps, context_size)
 
-    def sample(self, count: int, probes: int, context: Sequence[float]) -> ProposalBatch:
-        sampler = self.sampler
-        sampler.sample(count + 12 * probes, context)
-        candidates = tuple(Candidate(expression, Formula(expression)) for expression in sampler.expressions())
-        return ProposalBatch(sampler.epoch, sampler.ordinary, 0, candidates)
+    @contextmanager
+    def open(self, device: ComputeDevice) -> Iterator[RandomRun]:
+        run = RandomRun(self)
+        try:
+            yield run
+        finally:
+            run.batches.close()
 
-    def train(self, batch: ProposalBatch, rewards: Sequence[float], *, steps: int,
-              learning_rate: float, opd_strength: float) -> TrainingResult:
+
+class RandomRun:
+    def __init__(self, specification: RandomProposer) -> None:
+        self.name = specification.name
+        self.sampler = Sampler(*specification.grammar)
+        self.batches = BatchOwner()
+
+    def propose(self, request: ProposalRequest) -> ProposalBatch:
+        self.batches.ready()
+        self.sampler.sample(request.count, request.features)
+        candidates = tuple(Candidate(expression, Formula(expression)) for expression in self.sampler.expressions())
+        return self.batches.issue(request, candidates, len(candidates))
+
+    def learn(self, feedback: LearningFeedback) -> TrainingResult:
+        self.batches.check(feedback.batch, learning=True)
+        self.batches.learned = True
         return TrainingResult()
 
+    def release(self, batch: ProposalBatch) -> None:
+        self.batches.release(batch)
+
     def dump(self) -> bytes:
-        return json.dumps(dict(protocol='foundry-random-v1', grammar=self.sampler.spec,
+        self.batches.ready()
+        return json.dumps(dict(protocol='foundry-random-v2', grammar=self.sampler.spec,
             budgets=[self.sampler.max_tokens, self.sampler.max_cost, self.sampler.max_ts_depth],
             context_size=self.sampler.context_size, rng=self.sampler.rng.bit_generator.state,
             epoch=self.sampler.epoch)).encode()
 
     def load(self, payload: bytes) -> None:
+        self.batches.ready()
         metadata = json.loads(payload)
-        if metadata['protocol'] != 'foundry-random-v1':
+        if metadata['protocol'] != 'foundry-random-v2':
             raise ValueError('random checkpoint protocol mismatch')
         if (metadata['grammar'] != self.sampler.spec or metadata['budgets'] != [self.sampler.max_tokens,
                 self.sampler.max_cost, self.sampler.max_ts_depth] or metadata['context_size'] != self.sampler.context_size):

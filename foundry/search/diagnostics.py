@@ -10,6 +10,7 @@ from foundry.search.archive import Archive, standardized
 from foundry.search.proposer.random import RandomProposer
 from foundry.study.session import ResidentPort
 from foundry.types import (
+    ProposalRequest,
     Candidate,
     ContextConflict,
     ContextFeature,
@@ -171,8 +172,11 @@ def sample_calibration(port: ResidentPort) -> CalibrationPopulation:
     settings, cfg = port.settings, port.settings.search
     proposer = RandomProposer(port.vocabulary, cfg.seed, cfg.max_tokens, settings.expr.max_cost,
                               cfg.max_ts_depth, port.window_caps, len(CONTEXT_NAMES))
-    batch = proposer.sample(settings.single.calibration_sample, 0, [0.] * len(CONTEXT_NAMES))
-    return prepare_calibration(port, tuple(dict.fromkeys(batch.candidates)))
+    with proposer.open(port.device) as producer:
+        batch = producer.propose(ProposalRequest(port.context, settings.single.calibration_sample, (0.,) * len(CONTEXT_NAMES)))
+        candidates = tuple(dict.fromkeys(batch.candidates))
+        producer.release(batch)
+    return prepare_calibration(port, candidates)
 
 
 def diagnose_current(port: ResidentPort) -> Diagnostics:

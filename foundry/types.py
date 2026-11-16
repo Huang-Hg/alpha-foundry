@@ -7,6 +7,7 @@ a device library. Field documentation defines dtype, units and ownership.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
+from contextlib import AbstractContextManager
 import hashlib
 from types import ModuleType
 from typing import Callable, Generic, Literal, Mapping, Protocol, Sequence, TypeAlias, TypeVar
@@ -842,29 +843,77 @@ class CandidateAcceptance:
 
 
 @dataclass(frozen=True)
+class ComputeDevice:
+    kind: Literal['cpu', 'cuda']
+    index: int = 0
+
+
+class ResidentVector(Protocol):
+    """Owned finite FP32 (B,) feedback, borrowed read-only until scope exit.
+
+    CUDA consumers name their stream; the borrow orders production before
+    consumption. Close waits for consumers and releases the allocation.
+    """
+    device: ComputeDevice
+    shape: tuple[int, ...]
+
+    def borrow(self, stream: int | None = None) -> AbstractContextManager[FloatArray]: ...
+    def to_host(self) -> HostArray: ...
+    def close(self) -> None: ...
+
+
+@dataclass(frozen=True)
+class ProposalRequest:
+    context: ResearchContext
+    count: int
+    features: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class ProposalBatch:
-    epoch: int
+    """One producer-owned, ordered batch; only its exact handle may be learned."""
+    owner: str
+    sequence: int
+    context: ResearchContext
     ordinary: int
-    probe_count: int
     candidates: tuple[Candidate, ...]
+
+    @property
+    def auxiliary(self) -> int:
+        return len(self.candidates) - self.ordinary
+
+
+@dataclass(frozen=True)
+class LearningFeedback:
+    batch: ProposalBatch
+    rewards: ResidentVector
+
+    def __post_init__(self) -> None:
+        if self.rewards.shape != (len(self.batch.candidates),):
+            raise ValueError('feedback must preserve the proposal batch axis')
 
 
 @dataclass(frozen=True)
 class TrainingResult:
-    loss_before: float | None = None
-    loss_after: float | None = None
-    teachers: int = 0
-    logz: float | None = None
+    metrics: Mapping[str, float] = field(default_factory=dict)
+
+
+class ProposalProducer(Protocol):
+    """One run owns its resources and at most one unreleased proposal batch."""
+    name: str
+
+    def propose(self, request: ProposalRequest) -> ProposalBatch | None: ...
+    def learn(self, feedback: LearningFeedback) -> TrainingResult: ...
+    def release(self, batch: ProposalBatch) -> None: ...
+    def dump(self) -> bytes: ...
+    def load(self, payload: bytes) -> None: ...
 
 
 class Proposer(Protocol):
+    """Resource-free specification; mine owns each opened producer's lifetime."""
     name: str
 
-    def sample(self, count: int, probes: int, context: Sequence[float]) -> ProposalBatch | None: ...
-    def train(self, batch: ProposalBatch, rewards: Sequence[float], *, steps: int,
-              learning_rate: float, opd_strength: float) -> TrainingResult: ...
-    def dump(self) -> bytes: ...
-    def load(self, payload: bytes) -> None: ...
+    def open(self, device: ComputeDevice) -> AbstractContextManager[ProposalProducer]: ...
 
 
 @dataclass(frozen=True)

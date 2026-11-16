@@ -25,6 +25,9 @@ from foundry.types import (
     EvaluationRow,
     FloatArray,
     PortfolioView,
+    LearningFeedback,
+    ProposalBatch,
+    ContextConflict,
     Proposal,
     ReweightResult,
     SingleGate,
@@ -96,11 +99,17 @@ def normalized_violation(proposal: Proposal, cfg: SearchConfig) -> float:
     return distance + any(check.name == 'capacity' and not check.passed for check in proposal.checks)
 
 
+@dataclass(frozen=True)
+class Scored:
+    rows: tuple[DiscoveryRow, ...]
+    rewards: FloatArray
+
+
 class PortfolioObjective:
     name = 'portfolio'
     gate: SingleGate | None = None
 
-    def score(self, batch: ScoringBatch) -> tuple[DiscoveryRow, ...]:
+    def score(self, batch: ScoringBatch) -> Scored:
         port, ref, behavior = batch.port, batch.reference, batch.behavior
         xp, returns = port.xp, batch.returns
         nonzero, rho, low_corr, novelty = behavior.nonzero, behavior.rho, behavior.low_correlation, behavior.novelty
@@ -121,7 +130,7 @@ class PortfolioObjective:
                 proposal.passed, verdict, rho=value.rho, utility=proposal.utility,
                 co_loss=value.co_loss, novelty=value.novelty, weight=proposal.weight,
                 delta=proposal.checks, backend=proposal.backend))
-        return tuple(output)
+        return Scored(tuple(output), reward.astype(xp.float32))
 
 
 def utility(sharpe: FloatArray, maxdd: FloatArray, cagr: FloatArray, port: ResidentPort) -> FloatArray:
@@ -137,7 +146,7 @@ class SingleObjective:
     gate: SingleGate
     name = 'single'
 
-    def score(self, batch: ScoringBatch) -> tuple[DiscoveryRow, ...]:
+    def score(self, batch: ScoringBatch) -> Scored:
         port, ref, behavior = batch.port, batch.reference, batch.behavior
         xp, cfg, portfolio_cfg = port.xp, port.settings.single, port.settings.portfolio
         returns = batch.returns
@@ -171,7 +180,7 @@ class SingleObjective:
                 g3=bool(value.gate), sharpe=value.sharpe, cagr=value.cagr, maxdd=value.maxdd,
                 rho_portfolio=value.rho_portfolio, rho_members=value.rho_members, appraisal=value.appraisal,
                 required_sharpe=value.required_sharpe, recent_years=tuple(values[width:])))
-        return tuple(output)
+        return Scored(tuple(output), reward.astype(xp.float32))
 
 
 class Discovery:
@@ -205,6 +214,7 @@ class Discovery:
         self.gate = self.objective.gate
         self.pending: OrderedDict[Candidate, BehaviorState] = OrderedDict()
         self.cache: dict[Candidate, DiscoveryRow] = {}
+        self.rewards: dict[Candidate, FloatArray] = {}
         self.best: Candidate | None = None
         self.best_score = -float('inf')
         self.counters = dict.fromkeys(self.COUNTERS + (('g3',) if self.objective.name == 'single' else ()), 0)
@@ -241,12 +251,24 @@ class Discovery:
                 valid = []
                 for candidate, row, verdict in zip(part, batch.rows, batch.verdicts):
                     self.cache[candidate] = DiscoveryRow(candidate, -12., False, False, False, verdict, error=row.error)
+                    self.rewards[candidate] = self.port.xp.asarray(-12., dtype=self.port.xp.float32)
                     if verdict.stopped_at != 'G1':
                         valid.append((candidate, row, verdict))
                 if valid:
                     self._score(tuple(valid))
         return DiscoveryReport(self.port.context, self.objective.name, tuple(self.cache[candidate] for candidate in candidates),
                                self.port.settings.search.noise_control)
+
+    def feedback(self, batch: ProposalBatch) -> LearningFeedback:
+        """Seal ordered device feedback after evaluation, before the single writer commits."""
+        self.check_context()
+        if batch.context != self.port.context:
+            raise ContextConflict('proposal batch belongs to a different research context')
+        if any(candidate not in self.cache for candidate in batch.candidates):
+            raise ValueError('evaluate every proposal before requesting feedback')
+        with self.port.scope():
+            values = self.port.xp.stack([self.rewards[candidate] for candidate in batch.candidates])
+            return LearningFeedback(batch, self.port.feedback_vector(values))
 
     def _behavior(self, returns: FloatArray) -> Behavior:
         xp = self.port.xp
@@ -266,12 +288,13 @@ class Discovery:
                                                   candidates, rows, verdicts, returns, behavior, self.rho_max))
         nonzero = self.port.to_host(behavior.nonzero).tolist()
         staged: OrderedDict[Candidate, tuple[int, int]] = OrderedDict()
-        for i, (report, fingerprint, has_returns) in enumerate(zip(scored, self.port.fingerprints(books), nonzero)):
+        for i, (report, fingerprint, has_returns) in enumerate(zip(scored.rows, self.port.fingerprints(books), nonzero)):
             duplicate = self.archive.duplicate(fingerprint, books[i], self.version, self.port)
             accepted = report.passed and not duplicate
             result = replace(report, log_reward=-10. if duplicate else report.log_reward,
                              passed=accepted, duplicate=duplicate)
             self.cache[report.candidate] = result
+            self.rewards[report.candidate] = xp.asarray(-10., dtype=xp.float32) if duplicate else scored.rewards[i]
             self.counters['g1'] += 1
             self.counters['g2'] += int(result.g2)
             if self.objective.name == 'single':

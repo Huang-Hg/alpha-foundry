@@ -194,7 +194,10 @@ with foundry.open(search=foundry.Search(epochs=2, accept=False)) as session:
                           proposers=(proposer,))
 ```
 
-`ExternalProposer` 接受有限的候选批次序列或已注册批次序列。可选反馈回调接收提案和评分，用于更新外部模型。回调在提案工作线程运行，不得使用会话持有的 GPU 资源；评价完成后，CPU 策略训练可与 GPU 提交和重配重叠，候选采样本身仍串行执行。驱动器保存候选身份、提案器和档案状态，支持显式续跑。
+`ExternalProposer` 接受有限的候选或已注册批次。`foundry.mine(..., session=session, proposers=[proposer])` 自动打开、恢复和关闭提案器资源，不关闭调用者传入的会话。可选回调接收一个 `LearningFeedback`：`feedback.batch` 保留候选顺序及研究快照，`feedback.rewards` 是同设备的 FP32 向量。CPU 程序可显式调用 `to_host()`；CUDA 程序在自己的流上使用 `borrow(stream_pointer)`，再用 DLPack 零拷贝接入 PyTorch。借用范围内不得修改反馈或向外保留别名。反馈不借用行情/组合缓冲区，因此可与提交和重配重叠。
+
+自定义提案器只需实现 `open(device)` 上下文管理器，返回具备 `propose(request)`、`learn(feedback)`、`release(batch)`、`dump()`、`load()` 的生产者。`ProposalRequest` 仅含批量规模、研究上下文和诊断特征；模型训练参数留在各自构造器。每个生产者仅允许一个未释放批次，反馈必须匹配原始批次句柄，不能混用实例、顺序或快照。驱动器等待学习完成后释放反馈和轨迹，再采样下一批；异常同样释放。普通候选与辅助候选按实际数量统计，随机提案器不再隐式追加 GFN 探针。检查点协议为 `candidate-discovery-v2`，旧检查点明确拒绝。额外反馈空间为 `O(B)`，不保存历史奖励或轨迹。
+
 
 不指定提案器时，`foundry.mine(output, ...)` 使用配置的 GFN 或随机公式提案器。默认 `Search(accept=False)` 仍通过有序准入和定期重配演进内存研究组合，只禁止发布到持久组合库。需要发布时使用 `Search(accept=True, seed_portfolio="current")`。传入持久会话也必须启用该设置，`accept=False` 时会明确拒绝。`Discovery`、挖掘和 walk-forward 需要进程内会话，其设备驻留计算不是远程回调协议。
 
@@ -313,6 +316,8 @@ python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512}}' \
 
 直接调用现有 `foundry.mine()`，测量采样、CUDA 候选评价、奖励反馈、GFN 训练、有序准入、CEM 重配及 checkpoint 的完整流程。候选规模通过 `Search` 调整；报告同时列出阶段累计时间与端到端墙钟时间，训练与提交/重配的重叠不能重复相加。
 
-GFN 模型定义、Trajectory Balance、配对教师和带梯度裁剪的 SGD 均在 Python/PyTorch 中实现。使用 `backend="cuda"` 时，前缀状态、合法动作掩码、抽样、网络推理和 FP32 训练使用独立 CUDA 流；CPU 仅接收探针小批次结果和最终公式 token。训练复用本批次采样时保存的特征与掩码，SGD 优化器随模型只初始化一次。CPU/portable 会话明确选择 PyTorch CPU 设备。直接构造 `GfnProposer(..., device="cuda")` 默认使用 CUDA，不静默回退。随机提案器不需要神经网络。
+GFN 模型定义、Trajectory Balance、配对教师和带梯度裁剪的 SGD 均在 Python/PyTorch 中实现。使用 `backend="cuda"` 时，前缀状态、合法动作掩码、抽样、网络推理和 FP32 训练使用独立 CUDA 流；CPU 仅接收探针小批次结果和最终公式 token。训练复用本批次采样时保存的特征与掩码，SGD 优化器随模型只初始化一次。CPU/portable 会话明确选择 PyTorch CPU 设备。`GfnProposer(...)` 只保存配置；设备由会话显式确定，只有 `open(device)` 才创建模型、流和优化器，不静默回退。随机提案器不需要神经网络。
 
-32 单元 tanh 网络、初始字段/算子概率分配、奖励、探针门控和准入条件保持不变。设备上的 PyTorch 随机采样与 FP32 训练会改变旧原生学习器及主机采样版本的随机轨迹，同一 seed 不保证相同公式。检查点采用 `foundry-gfn-torch-v2`，只包含 JSON 和数值数组，不使用 pickle，明确拒绝旧版检查点；检查点包含设备随机状态，精确续跑要求相同设备类别；SGD 无动量状态。仅保留当前批次的前缀和合法动作掩码，空间为 `O(B × L × (F + A))`，不建立历史回放缓存。探针临时空间上限为四个前缀、每个四十次共同后缀尝试，只保留成功选中的探针。此基准不运行独立 CPU 对照，也不将同一历史窗口的自适应准入视为样本外收益。
+32 单元 tanh 网络、初始字段/算子概率分配、奖励、探针门控和准入条件保持不变。设备上的 PyTorch 随机采样与 FP32 训练会改变旧原生学习器及主机采样版本的随机轨迹，同一 seed 不保证相同公式。检查点采用 `foundry-gfn-torch-v3`，只包含 JSON 和数值数组，不使用 pickle，明确拒绝旧版检查点；检查点包含设备随机状态，精确续跑要求相同设备类别；SGD 无动量状态。仅保留当前批次的前缀和合法动作掩码，空间为 `O(B × L × (F + A))`，不建立历史回放缓存。探针临时空间上限为四个前缀、每个四十次共同后缀尝试，只保留成功选中的探针。此基准不运行独立 CPU 对照，也不将同一历史窗口的自适应准入视为样本外收益。
+
+最新接口验收见 [L4 批次归属与驻留反馈报告](benchmarks/api-boundary-l4-20261116/README.zh-CN.md)：同一候选序列，数值与决策一致，附完整耗时和资源数据。

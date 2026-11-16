@@ -28,6 +28,7 @@ from foundry.numeric.parallel import HostWorkers
 from foundry.study.pipeline import DeviceResources, Pipeline
 from foundry.study.store import study_snapshot
 from foundry.types import (
+    ComputeDevice,
     Backend,
     BoolArray,
     FloatArray,
@@ -100,6 +101,7 @@ def load_study(settings: Settings, study: Study, backend: Backend) -> StudyData:
 
 class HostResources:
     def __init__(self, cfg: CpuConfig, initializer: Callable[[], None] | None = None) -> None:
+        self.placement = ComputeDevice('cpu')
         self.cfg = cfg
         self.workers = HostWorkers(cfg.workers, initializer)
         self.streams = (nullcontext(),)
@@ -138,6 +140,7 @@ class CudaResources:
     def __init__(self, cp: ModuleType, stream_count: int):
         self.cp = cp
         self.device = cp.cuda.Device()
+        self.placement = ComputeDevice('cuda', self.device.id)
         self.pool = cp.cuda.MemoryPool()
         self.streams = tuple(cp.cuda.Stream(non_blocking=True) for _ in range(stream_count))
 

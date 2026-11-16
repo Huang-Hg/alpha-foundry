@@ -2,26 +2,25 @@
 from collections import Counter
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import replace
 import time
 
-from foundry.config import SearchConfig
 from foundry.search.archive import Archive
 from foundry.search.diagnostics import CalibrationPopulation, sample_calibration
 from foundry.search.objective import Discovery
 from foundry.study.session import Session
 from foundry.types import (
     CheckpointStore, DiscoveryReport, MiningCheckpoint, MiningEpoch, MiningStatus,
-    MiningTimings, ProposalBatch, Proposer, ProposerState, TelemetrySink, TrainingResult,
+    MiningTimings, ProposalBatch, ProposalProducer, ProposalRequest, Proposer, ProposerState,
+    LearningFeedback, ContextConflict, TelemetrySink, TrainingResult,
 )
 
 
-def train(proposer: Proposer, batch: ProposalBatch, rewards: Sequence[float],
-          cfg: SearchConfig) -> tuple[TrainingResult, float]:
-    """The worker receives scalar feedback only and never borrows session resources."""
+def learn(proposer: ProposalProducer, feedback: LearningFeedback) -> tuple[TrainingResult, float]:
+    """The worker borrows only immutable feedback, never mutable session state."""
     started = time.perf_counter()
-    learned = proposer.train(batch, rewards, steps=cfg.train_steps,
-                             learning_rate=cfg.learning_rate, opd_strength=cfg.opd_strength)
+    learned = proposer.learn(feedback)
     return learned, time.perf_counter() - started
 
 
@@ -66,7 +65,9 @@ class MiningDriver:
             objective=self.cfg.objective, noise_control=self.cfg.noise_control,
             device=resources.device, used_mib=resources.used_mib)
         try:
-            return self._run()
+            with ExitStack() as lifetime:
+                producers = tuple(lifetime.enter_context(p.open(self.session.resident.device)) for p in self.proposers)
+                return self._run(producers)
         except KeyboardInterrupt:
             self._publish(replace(self._status, phase='interrupted',
                                   elapsed_seconds=time.perf_counter() - self._started))
@@ -76,7 +77,7 @@ class MiningDriver:
                                   elapsed_seconds=time.perf_counter() - self._started))
             raise
 
-    def _run(self) -> MiningStatus:
+    def _run(self, producers: tuple[ProposalProducer, ...]) -> MiningStatus:
         cfg = self.cfg
         checkpoint = self.checkpoints.read()
         begin, accepted, elapsed = 0, 0, 0.
@@ -86,9 +87,9 @@ class MiningDriver:
                 raise ValueError('Resume data/config/protocol mismatch')
             if checkpoint.portfolio.context.id != self.session.context.id:
                 raise ValueError('Resume portfolio context mismatch')
-            if tuple(state.name for state in checkpoint.proposers) != tuple(p.name for p in self.proposers):
+            if tuple(state.name for state in checkpoint.proposers) != tuple(p.name for p in producers):
                 raise ValueError('Resume proposer configuration mismatch')
-            for proposer, state in zip(self.proposers, checkpoint.proposers):
+            for proposer, state in zip(producers, checkpoint.proposers):
                 proposer.load(state.payload)
             begin, accepted, elapsed = checkpoint.epoch, checkpoint.accepted, checkpoint.elapsed_seconds
             totals.update(checkpoint.counters)
@@ -113,56 +114,64 @@ class MiningDriver:
                 self._publish(status)
                 sample_start = time.perf_counter()
                 batch = None
-                for offset in range(len(self.proposers)):
-                    proposer = self.proposers[(epoch + offset) % len(self.proposers)]
-                    batch = proposer.sample(cfg.batch_size, cfg.probes, discovery.context())
+                for offset in range(len(producers)):
+                    proposer = producers[(epoch + offset) % len(producers)]
+                    request = ProposalRequest(self.session.context, cfg.batch_size, tuple(discovery.context()))
+                    batch = proposer.propose(request)
                     if batch is not None:
                         if not isinstance(batch, ProposalBatch):
                             raise TypeError('Proposers must return ProposalBatch or None')
+                        if batch.context != request.context:
+                            raise ContextConflict('proposer returned a batch for a different research context')
                         if not batch.candidates:
                             raise ValueError('Proposers must return nonempty candidate batches')
                         break
                 if batch is None:
                     status = replace(status, phase='complete', epoch=epoch)
                     break
-                timings = MiningTimings(sampling_seconds=time.perf_counter() - sample_start)
-                status = replace(status, phase='evaluating', timings=timings, proposer=proposer.name)
-                self._publish(status)
-                eval_start = time.perf_counter()
-                rows = []
-                batch_size = self.session.resident.candidate_batch
-                for lo in range(0, len(batch.candidates), batch_size):
-                    report = discovery.evaluate(batch.candidates[lo:lo + batch_size])
-                    rows.extend(report.rows)
-                    progress = totals.copy()
-                    progress.update(discovery.counters)
-                    resources = self.session.resident.resource_status()
-                    status = replace(status, counters=dict(progress), recent=tuple(rows[-8:]),
-                                     elapsed_seconds=time.perf_counter() - started,
-                                     device=resources.device, used_mib=resources.used_mib)
+                with ExitStack() as batch_lifetime:
+                    batch_lifetime.callback(proposer.release, batch)
+                    timings = MiningTimings(sampling_seconds=time.perf_counter() - sample_start)
+                    status = replace(status, phase='evaluating', timings=timings, proposer=proposer.name)
                     self._publish(status)
-                report = DiscoveryReport(report.context, report.objective, tuple(rows), report.delayed)
-                timings = replace(timings, evaluation_seconds=time.perf_counter() - eval_start)
-                status = replace(status, phase='training', timings=timings)
-                self._publish(status)
-                training = trainer.submit(train, proposer, batch, tuple(row.log_reward for row in rows), cfg)
-                commit_start = time.perf_counter()
-                candidate = discovery.accept()
-                timings = replace(timings, commit_seconds=time.perf_counter() - commit_start)
-                accepted += int(candidate is not None)
-                status = replace(status, phase='reweighting', accepted=accepted, timings=timings)
-                self._publish(status)
-                reweight = None
-                reweight_start = time.perf_counter()
-                if not cfg.noise_control and cfg.reweight_iterations and (candidate is not None or epoch % cfg.reweight_every == 0):
-                    reweight = self.session.reweight(iterations=cfg.reweight_iterations,
-                                                     count=cfg.reweight_batch, seed=cfg.seed + epoch)
-                timings = replace(timings, reweight_seconds=time.perf_counter() - reweight_start)
-                learned, training_seconds = training.result()
-                timings = replace(timings, training_seconds=training_seconds)
+                    eval_start = time.perf_counter()
+                    rows = []
+                    batch_size = self.session.resident.candidate_batch
+                    for lo in range(0, len(batch.candidates), batch_size):
+                        report = discovery.evaluate(batch.candidates[lo:lo + batch_size])
+                        rows.extend(report.rows)
+                        progress = totals.copy()
+                        progress.update(discovery.counters)
+                        resources = self.session.resident.resource_status()
+                        status = replace(status, counters=dict(progress), recent=tuple(rows[-8:]),
+                                         elapsed_seconds=time.perf_counter() - started,
+                                         device=resources.device, used_mib=resources.used_mib)
+                        self._publish(status)
+                    report = DiscoveryReport(report.context, report.objective, tuple(rows), report.delayed)
+                    feedback = discovery.feedback(batch)
+                    batch_lifetime.callback(feedback.rewards.close)
+                    timings = replace(timings, evaluation_seconds=time.perf_counter() - eval_start)
+                    status = replace(status, phase='training', timings=timings)
+                    self._publish(status)
+                    training = trainer.submit(learn, proposer, feedback)
+                    batch_lifetime.callback(training.result)
+                    commit_start = time.perf_counter()
+                    candidate = discovery.accept()
+                    timings = replace(timings, commit_seconds=time.perf_counter() - commit_start)
+                    accepted += int(candidate is not None)
+                    status = replace(status, phase='reweighting', accepted=accepted, timings=timings)
+                    self._publish(status)
+                    reweight = None
+                    reweight_start = time.perf_counter()
+                    if not cfg.noise_control and cfg.reweight_iterations and (candidate is not None or epoch % cfg.reweight_every == 0):
+                        reweight = self.session.reweight(iterations=cfg.reweight_iterations,
+                                                         count=cfg.reweight_batch, seed=cfg.seed + epoch)
+                    timings = replace(timings, reweight_seconds=time.perf_counter() - reweight_start)
+                    learned, training_seconds = training.result()
+                    timings = replace(timings, training_seconds=training_seconds)
                 self.archive.update(discovery.pending)
                 totals.update(discovery.counters)
-                totals['probe_evaluations'] += batch.probe_count * 12
+                totals['auxiliary_evaluations'] += batch.auxiliary
                 totals['reweight_evaluations'] += reweight.evaluations if reweight is not None else 0
                 portfolio = self.session.portfolio()
                 resources = self.session.resident.resource_status()
@@ -176,7 +185,7 @@ class MiningDriver:
                 self.telemetry.record(record)
                 self.checkpoints.publish(MiningCheckpoint(self.signature, epoch + 1, portfolio,
                     tuple(self.archive.items), dict(totals), accepted, time.perf_counter() - started,
-                    tuple(ProposerState(p.name, p.dump()) for p in self.proposers)))
+                    tuple(ProposerState(p.name, p.dump()) for p in producers)))
                 timings = replace(timings, checkpoint_seconds=time.perf_counter() - checkpoint_start)
                 status = replace(status, timings=timings)
                 self._publish(status)

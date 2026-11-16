@@ -27,6 +27,7 @@ from foundry.ops.parse import validate
 from foundry.portfolio.allocation import signal_to_book
 from foundry.study.cache import CandidateCache, MeasurementKey, MemberKey
 from foundry.types import (
+    ComputeDevice,
     ArrayBatch,
     ArraySource,
     Backend,
@@ -78,6 +79,7 @@ INVALID = 'G1 数值无效:含无穷值或全为缺失'
 class DeviceResources(Protocol):
     """Explicit host/device ownership needed by candidate computation."""
     streams: tuple[nullcontext[None] | Stream, ...]
+    placement: ComputeDevice
 
     def formulas(self, roots: Sequence[Node], fields: Mapping[str, FloatArray],
                  backend: Backend, universe: BoolArray) -> list[FloatArray]: ...

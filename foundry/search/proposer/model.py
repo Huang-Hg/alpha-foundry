@@ -9,7 +9,7 @@ from torch import Tensor, nn
 
 from foundry.search.proposer.sampling import Sampler
 from foundry.search.proposer.device_sampling import DeviceSampler, Drawn, Trajectories
-from foundry.types import HostArray, TrainingResult
+from foundry.types import ComputeDevice, HostArray, ResidentVector, TrainingResult
 
 
 class Policy(nn.Module):
@@ -88,13 +88,13 @@ def paired_teacher(model: Policy, batch: Trajectories, rewards: Tensor) -> tuple
 class Learner:
     """Own one model and a dedicated CUDA stream; never borrow account or market buffers."""
 
-    def __init__(self, sampler: Sampler, device: str, seed: int) -> None:
-        if device not in ('cpu', 'cuda'):
+    def __init__(self, sampler: Sampler, device: ComputeDevice, seed: int) -> None:
+        if device.kind not in ('cpu', 'cuda'):
             raise ValueError('policy device must be cpu or cuda')
-        self.device = torch.device(device)
-        self.stream = torch.cuda.Stream(device=self.device) if device == 'cuda' else None
+        self.device = torch.device(device.kind, device.index) if device.kind == 'cuda' else torch.device('cpu')
+        self.stream = torch.cuda.Stream(device=self.device) if device.kind == 'cuda' else None
         with self.scope():
-            self.model = Policy(sampler, device)
+            self.model = Policy(sampler, self.device)
             self.sampling = DeviceSampler(sampler, self.device, seed)
             # The public train call sets the requested rate before any update.
             self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0., foreach=False)
@@ -111,10 +111,11 @@ class Learner:
             self.batch = self.drawn.trace
             return tuple(tuple(token for token in row if token >= 0) for row in self.drawn.tokens.cpu().tolist())
 
-    def train(self, batch: Trajectories, rewards: HostArray, steps: int, learning_rate: float,
+    def train(self, batch: Trajectories, rewards: ResidentVector, steps: int, learning_rate: float,
               opd_strength: float) -> TrainingResult:
-        with self.scope():
-            target = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
+        stream = self.stream.cuda_stream if self.stream is not None else None
+        with self.scope(), rewards.borrow(stream) as values:
+            target = torch.from_dlpack(values) if self.stream is not None else torch.tensor(values, dtype=torch.float32)
             model = self.model
             parameters = (model.w1, model.w2)
             optimizer = self.optimizer
@@ -145,7 +146,7 @@ class Learner:
             with torch.no_grad():
                 after = trajectory_balance(model, batch, target)
                 values = torch.stack((before, after, teachers, model.z @ batch.context)).cpu().tolist()
-            return TrainingResult(values[0], values[1], int(values[2]), values[3])
+            return TrainingResult(dict(loss_before=values[0], loss_after=values[1], teachers=values[2], logz=values[3]))
 
     def arrays(self) -> dict[str, HostArray]:
         with self.scope():
@@ -163,3 +164,14 @@ class Learner:
     def random_state(self) -> HostArray:
         with self.scope():
             return self.sampling.rng.get_state().numpy().copy()
+
+    def release(self) -> None:
+        self.batch = None
+        self.drawn = None
+        self.optimizer.zero_grad(set_to_none=True)
+
+    def close(self) -> None:
+        if self.stream is not None:
+            self.stream.synchronize()
+        self.release()
+        del self.optimizer, self.model, self.sampling

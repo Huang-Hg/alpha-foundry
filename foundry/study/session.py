@@ -10,7 +10,9 @@ from foundry.types import ReweightResult
 from foundry.portfolio.library import Library, Member, SEED
 from foundry.portfolio.portfolio import Portfolio
 from foundry.numeric.allocation import cap_book
-from foundry.types import (Candidate, CandidateResult, CommitResult, ContextConflict, DeviceBatch,
+from foundry.study.feedback import FeedbackVector
+from foundry.types import (
+    ComputeDevice,Candidate, CandidateResult, CommitResult, ContextConflict, DeviceBatch,
                                     EvaluationResult, PortfolioReport, ResearchContext, WeightCommit,
                                     WeightReport, WeightTrials)
 from contextlib import ExitStack
@@ -514,6 +516,16 @@ class ResidentPort:
     @property
     def to_host(self) -> Callable[[Array], HostArray]:
         return self.__ledger.pipeline.to_host
+
+    @property
+    def device(self) -> ComputeDevice:
+        self.context
+        return self.__ledger.pipeline.resources.placement
+
+    def feedback_vector(self, values: FloatArray) -> FeedbackVector:
+        """Transfer ownership of a small vector; its lease survives portfolio CAS."""
+        self.context
+        return FeedbackVector(values, self.xp, self.device)
 
     @property
     def ppy(self) -> float:

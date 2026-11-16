@@ -178,6 +178,6 @@ Status = Union[SearchStatus, ServiceStatus]
 GLIDE = ('epoch', 'accepted', 'counters.requested', 'counters.unique_evaluations',
          'counters.g1', 'counters.g2', 'counters.g3', 'counters.low_corr',
          'counters.behavior_duplicates', 'counters.weight_trials',
-         'counters.probe_evaluations', 'counters.reweight_evaluations',
+         'counters.auxiliary_evaluations', 'counters.reweight_evaluations',
          'portfolio.metrics.sharpe', 'portfolio.metrics.cagr', 'used_mib', 'exprs')
 RESTART = ('epoch', 'counters.unique_evaluations', 'exprs')

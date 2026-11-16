@@ -401,13 +401,13 @@ class PerformanceCard(Card):
             legend += fit([Seg('● ', color, SURFACE), Seg(name+' ', INK3, SURFACE), Seg(seconds(value), INK2, SURFACE)],
                           inner//len(self.TIMING), SURFACE)
         rows += [Row(SURFACE).extend(legend), Row(SURFACE)]
-        before, after = reading(st, 'training.loss_before'), reading(st, 'training.loss_after')
+        before, after = reading(st, 'training.metrics.loss_before'), reading(st, 'training.metrics.loss_after')
         learning = Row(SURFACE).add('策略学习  ', INK3)
         if before is None or after is None:
             learning.add('—', INK3)
         else:
             learning.add(f'loss {before:.1f} → {after:.1f}', INK2).add('  '+num(after/before-1 if before else None, '+.1%'), GREEN if after < before else RED)
-            learning.end('logZ '+num(reading(st, 'training.logz'), '+.3f'), INK3)
+            learning.end('logZ '+num(reading(st, 'training.metrics.logz'), '+.3f'), INK3)
         return rows + [learning]
 
 

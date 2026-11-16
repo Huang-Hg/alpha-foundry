@@ -24,7 +24,7 @@ MAX_RESPONSE_BYTES = 1 << 30
 MAX_PENDING = 64
 HEARTBEAT_SECONDS = 10.
 BUNDLE = 'candidate-batch-v2'
-CHECKPOINT_FORMAT = 'candidate-discovery-v1'
+CHECKPOINT_FORMAT = 'candidate-discovery-v2'
 
 REPORT_NOTES = {
     Metrics: {
