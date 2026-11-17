@@ -49,7 +49,7 @@ jobs:
       - name: Build native extensions from README commands
         run: |
           sed -n '/<!-- native-build:start -->/,/<!-- native-build:end -->/p' README.md \
-            | sed -n '/^```bash$/,/^```$/p' | sed '1d;$d' > /tmp/native-build.sh
+            | sed -n '/^```bash$/,/^```$/p' | sed '1d' | head -n -1 > /tmp/native-build.sh
           test -s /tmp/native-build.sh
           bash -euo pipefail /tmp/native-build.sh
           git clean -fdX foundry
