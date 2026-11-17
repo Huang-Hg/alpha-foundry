@@ -21,14 +21,18 @@ class Ops:
     def __init__(self):
         contract = _KERNELS.parent.joinpath('two_point.hpp').read_text(encoding='utf-8')
         self._OPS = cp.RawModule(code=contract+'\n'+'\n'.join((_KERNELS / name).read_text(encoding='utf-8') for name in ('ops.cu','select.cu')), options=('--std=c++14', '--fmad=false'))
-        self._PATHS = cp.RawModule(code=contract+'\n'+(_KERNELS / 'paths.cu').read_text(encoding='utf-8'), options=('--std=c++14', '--fmad=false'))
+        self._PATHS = cp.RawModule(code=contract+'\n'+'\n'.join((_KERNELS / n).read_text(encoding='utf-8') for n in ('paths.cu', 'rolling.cu')), options=('--std=c++14', '--fmad=false'))
         self._PROPS = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
         self._WARP = self._PROPS['warpSize']
         self._OPTIN = self._PROPS['sharedMemPerBlockOptin']
         self._MAXTHR = self._PROPS['maxThreadsPerBlock']
         self._SHBUDGET = min(self._OPTIN, self._PROPS['sharedMemPerMultiprocessor'] // 3)
         self._k_moment, self._k_ext, self._k_ema, self._k_cs, self._k_cs_rank = (self._OPS.get_function(n) for n in ('k_moment', 'k_ext', 'k_ema', 'k_cs', 'k_cs_rank'))
-        self._k_pair, self._k_slope, self._k_standardize, self._k_std = (self._PATHS.get_function(n) for n in ('k_pair', 'k_slope', 'k_standardize', 'k_std'))
+        self._k_pair, self._k_standardize, self._k_std = (self._PATHS.get_function(n) for n in ('k_pair', 'k_standardize', 'k_std'))
+        self._staged = {name: self._PATHS.get_function(f'k_{name}_staged') for name in ('slope', 'av_diff')}
+        self._history_capacity = min(self._SHBUDGET, *(self._optin_max(fn) for fn in self._staged.values()))
+        self._pack_history = self._PATHS.get_function('k_history_pack')
+        self._finish_history = self._PATHS.get_function('k_history_finish')
         self._median = {size:self._OPS.get_function(f'k_median{size}') for size in (32,128,512,2048)}
         self._DYNMAX = min((self._optin_max(f) for f in (self._k_moment, self._k_ext, self._k_cs_rank)))
         self.max_window = self._max_window()
@@ -49,6 +53,13 @@ class Ops:
         self._left_tail = self._ew('left_tail', 'T a, float64 k', 'o = (a > (T)k) ? qnan<T>() : a;')
         self._right_tail = self._ew('right_tail', 'T a, float64 k', 'o = (a < (T)k) ? qnan<T>() : a;')
         self._if_else = self._ew('if_else', 'T c, T a, T b', 'o = isnan(c) ? qnan<T>() : ((c > 0) ? a : b);')
+        self._shift = cp.ElementwiseKernel('raw T x, int64 assets, int64 lag, bool difference', 'T o',
+            'o = i < lag * assets ? (T)nan("") : (difference ? x[i] - x[i-lag*assets] : x[i-lag*assets]);',
+            'fm_shift')
+        self._backfill = cp.ElementwiseKernel('raw T x, int64 assets, int64 window', 'T o',
+            'o = (T)nan(""); for (long long j=i, stop=max((long long)(i % assets), '
+            '(long long)i-(window-1)*assets); j>=stop; j-=assets) { '
+            'T v=x[j]; if (!isnan(v)) { o=v; break; } }', 'fm_backfill')
         self.IMPL = dict(abs=cp.abs, neg=lambda x: -x, sign=self._sign, log=self._log, square=lambda x: x * x, sqrt=self._sqrt, tanh=self._tanh, inv=self._inv, s_log_1p=self._s_log_1p, **{'not': self._not}, is_nan=self._is_nan, add=lambda a, b: a + b, sub=lambda a, b: a - b, mul=lambda a, b: a * b, div=self._div, max=cp.maximum, min=cp.minimum, gt=self._pred('gt', 'a > b'), lt=self._pred('lt', 'a < b'), **{'and': self._pred('and', '(a > 0) && (b > 0)'), 'or': self._pred('or', '(a > 0) || (b > 0)')}, equal=self._pred('equal', 'a == b'), not_equal=self._pred('not_equal', 'a != b'), greater_equal=self._pred('ge', 'a >= b'), less_equal=self._pred('le', 'a <= b'), add_const=lambda x, k: x + D(k), mul_const=lambda x, k: x * D(k), pow_const=lambda x, k: self._pow(x, D(k)), left_tail=lambda x, k: self._left_tail(x, float(k)), right_tail=lambda x, k: self._right_tail(x, float(k)), hump=self.hump, if_else=self._if_else, trade_when=self.trade_when, cs_rank=self.cs_rank, cs_zscore=lambda x: self._cs(x, 0), cs_demean=lambda x: self._cs(x, 1), cs_scale=lambda x: self._cs(x, 2), ts_mean=self.ts_mean, ts_std=self.ts_std, ts_max=self.ts_max, ts_min=self.ts_min, ts_sum=self.ts_sum, ts_rank=self.ts_rank, ts_arg_max=self.ts_arg_max, ts_arg_min=self.ts_arg_min, ts_ema=self.ts_ema, ts_wma=self.ts_wma, ts_ref=self.ts_ref, ts_delta=self.ts_delta, ts_skew=self.ts_skew, ts_kurt=self.ts_kurt, ts_mad=self.ts_mad, ts_slope=self.ts_slope, ts_chanpos=self.ts_chanpos, ts_ddown=self.ts_ddown, ts_zscore=self.ts_zscore, ts_snr=self.ts_snr, ts_backfill=self.ts_backfill, ts_median=self.ts_median, ts_av_diff=self.ts_av_diff, ts_decay_exp_window=self.ts_decay_exp_window, ts_scale=self.ts_scale, ts_quantile=self.ts_quantile, ts_corr=self.ts_corr, ts_cov=self.ts_cov, ts_regression=self.ts_regression)
         assert set(self.IMPL) == set(OPS), set(OPS) ^ set(self.IMPL)
 
@@ -108,8 +119,17 @@ class Ops:
         if w==2:
             self._PATHS.get_function('k_pair2')(((T*S+127)//128,),(128,),(a,b,out,np.int32(T),np.int32(S),np.int32(op)))
             return out
-        self._k_pair(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (a, b, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op)))
+        grid, tile = self._path_tiles(T, S)
+        self._k_pair(grid, (self._WARP,), (a, b, out, np.int32(T), np.int32(S), np.int32(w), np.int32(op), tile))
         return out
+
+    def _path_tiles(self, days, assets):
+        """Bound prefix replay while exposing independent output tiles to the device."""
+        columns = (assets + self._WARP - 1) // self._WARP
+        tiles = min(16, max(1, (days + 31) // 32),
+                    max(1, self._PROPS['multiProcessorCount'] * 4 // columns))
+        tile = (days + tiles - 1) // tiles
+        return (columns, tiles), np.int32(tile)
 
     def ts_sum(self, x, w):
         return self._moment(x, w, 0)
@@ -120,7 +140,8 @@ class Ops:
     def ts_std(self, x, w):
         T, S = x.shape
         out = cp.empty_like(x)
-        self._k_std(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        grid, tile = self._path_tiles(T, S)
+        self._k_std(grid, (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(w), tile))
         return out
 
     def ts_mad(self, x, w):
@@ -141,11 +162,30 @@ class Ops:
     def ts_wma(self, x, w):
         return self._ext(x, w, 2)
 
-    def ts_slope(self, x, w):
+    def _history(self, x, w, name):
+        """Choose the storage plan before launch; arithmetic is shared by both plans."""
         T, S = x.shape
         out = cp.empty_like(x)
-        self._k_slope(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, out, np.int32(T), np.int32(S), np.int32(w)))
+        counts = cp.empty(x.shape if name == 'av_diff' else (0,), dtype=cp.int32)
+        pitch = (T + 1) // 2 * 2
+        if pitch * 4 * _ELEM <= self._history_capacity:
+            packed = cp.empty(((S + 3) // 4, pitch, 4), dtype=D)
+            self._pack_history(((S + 31) // 32, (T + 31) // 32), (32, 8),
+                (x, packed, np.int32(T), np.int32(S), np.int32(pitch)))
+            tile = (T + 7) // 8
+            self._staged[name](((S + 3) // 4,), (self._WARP,),
+                (packed, out, counts, np.int32(T), np.int32(S), np.int32(w), np.int32(pitch), np.int32(tile)),
+                shared_mem=pitch * 4 * _ELEM)
+        else:
+            grid, tile = self._path_tiles(T, S)
+            self._PATHS.get_function(f'k_{name}')(grid, (self._WARP,),
+                (x, out, counts, np.int32(T), np.int32(S), np.int32(w), tile))
+        self._finish_history(((x.size + 255) // 256,), (256,),
+            (x, out, counts, np.int32(x.size), np.int32(w), np.int32(name == 'slope')))
         return out
+
+    def ts_slope(self, x, w):
+        return self._history(x, w, 'slope')
 
     def ts_rank(self, x, w):
         return self._ext(x, w, 4)
@@ -169,13 +209,10 @@ class Ops:
         return out
 
     def ts_ref(self, x, w):
-        out = cp.full_like(x, cp.nan)
-        if w < x.shape[0]:
-            out[w:] = x[:-w]
-        return out
+        return self._shift(x, x.shape[1], w, False, cp.empty_like(x))
 
     def ts_delta(self, x, w):
-        return x - self.ts_ref(x, w)
+        return self._shift(x, x.shape[1], w, True, cp.empty_like(x))
 
     def _cs(self, x, op):
         T, S = x.shape
@@ -228,11 +265,7 @@ class Ops:
         return self._range(x, w, 2, k)
 
     def ts_av_diff(self, x, w):
-        T, S = x.shape
-        out = cp.empty_like(x)
-        self._PATHS.get_function('k_av_diff')(((S+self._WARP-1)//self._WARP,), (self._WARP,),
-            (x, out, np.int32(T), np.int32(S), np.int32(w)))
-        return out
+        return self._history(x, w, 'av_diff')
 
     def ts_quantile(self, x, w, driver):
         """Plotting position p = (r + 0.5)/w of the rank within the window, through the inverse CDF of the driver."""
@@ -252,10 +285,10 @@ class Ops:
             (y, x, out, np.int32(T), np.int32(S), np.int32(w), np.int32(round(float(rettype)))))
         return out
 
-    def _recursive(self, x, y, z, mode, window=0, k=0.0):
+    def _recursive(self, x, y, z, mode, k=0.0):
         T, S = x.shape
         out = cp.empty_like(x)
-        self._PATHS.get_function('k_recursive')(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, y, z, out, np.int32(T), np.int32(S), np.int32(mode), np.int32(window), np.float64(k)))
+        self._PATHS.get_function('k_recursive')(((S + self._WARP - 1) // self._WARP,), (self._WARP,), (x, y, z, out, np.int32(T), np.int32(S), np.int32(mode), np.float64(k)))
         return out
 
     def trade_when(self, entry, alpha, exit_):
@@ -265,7 +298,7 @@ class Ops:
         return self._recursive(x, x, x, 1, k=k)
 
     def ts_backfill(self, x, w):
-        return self._recursive(x, x, x, 2, window=w)
+        return self._backfill(x, x.shape[1], w, cp.empty_like(x))
 
     def ts_decay_exp_window(self, x, w, factor):
         T, S = x.shape
