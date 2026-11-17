@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <numeric>
 #include <random>
@@ -11,16 +12,16 @@
 
 namespace {
 void require(bool yes,const char* why) { if(!yes) throw std::runtime_error(why); }
-void cem_sample(const double*mean,const double*sd,int n,int count,uint64_t seed,double*out){
+void cem_sample(const double*mean,const double*sd,npy_intp n,npy_intp count,uint64_t seed,double*out){
     require(n>0&&n<=64&&count>0,"CEM shape");std::mt19937_64 rng(seed);std::normal_distribution<double> normal;
     // Member weights are additive scales in (0,1), independent of each other: no simplex.
-    for(int b=0;b<count;b++)for(int j=0;j<n;j++){require(std::isfinite(mean[j])&&std::isfinite(sd[j])&&sd[j]>=0,"CEM parameters");out[b*n+j]=1/(1+std::exp(-(mean[j]+sd[j]*normal(rng))));}
+    for(npy_intp b=0;b<count;b++)for(npy_intp j=0;j<n;j++){require(std::isfinite(mean[j])&&std::isfinite(sd[j])&&sd[j]>=0,"CEM parameters");out[b*n+j]=1/(1+std::exp(-(mean[j]+sd[j]*normal(rng))));}
 }
-void cem_update(const double*weights,const double*scores,int n,int count,int elite,double*mean,double*sd){
-    require(n>0&&count>=elite&&elite>0,"CEM update shape");std::vector<int> ids(count);std::iota(ids.begin(),ids.end(),0);
-    std::stable_sort(ids.begin(),ids.end(),[&](int a,int b){return scores[a]>scores[b];});
-    std::vector<double> x(elite*n);for(int k=0;k<elite;k++)for(int j=0;j<n;j++){double w=std::clamp(weights[ids[k]*n+j],1e-12,1-1e-12);x[k*n+j]=std::log(w/(1-w));}
-    for(int j=0;j<n;j++){double mu=0,var=0;for(int k=0;k<elite;k++)mu+=x[k*n+j]/elite;for(int k=0;k<elite;k++)var+=(x[k*n+j]-mu)*(x[k*n+j]-mu)/elite;mean[j]=.3*mean[j]+.7*mu;sd[j]=std::max(.1,.3*sd[j]+.7*std::sqrt(var));}
+void cem_update(const double*weights,const double*scores,npy_intp n,npy_intp count,npy_intp elite,double*mean,double*sd){
+    require(n>0&&count>=elite&&elite>0,"CEM update shape");std::vector<npy_intp> ids(count);std::iota(ids.begin(),ids.end(),npy_intp{0});
+    std::stable_sort(ids.begin(),ids.end(),[&](npy_intp a,npy_intp b){return scores[a]>scores[b];});
+    std::vector<double> x(static_cast<std::size_t>(elite)*n);for(npy_intp k=0;k<elite;k++)for(npy_intp j=0;j<n;j++){double w=std::clamp(weights[ids[k]*n+j],1e-12,1-1e-12);x[k*n+j]=std::log(w/(1-w));}
+    for(npy_intp j=0;j<n;j++){double mu=0,var=0;for(npy_intp k=0;k<elite;k++)mu+=x[k*n+j]/elite;for(npy_intp k=0;k<elite;k++)var+=(x[k*n+j]-mu)*(x[k*n+j]-mu)/elite;mean[j]=.3*mean[j]+.7*mu;sd[j]=std::max(.1,.3*sd[j]+.7*std::sqrt(var));}
 }
 
 // Weight kernel errors surface as RuntimeError carrying the original message.
@@ -61,7 +62,7 @@ PyObject* py_cem_sample(PyObject*,PyObject*args,PyObject*kw) {
     else {
         npy_intp dims[2]={count,n};
         out=reinterpret_cast<PyArrayObject*>(PyArray_EMPTY(2,dims,NPY_DOUBLE,0));
-        if(out&&!guarded([&]{ cem_sample(cdata(mean),cdata(sd),int(n),count,seed,static_cast<double*>(PyArray_DATA(out))); })) Py_CLEAR(out);
+        if(out&&!guarded([&]{ cem_sample(cdata(mean),cdata(sd),n,count,seed,static_cast<double*>(PyArray_DATA(out))); })) Py_CLEAR(out);
     }
     Py_DECREF(mean); Py_DECREF(sd);
     return reinterpret_cast<PyObject*>(out);
@@ -79,7 +80,7 @@ PyObject* py_cem_update(PyObject*,PyObject*args,PyObject*kw) {
     npy_intp count=PyArray_DIM(weights,0),n=PyArray_DIM(weights,1); bool ok=false;
     if(PyArray_DIM(scores,0)!=count||!inout(mean,n)||!inout(sd,n))
         PyErr_SetString(PyExc_ValueError,"cem_update needs one score per weight row and writable float64 mean/sd of the row length");
-    else ok=guarded([&]{ cem_update(cdata(weights),cdata(scores),int(n),int(count),elite,wdata(mean),wdata(sd)); });
+    else ok=guarded([&]{ cem_update(cdata(weights),cdata(scores),n,count,elite,wdata(mean),wdata(sd)); });
     Py_DECREF(weights); Py_DECREF(scores);
     if(!ok) return nullptr;
     Py_RETURN_NONE;
