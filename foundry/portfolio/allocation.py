@@ -1,19 +1,23 @@
-"""Allocation semantics shared by formulas, arrays and portfolio weighting."""
+"""Explicit score sizing shared by formulas and registered score arrays."""
+from types import ModuleType
+
+from foundry.config import Sizing
+from foundry.types import Allocation, BoolArray, FloatArray, IntArray
 
 
-def signal_to_book(values, universe, slots, allocation, xp):
+def score_to_book(values: FloatArray, universe: BoolArray, slots: FloatArray | IntArray,
+                  allocation: Allocation, sizing: Sizing, xp: ModuleType) -> FloatArray:
+    """Map resident (...,D,S) scores to equity fractions on eligible assets.
+
+    Missing scores produce zero targets. Equal slots divide a budget capped at
+    one by eligible asset count; the default preserves exact clip/divide math.
+    Independent sizing never divides by asset count or rescales across assets.
+    The evaluation boundary judges its resulting per-candidate gross budget.
+    """
     lower = -1. if allocation.allow_short else 0.
-    return xp.where(universe & xp.isfinite(values), xp.clip(values, lower, 1.), 0.) / slots
-
-
-def gross_exposure(book, allocation, xp):
-    values = xp.abs(book) if allocation.allow_short else book
-    return values.sum(-1, keepdims=True)
-
-
-def cap_book(book, allocation, xp):
-    gross = gross_exposure(book, allocation, xp)
-    if allocation.max_gross == 1.:
-        # Preserve the cash-book operation order and rounding.
-        return book / xp.maximum(1, gross)
-    return book / xp.maximum(1., gross / allocation.max_gross)
+    scores = xp.where(universe & xp.isfinite(values), xp.clip(values, lower, 1.), 0.)
+    if sizing.rule == 'equal_slots':
+        if allocation.max_gross >= 1.:
+            return scores / slots
+        return scores * allocation.max_gross / slots
+    return scores * sizing.scale
