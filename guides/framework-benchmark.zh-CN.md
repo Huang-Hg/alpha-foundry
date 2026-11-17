@@ -58,21 +58,10 @@ NVML 在测量轮内每 20 毫秒采样该 worker 的 GPU 驻留内存。峰值�
 
 报告同时保留绝对误差和尺度误差，后者定义为 `abs(actual-reference) / max(1, abs(reference))`。参照实现为 Foundry CPU，不是外部真值模拟器。通过这一有限用例，不等于验收全部算子、永续资金费/强平、A 股限制、PIT 来源或研究准入规则。跨框架加速比也不重新验收 Foundry 独立的同卡 1.5 倍精度开销预算。
 
-## 在授权云端环境复现
+## 对标环境
 
-使用具备兼容 NVIDIA 驱动和原生构建工具的 Linux 或 WSL2。固定版本的 Spectre 要求 Python 3.14，因此使用独立环境。[pyproject.toml](../pyproject.toml) 中的 `frameworks` 和 `spectre` 依赖组保留了环境准备时验证的直接依赖版本；运行元数据保存实际安装的完整发行包版本。依赖组不是完整的传递依赖锁文件。以下命令在仓库根目录执行，两套环境保持独立。
+历史测量为 Foundry、vectorbt/vectorbt-rust 1.2.1、Freqtrade 2026.10 与 Spectre 分别准备了隔离环境；Spectre 使用上游提交 `c059665ba33b3d98f523ee55fdecf5105af146f6` 和 Python 3.14。完整安装版本保留在本地证据归档中。
 
-```bash
-python -m pip install --upgrade "pip>=25.1" uv
-python -m uv python install 3.13.16 3.14.10
-python -m uv venv --python 3.13.16 /content/framework-main
-python -m pip --python /content/framework-main/bin/python install --group frameworks
-python -m uv venv --python 3.14.10 /content/framework-spectre
-python -m pip --python /content/framework-spectre/bin/python install --group spectre
-source /content/framework-main/bin/activate
-# Build the native extensions using the README commands.
-```
+第三方框架单独安装在对标环境，不属于 Foundry 依赖，也不通过根目录 `pyproject.toml` 安装。PyPI 上同名的 `spectre` 包与被测项目无关。
 
-[主环境](../pyproject.toml) 固定 vectorbt/vectorbt-rust 1.2.1 和 Freqtrade 2026.10。[Spectre 环境](../pyproject.toml) 固定上游提交 `c059665ba33b3d98f523ee55fdecf5105af146f6`。已验证的 Linux Torch 运行时报告 `2.15.0+cu132`，发行包元数据报告 `2.15.0`。PyPI 上名为 `spectre` 的包与该项目无关，必须使用固定 Git URL，不绕过上游依赖要求。
-
-测试驱动保留本地，不随仓库发布。用 pytest／pytest-benchmark 调度相同数据与交易契约，先跑小规模 smoke，再执行声明的网格；保留每个实现的版本、原始数组、耗时、误差和决策结果。
+测试驱动保留本地。用 pytest／pytest-benchmark 调度相同数据与交易契约，先跑小规模 smoke，再执行声明的网格；保留各实现的版本、原始数组、耗时、误差和决策结果。

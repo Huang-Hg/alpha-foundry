@@ -3,8 +3,6 @@ paths:
   - foundry
   - .github/workflows
 paths-ignore:
-  - guides/benchmarks/current
-  - guides/benchmarks/archive
   - data
 queries:
   - uses: security-extended

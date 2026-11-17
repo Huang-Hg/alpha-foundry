@@ -14,51 +14,6 @@ mining = [
     { include-group = "runtime" },
     "torch>=2.6,<3",
 ]
-benchmark = [
-    { include-group = "mining" },
-    "pytest>=9.0,<10",
-    "pytest-benchmark>=5.1,<6",
-    "pytest-html>=4.1,<5",
-]
-# Static tooling stays independent of the numerical runtime.
-dev = ["pre-commit>=4.3,<5"]
 # Select exactly one CuPy group matching the compute host's CUDA major.
 cuda12 = ["cupy-cuda12x"]
 cuda13 = ["cupy-cuda13x"]
-# Framework comparisons use separate environments with verified direct pins.
-# Main: Python 3.13.16 on Linux Colab; transitive versions remain in run metadata.
-frameworks = [
-    { include-group = "mining" },
-    "numpy==2.5.4",
-    "pandas==3.1.1",
-    "pyarrow==26.0.1",
-    "cupy-cuda13x==14.2.0",
-    "vectorbt==1.2.1",
-    "vectorbt-rust==1.2.1",
-    "freqtrade==2026.10",
-    "numba==0.68.1",
-    "nvidia-ml-py==13.615.71",
-]
-# Spectre: Python 3.14.10; the similarly named PyPI package is unrelated.
-spectre = [
-    "spectre @ git+https://github.com/Heerozh/spectre.git@c059665ba33b3d98f523ee55fdecf5105af146f6",
-    "torch==2.15.0",
-    "numpy==2.5.4",
-    "pandas==3.1.1",
-    "pyarrow==26.0.1",
-    "plotly==7.1.0",
-    "lxml==6.1.3",
-    "tqdm==4.70.1",
-    "yfinance==1.8.0",
-    "nvidia-ml-py==13.615.71",
-]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py", "bench_*.py"]
-python_functions = ["test_*", "bench_*"]
-pythonpath = ["."]
-addopts = "--import-mode=importlib"
-cache_dir = "var/runs/pytest-cache"
-junit_family = "xunit2"
-markers = ["performance: measured CPU/CUDA workloads"]

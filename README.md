@@ -122,10 +122,8 @@ Dependencies are managed in [pyproject.toml](pyproject.toml) via [pip dependency
 | CPU research or remote RPC client | `python -m pip install --group runtime` |
 | CUDA research | `python -m pip install --group runtime --group cuda13` |
 | GFlowNet formula mining on CUDA | `python -m pip install --group mining --group cuda13` |
-| Cloud regression and benchmark suite | `python -m pip install --group benchmark --group cuda13` |
-| Local static checks (`pre-commit`, Ruff, `actionlint`) | `python -m pip install --group dev` |
 
-Install either `cuda12` or `cuda13` (never both) to match the host CUDA driver/runtime. PyTorch is required only for built-in GFlowNet policy training (`mining` / `benchmark`). Pass `backend="cpu"` when opening a CPU session.
+Install either `cuda12` or `cuda13` (never both) to match the host CUDA driver/runtime. PyTorch is required only for built-in GFlowNet policy training (`mining`). Pass `backend="cpu"` when opening a CPU session.
 
 ### Remote client / server mode
 

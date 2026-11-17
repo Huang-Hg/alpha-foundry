@@ -10,7 +10,7 @@ Run static verification locally without loading market data or initializing a GP
 
 ```bash
 python -m pip install --upgrade "pip>=25.1"
-python -m pip install --group dev
+python -m pip install 'pre-commit>=4.3,<5'
 python -m pre_commit run --all-files
 ```
 
@@ -19,6 +19,8 @@ This checks syntax, undefined names, YAML/JSON/TOML schemas, private-key pattern
 ## Cloud validation and publication boundary
 
 Native compilation, numerical regression suites, and CPU/CUDA benchmarks run on explicitly authorized Linux cloud compute using the root README build snippet, `pytest`, `pytest-benchmark`, and `pytest-html`. Finish and freeze code edits before running the acceptance suite.
+
+Install validation tools separately in the local test environment. The root `pyproject.toml` contains only Foundry runtime, optional mining, and CUDA dependencies; third-party framework comparisons use isolated environments. Maintainer pytest configuration stays in untracked `tests/pytest.ini` (`python -m pytest -c tests/pytest.ini`).
 
 Keep the tracked repository clean:
 - **Never commit** credentials, `.env*` files, private portfolios (`production/`), runtime state (`var/`, `tmp/`, `logs/`, `output/`), internal notes (`docs/`), local instructions (`AGENTS.md`, `.gitignore`, `.gitattributes`), or local test/driver trees (`tests/`, `scripts/`, `validation/`).

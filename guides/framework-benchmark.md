@@ -58,21 +58,10 @@ NVML samples the worker's GPU residency every 20 ms during the measured round. T
 
 Absolute and scaled errors are both retained. Scaled error means `abs(actual-reference) / max(1, abs(reference))`. The reporting reference is Foundry CPU, not an external ground-truth simulator. Passing this limited workload does not validate all operators, perpetual funding/liquidation, A-share restrictions, PIT provenance or research admission rules. Cross-framework speedups do not requalify Foundry's separate same-device 1.5× precision budget.
 
-## Reproduce on the authorized cloud runtime
+## Comparison environments
 
-Use Linux or WSL2 with compatible NVIDIA drivers and native build tools. This comparison was prepared with separate Python environments because the pinned Spectre revision requires Python 3.14. The `frameworks` and `spectre` dependency groups in [pyproject.toml](../pyproject.toml) preserve the direct packages verified during setup; run metadata records the complete observed installed distribution versions. These groups are not a full transitive lockfile. Run the following commands from the repository root and keep the two environments separate.
+The historical run used separate environments for Foundry, vectorbt/vectorbt-rust 1.2.1 and Freqtrade 2026.10, and for Spectre at upstream commit `c059665ba33b3d98f523ee55fdecf5105af146f6` with Python 3.14. Complete installed versions remain in the local evidence archive.
 
-```bash
-python -m pip install --upgrade "pip>=25.1" uv
-python -m uv python install 3.13.16 3.14.10
-python -m uv venv --python 3.13.16 /content/framework-main
-python -m pip --python /content/framework-main/bin/python install --group frameworks
-python -m uv venv --python 3.14.10 /content/framework-spectre
-python -m pip --python /content/framework-spectre/bin/python install --group spectre
-source /content/framework-main/bin/activate
-# Build the native extensions using the README commands.
-```
+Third-party framework packages belong in isolated comparison environments. They are not Foundry dependencies and are not installed by its root `pyproject.toml`. The similarly named PyPI package `spectre` is unrelated to the compared project.
 
-The [main environment](../pyproject.toml) pins vectorbt/vectorbt-rust 1.2.1 and Freqtrade 2026.10. The [Spectre environment](../pyproject.toml) pins upstream commit `c059665ba33b3d98f523ee55fdecf5105af146f6`. Its verified Linux Torch installation reports `2.15.0+cu132`; package metadata reports `2.15.0`. The PyPI package named `spectre` is unrelated: use the pinned Git URL. Dependencies are installed without bypassing the upstream requirements.
-
-Comparison drivers stay local and are not distributed. Use pytest/pytest-benchmark with the same data and trading contract, first a small smoke and then the declared grid. Preserve implementation versions, raw arrays, timing, errors and decisions.
+Comparison drivers stay local. Use pytest/pytest-benchmark with the same data and trading contract, first a small smoke and then the declared grid. Preserve implementation versions, raw arrays, timing, errors and decisions.

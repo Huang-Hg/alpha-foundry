@@ -122,10 +122,8 @@ PY
 | CPU 研究或远程 RPC 客户端 | `python -m pip install --group runtime` |
 | CUDA 研究 | `python -m pip install --group runtime --group cuda13` |
 | CUDA GFlowNet 公式挖掘 | `python -m pip install --group mining --group cuda13` |
-| 云端回归测试与性能基准 | `python -m pip install --group benchmark --group cuda13` |
-| 本地静态检查（`pre-commit`、Ruff、`actionlint`） | `python -m pip install --group dev` |
 
-请根据主机 CUDA 主版本二选一安装 `cuda12` 或 `cuda13`。仅内置 GFlowNet 策略训练（`mining` / `benchmark`）依赖支持 CUDA 的 PyTorch；日常研究与评估无需安装 PyTorch。使用 CPU 后端时传入 `backend="cpu"`。
+请根据主机 CUDA 主版本二选一安装 `cuda12` 或 `cuda13`。仅内置 GFlowNet 策略训练（`mining`）依赖支持 CUDA 的 PyTorch；日常研究与评估无需安装 PyTorch。使用 CPU 后端时传入 `backend="cpu"`。
 
 ### 远程服务与跨平台客户端
 

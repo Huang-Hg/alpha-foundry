@@ -17,8 +17,10 @@ Each published directory captures a concrete hardware, dataset, and numerical-ac
 
 Regression suites and benchmark drivers stay local in untracked `tests/` and `scripts/`, executed via `pytest`, `pytest-benchmark`, and `pytest-html`. On an authorized Linux GPU host:
 
-1. Install `--group benchmark` plus the matching CuPy group (`--group cuda12` or `--group cuda13`).
+1. Install `--group mining` plus the matching CuPy group (`--group cuda12` or `--group cuda13`).
 2. Compile the native C++ extensions using the command block in the root [README](../../README.md#installation-and-native-build).
 3. Run the local `pytest` / `pytest-benchmark` suite into `var/runs/<run>/`.
 
 Public directories under `guides/benchmarks/` keep only concise bilingual Markdown reports, CSV tables, and `summary.json` files. Raw logs, JUnit/HTML reports, `.npz` outputs, and source archives stay in local `var/runs/`. GitHub Actions validates published summaries and bundled data checksums without launching GPU instances. Note that historical reports may cite command lines from earlier revisions (such as the retired `foundry benchmark` CLI wrapper).
+
+Install `pytest`, `pytest-benchmark`, and `pytest-html` separately in the test environment; run the local suite with `python -m pytest -c tests/pytest.ini`.
