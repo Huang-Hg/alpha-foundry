@@ -1,17 +1,24 @@
-# Foundry 性能与正确性
+# Foundry 性能与数值基准
 
-[English](README.md)
+[English](README.md) · [项目概览](../../README.zh-CN.md) · [研究指南](../research.zh-CN.md)
 
-[连续入选与调权 L4 报告](program-transitions-l4-20261117/README.zh-CN.md)对比组合状态变化时的完整流程，明确区分真实连续入选与双成员历史组合调权，并在报告内说明测试口径。
+每个公开基准目录对应一次明确的硬件、数据集与数值精度验收。最新端到端状态演进报告见 [L4 连续入选与组合调权](program-transitions-l4-20261117/README.zh-CN.md)。
 
-| 历史测量 | 内容 |
+| 基准报告 | 测量范围与核心结论 |
 | --- | --- |
-| [报告复用](program-commit-l4-20261117/README.zh-CN.md) | 全部拒绝时，256 程序查询＋提交 42.301 → 20.851 秒；不外推到连续入选 |
-| [时间策略](timed-l4-20261116/README.zh-CN.md) | 4096 数组、256 程序；保留不合格精度对照 |
-| [固定 CPU](parallel-cpu-20261116/README.md) | 固定 Colab CPU、真实候选与试探并行 |
-| [外部框架](frameworks-pro6000-20261115/README.zh-CN.md) | Spectre、vectorbt、Freqtrade 的共同交易契约 |
-| [66 算子](ops-pro6000-20261115/README.zh-CN.md) | 逐项耗时、误差与完整公式流程 |
+| [L4 连续入选与组合调权](program-transitions-l4-20261117/README.zh-CN.md) | 组合状态发生真实变化时的连续入选与双成员历史组合调权全流程 |
+| [L4 评审结果复用](program-commit-l4-20261117/README.zh-CN.md) | 全部拒绝场景下 256 个有状态程序查询＋提交 `42.301 s → 20.851 s`（`2.03×`） |
+| [L4 多周期与订单策略](timed-l4-20261116/README.zh-CN.md) | 4096 个数组候选、256 个订单程序，并完整保留未达标的单 FP32 负向对照 |
+| [固定 Colab CPU 并行基线](parallel-cpu-20261116/README.zh-CN.md) | 固定 Colab CPU 实例上 8 worker 候选与权重试算并行（`215.660 s → 106.645 s`） |
+| [外部回测框架横评](frameworks-pro6000-20261115/README.zh-CN.md) | 同一日线现货 SMA 交易契约下对比 Foundry、Spectre、vectorbt 与 Freqtrade |
+| [66 算子 CUDA 优化](ops-pro6000-20261115/README.zh-CN.md) | 全部 66 个算子、124 个窗口条件的逐项耗时、数值误差与 4096 公式端到端流程 |
 
-测试代码和驱动留在本地，不随仓库发布；执行、计时与测试报告使用 pytest、pytest-benchmark、pytest-html。依赖通过 `python -m pip install --group benchmark --group cuda13` 安装，构建按根目录 README 执行。GPU 组应匹配实际 CUDA 版本。
+## 在授权云端环境复现
 
-GitHub Actions 只校验和展示保存的结果，不跑数值任务。新报告记录硬件、规模、精度、完整用例耗时、误差与决策；完整原始工件和含测试／任务源码的压缩包保留本地。历史报告中的命令属于当时版本，已移除的 `foundry benchmark` 不是当前公开接口。
+回归测试与基准驱动仅保留在本地未跟踪的 `tests/` 与 `scripts/` 中，统一通过 `pytest`、`pytest-benchmark` 与 `pytest-html` 调度。在授权 Linux GPU 实例上：
+
+1. 安装 `--group benchmark` 及匹配主机 CUDA 主版本的 CuPy 依赖组（`--group cuda12` 或 `--group cuda13`）。
+2. 按根目录 [README](../../README.zh-CN.md#环境安装与原生扩展构建) 编译 C++ 原生扩展。
+3. 运行本地 `pytest` / `pytest-benchmark` 套件并将完整输出写入 `var/runs/<run>/`。
+
+`guides/benchmarks/` 公开目录仅保留双语 Markdown 报告、精简 CSV 表格与 `summary.json`；原始日志、JUnit/HTML 报告、`.npz` 数组及源码归档统一留在本地 `var/runs/`。GitHub Actions 仅核验已发布摘要与测试数据校验和，不启动计费算力。部分早期报告中记录的命令行（如已移除的 `foundry benchmark` 包装子命令）仅反映当时版本的调用方式。

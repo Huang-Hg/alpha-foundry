@@ -1,10 +1,12 @@
 # Contributing
 
-Start from a feature branch and open a pull request. Keep commit messages, code comments and docstrings in English. Preserve the English and Chinese user guides when changing public behavior.
+Work on a feature branch (`codex/<topic>`) and submit changes through a pull request. Write commit messages, code comments, and docstrings in English; keep public documentation bilingual (`README.md` / `README.zh-CN.md` and `guides/*.md` / `guides/*.zh-CN.md`) whenever user-facing behavior changes.
 
-Use public Foundry parameters rather than adding a configuration file or another compatibility entry point. See the [research guide](../guides/research.md) for market and interface contracts.
+Pass configuration through Foundry's typed public parameters rather than introducing configuration files, environment overrides, or compatibility shims. See the [Research guide](../guides/research.md) for architecture and interface contracts.
 
-Run static checks locally:
+## Local static checks
+
+Run static verification locally without loading market data or initializing a GPU:
 
 ```bash
 python -m pip install --upgrade "pip>=25.1"
@@ -12,10 +14,13 @@ python -m pip install --group dev
 python -m pre_commit run --all-files
 ```
 
-This checks source syntax, undefined names, tracked configuration and GitHub workflow definitions. It does not import Foundry or run numerical code.
+This checks syntax, undefined names, YAML/JSON/TOML schemas, private-key patterns, and GitHub Actions workflows.
 
-Builds, numerical tests and benchmarks run on the explicitly authorized cloud worker. Use the README build commands and pytest with pytest-benchmark in a local suite. Publish concise [benchmark results](../guides/benchmarks/README.md), including source digests, decision differences and timing. A saved benchmark is evidence for its recorded inputs and source, not automatic validation of later code.
+## Cloud validation and publication boundary
 
-Do not publish private portfolios, credentials or unselected data. Keep `AGENTS.md`, `.gitignore` and `.gitattributes` local. Maintainer tests and helpers stay in untracked `tests/` and `scripts/`; do not publish renamed copies or source archives. Public benchmark files are limited to compact Markdown, CSV and summary.json. GitHub Actions runs repository, dependency and security checks using dedicated tools.
+Native compilation, numerical regression suites, and CPU/CUDA benchmarks run on explicitly authorized Linux cloud compute using the root README build snippet, `pytest`, `pytest-benchmark`, and `pytest-html`. Finish and freeze code edits before running the acceptance suite.
 
-Required GitHub checks enforce static quality and saved-evidence integrity. No workflow starts paid compute, merges a PR or publishes a package automatically.
+Keep the tracked repository clean:
+- **Never commit** credentials, `.env*` files, private portfolios (`production/`), runtime state (`var/`, `tmp/`, `logs/`, `output/`), internal notes (`docs/`), local instructions (`AGENTS.md`, `.gitignore`, `.gitattributes`), or local test/driver trees (`tests/`, `scripts/`, `validation/`).
+- **Published benchmarks** under `guides/benchmarks/` contain only compact bilingual Markdown reports, CSV tables, and `summary.json` files—never raw archives (`*.tar.gz`), JUnit XML, HTML reports, or cloud job scripts. A saved benchmark documents its recorded source and hardware; it does not automatically certify later revisions.
+- **GitHub Actions** enforces the tracked-file allowlist, static checks, dependency review, CodeQL analysis, and published data/benchmark integrity without launching paid GPU compute or auto-merging pull requests.

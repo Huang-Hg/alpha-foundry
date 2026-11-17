@@ -1,17 +1,17 @@
 # GitHub 检查与发布边界
 
-[English](github.md)
+[English](github.md) · [贡献说明](../.github/CONTRIBUTING.md)
 
-仓库保留运行库、双语文档、依赖和必要 GitHub Actions 配置。测试与辅助脚本只保留在本地 `tests/`、`scripts/`，不通过其他目录或压缩包上传。原生构建命令在 README 中。
+公开仓库仅跟踪 `foundry/` 核心包、双语用户文档（`guides/`）、经审核的测试数据快照（`data/`）、依赖声明（`pyproject.toml`）以及必要的 GitHub 质量门禁配置（`.github/`、`.pre-commit-config.yaml`）。回归测试（`tests/`）与基准驱动脚本（`scripts/`）仅保留在本地磁盘，不通过改名目录或内嵌源码压缩包上传。C++ 原生扩展构建命令统一维护在根目录 [README](../README.zh-CN.md) 中。
 
-| 检查 | 使用的基础设施 |
+| 门禁类别 | 基础设施 |
 | --- | --- |
-| 静态质量 | pre-commit、Ruff、actionlint |
-| 依赖与安全 | GitHub Dependency Review、CodeQL、Dependabot |
-| 实测报告 | sha256sum 校验选定数据，summary.json 内嵌源码摘要，Actions Job Summary 展示结果，upload-artifact 保存报告 |
+| 跟踪文件白名单与静态质量 | 路径白名单校验、`pre-commit`、Ruff、`actionlint`、原生扩展编译检查 |
+| 依赖与安全扫描 | GitHub Dependency Review、CodeQL（`python`、`c-cpp`、`actions`）、Dependabot |
+| 数据快照与基准摘要核验 | `data/SHA256SUMS` 严格校验、`summary.json` 状态核验、Actions Job Summary 展示 |
 
-数值验收在明确授权的云端，用 pytest、pytest-benchmark、pytest-html。先完成所有修改并冻结源码，再集中验收；相邻任务共用同一 GPU，每条件默认一次。CI 不启动付费 GPU，不代替市场规则或数值正确性检查。
+数值回归与 CPU/CUDA 性能基准在明确授权的云端实例上通过 `pytest`、`pytest-benchmark` 与 `pytest-html` 执行：先完成代码修改并冻结版本，再集中验收；相邻任务复用同一 GPU 会话，每项条件默认测量一次。GitHub Actions 不启动计费 GPU，也不替代四市场规则与数值精度验收。
 
-报告只保留精简 Markdown、CSV 表格和内嵌源码摘要的 summary.json；完整原始结果和本地测试代码不进入 Git。旧报告是历史证据，不证明当前源码通过相同验收。
+`guides/benchmarks/` 下仅发布精简双语 Markdown 报告、CSV 表格与 `summary.json`；完整原始日志与归档包统一留在本地 `var/runs/`。已发布报告仅对当时记录的源码摘要与硬件环境负责，不自动背书后续代码变更。
 
-本地静态检查可运行 `python -m pip install --group dev` 后执行 `python -m pre_commit run --all-files`。Actions 和 hooks 固定提交版本。分支保护、安全扫描、依赖审查仍由 GitHub 管理；本轮不推送、不合并，工作流尚未在 GitHub 运行。
+本地静态检查可通过安装 `--group dev` 后执行 `python -m pre_commit run --all-files` 完成。所有 GitHub Actions 与 `pre-commit` 钩子均固定到完整 commit SHA。

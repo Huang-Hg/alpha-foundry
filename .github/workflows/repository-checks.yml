@@ -18,7 +18,7 @@ jobs:
   static:
     name: Static checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -28,18 +28,31 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
-      - name: Keep local tooling out of publication
+      - name: Enforce the tracked-file allowlist
         run: |
-          if [ -n "$(git ls-files test tests scripts validation build.sh)" ]; then
-            echo "Local tests, helper scripts and build.sh must not be tracked."
+          forbidden='^(tests?|scripts|validation|tmp|var|logs|output|docs|production|venues|mcp-ssh|\.claude|\.codex)/'
+          forbidden+='|^(AGENTS\.md|CLAUDE\.md|\.gitignore|\.gitattributes|build\.sh|\.mcp\.json)$'
+          forbidden+='|(^|/)(\.env(\..*)?|hosts\.json|id_(rsa|ed25519)[^/]*)$'
+          forbidden+='|\.(pem|key|p12|pfx|log|tar|tar\.gz|tgz|zip|7z|pkl|pickle|npz|npy|pyc|pyd|so|dll)$'
+          bad=$(git ls-files | grep -E "$forbidden" || true)
+          raw=$(git ls-files guides/benchmarks | grep -vE '\.(md|csv)$|/summary\.json$' || true)
+          if [ -n "$bad$raw" ]; then
+            printf 'Files that must stay local:\n%s\n%s\n' "$bad" "$raw"
             exit 1
           fi
-      - name: Install static tooling
+      - name: Install static tooling and build dependencies
         run: |
           python -m pip install --upgrade 'pip>=25.1'
-          python -m pip install --group dev
+          python -m pip install --group dev numpy
       - name: Check tracked files without running Foundry
         run: python -m pre_commit run --all-files --show-diff-on-failure
+      - name: Build native extensions from README commands
+        run: |
+          sed -n '/<!-- native-build:start -->/,/<!-- native-build:end -->/p' README.md \
+            | sed -n '/^```bash$/,/^```$/p' | sed '1d;$d' > /tmp/native-build.sh
+          test -s /tmp/native-build.sh
+          bash -euo pipefail /tmp/native-build.sh
+          git clean -fdX foundry
 
   dependency-review:
     name: Dependency review

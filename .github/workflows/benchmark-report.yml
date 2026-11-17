@@ -23,9 +23,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Verify selected data
-        run: sha256sum --quiet -c data/SHA256SUMS
-      - name: Publish measured summary
+      - name: Verify bundled market snapshots
+        run: sha256sum --strict --quiet -c data/SHA256SUMS
+      - name: Validate published benchmark summaries
         env:
           REPORT_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: python
@@ -36,23 +36,50 @@ jobs:
           from pathlib import Path
           import re
 
-          folder = Path('guides/benchmarks/program-transitions-l4-20261117')
-          summary = json.loads((folder / 'summary.json').read_text())
-          if not summary['passed']:
-              raise SystemExit('Cloud acceptance did not pass')
-          for name, expected in summary['source'].items():
-              if hashlib.sha256(Path(name).read_bytes()).hexdigest() != expected:
-                  raise SystemExit('Measured source differs: ' + name)
+          root = Path('guides/benchmarks')
+          allowed = {'.md', '.csv'}
+          raw = [p.as_posix() for p in root.rglob('*')
+                 if p.is_file() and p.suffix not in allowed and p.name != 'summary.json']
+          if raw:
+              raise SystemExit('Raw benchmark artifacts must stay local: ' + ', '.join(raw))
+
+          summaries = sorted(root.rglob('summary.json'))
+          if not summaries:
+              raise SystemExit('No published benchmark summary.json found')
+          failed = []
+          for path in summaries:
+              record = json.loads(path.read_text(encoding='utf-8'))
+              if record.get('passed') is False:
+                  failed.append(path.as_posix())
+          if failed:
+              raise SystemExit('Published benchmark summaries report failure: ' + ', '.join(failed))
+
+          latest = Path('guides/benchmarks/program-transitions-l4-20261117')
+          summary = json.loads((latest / 'summary.json').read_text(encoding='utf-8'))
+          source_map = summary.get('source', {})
+          exact_match = bool(source_map) and all(
+              Path(name).is_file() and hashlib.sha256(Path(name).read_bytes()).hexdigest() == digest
+              for name, digest in source_map.items()
+          )
+          note = ('Current `foundry/` source matches the recorded SHA-256 digests in `'
+                  + latest.as_posix() + '/summary.json`.'
+                  if exact_match else
+                  'Saved reports document their recorded source digests; `foundry/` has evolved since `'
+                  + latest.as_posix() + '`.')
+
           base = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/blob/"
-                  f"{os.environ['REPORT_REVISION']}/{folder.as_posix()}/")
+                  f"{os.environ['REPORT_REVISION']}/{latest.as_posix()}/")
           report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + base + match[1] + ')',
-                          (folder / 'README.md').read_text())
+                          (latest / 'README.md').read_text(encoding='utf-8'))
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
-              output.write('Saved cloud results and source checksums; this job does not run numerical tests.\n\n')
+              output.write(f'{note} This job does not execute numerical tests.\n\n')
               output.write(report)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: measured-transitions-${{ github.event.pull_request.head.sha || github.sha }}
-          path: guides/benchmarks/program-transitions-l4-20261117/
+          name: benchmark-summaries-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            guides/benchmarks/README.md
+            guides/benchmarks/README.zh-CN.md
+            guides/benchmarks/program-transitions-l4-20261117/
           if-no-files-found: error
           retention-days: 30

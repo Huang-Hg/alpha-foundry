@@ -1,10 +1,10 @@
 # Foundry
 
-**CUDA strategy research, from an idea to an actual account and a reviewed portfolio.**
+**Point-in-time quantitative strategy discovery, execution simulation, and portfolio admission on CUDA and CPU.**
 
-[简体中文](README.zh-CN.md) · [Research guide](guides/research.md) · [Your own data](guides/data.md) · [Strategy programs](guides/programs.md)
+[简体中文](README.zh-CN.md) · [Research guide](guides/research.md) · [Data contracts](guides/data.md) · [Strategy programs](guides/programs.md) · [Benchmarks](guides/benchmarks/README.md)
 
-Bring a formula, an array from your model, or a program that reacts to real simulated fills. Foundry gives people, AI agents and discovery loops the same session, market rules, reports and portfolio admission decisions.
+Foundry evaluates algebraic formulas, externally trained model arrays, and stateful order-emitting programs inside a single causal research session. Human researchers, AI agents, and automated discovery loops share the same market calendars, execution rules, risk accounting, and hard portfolio admission gates.
 
 ```python
 import foundry
@@ -18,48 +18,46 @@ with foundry.open(backend="cuda") as session:
         print(row.id, row.metrics, row.decision)
 ```
 
-This runs against the included US equity snapshot. Replace `data_dir` and dates to research your own market history.
+By default, this opens the bundled US equity fixture in memory. Supply `market`, `data_dir`, `start`, and `end` to run on your own historical datasets.
 
-## Research at GPU scale
+## Core capabilities
 
-CUDA batches formula operators, account simulations, statistics and portfolio weight trials while keeping working arrays resident. It is useful when exploring many candidates over the same market panel. Stateful CUDA programs can keep their private tensors on the selected device; Python callbacks are not automatically compiled into GPU kernels.
+Foundry separates stateless batch evaluation from atomic portfolio state transitions. Device placement and numerical precision are fixed when a session opens—never switched mid-run based on candidate outcomes.
 
-A session fixes its device and numerical plan before work begins. Paired FP32 arithmetic retains residual precision in supported account and statistical paths. CPU is a supported backend, with explicit worker and memory limits.
+- **Unified candidate model:** evaluate 66-operator DSL formulas, `(B, D, S)` score or target tensors, and stateful `StrategyProgram` instances through the same `Session` and `Discovery` APIs.
+- **Explicit causal clocks:** source bars, decision timestamps, next-base-open execution, and valuation periods advance on distinct clocks; external arrays and programs must declare observation and fitting cutoffs (`observed_at`, `fit_at`).
+- **Bar-level order accounts:** under `Execution(model="orders")`, market, limit, stop, cancel, and amend commands execute against OHLC paths, volume participation caps, cash/inventory reservations, funding settlements, and isolated-margin liquidation.
+- **Hard judge vs. soft guidance:** dense discovery rewards, behavioral deduplication, and neighbourhood plateau checks guide search without ever overriding hard G1/G2 portfolio admission.
+- **Scoped resident leases:** register candidate batches into bounded device memory, evaluate or reweight repeatedly without re-uploading, retain admitted artifacts to disk, and deterministically release temporary leases.
 
-- **Three strategy representations:** a 66-operator formula vocabulary, numerical scores or targets, and stateful order programs.
-- **Causal clocks:** separate source bars, decision times, next-base-open execution and statistics periods; observation and fitting cutoffs remain explicit.
-- **Actual account feedback:** orders, partial fills, cancellations, fees, cash, positions and isolated margin drive the next strategy decision.
-- **One discovery workflow:** diagnose gaps, score proposals, examine parameter families, replay portfolio trials and submit candidates through hard admission rules.
-- **Bounded reuse:** register a model or array batch once, evaluate it repeatedly, retain selected references and release the lease.
+## Supported markets and execution models
 
-## Choose the execution you need
-
-| Market | Target backtests | Actual order accounts |
+| Market | Target backtests (`model="targets"`) | Stateful order accounts (`model="orders"`) |
 | --- | --- | --- |
-| US equities | Daily, historical membership, adjusted execution prices and costs | Not currently supported |
-| China A-shares | Daily, membership, suspensions, price limits and sell tax | Not currently supported |
-| Crypto spot | Daily or explicit base bars, historical eligibility and fees | Market/limit/stop orders, cash and owner inventory |
-| USDT linear perpetuals | Daily/hourly archive or explicit base bars, funding and isolated margin | Signed owner positions, funding, reservations and liquidation |
+| US equities (`us_equity`) | Daily bars, PIT universe membership, split/dividend-adjusted fills, transaction & borrow costs | Not supported |
+| China A-shares (`a_share`) | Daily bars, publication-dated vintages, suspensions, price limits, asymmetric fees & stamp tax | Not supported |
+| Crypto spot (`crypto_spot`) | Daily or intraday base bars, historical eligibility, proportional fees | Market/limit/stop orders, cash reservations, per-member inventory attribution |
+| USDT linear perpetuals (`crypto_perpetual`) | Hourly archive or intraday base bars, settled funding, isolated margin & liquidation | Signed member positions, funding cashflows, margin reservations & liquidation |
 
-`Execution(model="targets")` is the default for formulas and precomputed equity-fraction targets. `Execution(model="orders")` puts formulas, arrays and programs through the crypto Bar account model and fresh portfolio replay. For example, use 5-minute source bars, 15-minute decisions and daily statistics. [Execution and portfolio semantics](guides/research.md#execution-and-portfolio-composition) explain shared accounts and independently funded accounts.
+`Execution(model="targets")` is the default for formulas and precomputed equity-fraction books. `Execution(model="orders")` routes formulas, arrays, and stateful programs through the crypto Bar execution engine with full chronological replay whenever weights or portfolio members change (for example, 5-minute base bars, 15-minute decisions, and daily return statistics). See [Execution and portfolio composition](guides/research.md#execution-and-portfolio-composition) for shared versus independently funded accounts.
 
-These are Bar models with a declared OHLC path and volume participation. They do not model order-book queue position or tick-by-tick execution.
+Both execution modes operate on bar OHLC paths and declared participation limits; neither models order-book queue priority or tick-by-tick microstructure.
 
-## Three inputs, one session
+## Three strategy inputs, one session
 
 ```python
 report = session.evaluate("gt(ma_dist_20,0)")
-report = session.evaluate(registered_model_outputs)
+report = session.evaluate(registered_array_batch)
 report = session.evaluate(strategy_program)
 ```
 
-The last call requires an order session and a program implementing the public protocol. Programs receive causal feature windows and actual accounts, and create fresh private state for every query. [A complete public program example](guides/programs.md) includes artifact deployment, remote references and ownership rules.
+- **Formulas** parse against the 66-operator registry with bounded AST cost and rolling-window depth.
+- **Arrays** align to `session.grid` (`(B, D, S)` in `float32` or `float64`) as cross-sectional `scores` mapped via `Sizing` or direct `targets` (`equity_fraction`, plus `quantity` / `notional` in order sessions). See [Arrays and model outputs](guides/research.md#arrays-and-model-outputs).
+- **Programs** implement `StrategyProgram` (`descriptor` + `open(context)`), receiving copied causal feature windows and live account snapshots at each decision bar and fill feedback after each base bar. See [Strategy programs and deployed models](guides/programs.md).
 
-Scores use explicit sizing; direct targets declare `equity_fraction`, or `quantity`/`notional` in order sessions. Arrays align with `session.grid` and declare when their observations and fitting information became available. See [array registration](guides/research.md#arrays-and-model-outputs).
+## Bring your own data
 
-## Use your own data
-
-Convert a CSV, database or vendor export to the documented Parquet contracts:
+Point `foundry.open` at local Parquet datasets matching the documented market contracts:
 
 ```python
 with foundry.open(
@@ -69,11 +67,11 @@ with foundry.open(
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-US equities need `panel.parquet` and historical `membership.parquet`. Crypto intraday datasets provide publication-aware base bars and a manifest; perpetuals also provide mark prices and explicit funding records. [Data formats and conversion examples](guides/data.md) cover fields, units, time boundaries, eligibility and provenance. The [included snapshots](data/README.md) are useful examples and require no live market download.
+Daily equity datasets supply `panel.parquet` and PIT `membership.parquet` (plus `manifest.json` for A-shares and spot). Intraday crypto datasets use `crypto-bars-v1` (`bars.parquet`, `manifest.json`, and dense `funding.parquet` for perpetuals). Full schemas, unit conventions, and CSV conversion scripts live in [Data contracts](guides/data.md); the [bundled fixtures](data/README.md) work offline out of the box.
 
-## Run on Linux, WSL2 or a remote GPU
+## Installation and native build
 
-Compute runs on Linux, including WSL2 on Windows. Install Python 3.12 or 3.13, its development headers and a C++17/OpenMP compiler, then run from the repository root:
+Compute runs on Linux (including WSL2 on Windows and cloud GPU instances) with Python 3.12 or 3.13, Python headers, and GCC supporting C++17 and OpenMP:
 
 ```bash
 python3 -m venv .venv
@@ -84,9 +82,9 @@ python -m foundry --help
 ```
 
 <details>
-<summary>Build native extensions (Linux / WSL2 / Colab)</summary>
+<summary>Build native C++ extensions (Linux / WSL2 / Colab)</summary>
 
-Run from the repository root with the Linux Python used for computation. GCC is required; CuPy prepares CUDA kernels when a session is explicitly opened. Native Windows remote clients need no compilation.
+Run from the repository root inside the target Linux Python environment. CUDA kernels are compiled on demand by CuPy when a CUDA session opens; native Windows remote clients do not compile C++ extensions.
 
 <!-- native-build:start -->
 ```bash
@@ -117,35 +115,38 @@ PY
 
 </details>
 
-All dependencies are declared once in [pyproject.toml](pyproject.toml), using [pip dependency groups](https://pip.pypa.io/en/stable/user_guide/#dependency-groups) (pip 25.1+). Select only the capabilities you need:
+Dependencies are managed in [pyproject.toml](pyproject.toml) via [pip dependency groups](https://pip.pypa.io/en/stable/user_guide/#dependency-groups) (`pip>=25.1`):
 
-| Environment | Install from the repository root |
+| Use case | Command |
 | --- | --- |
-| CPU research or a remote client | `python -m pip install --group runtime` |
+| CPU research or remote RPC client | `python -m pip install --group runtime` |
 | CUDA research | `python -m pip install --group runtime --group cuda13` |
-| GFlowNet mining on CUDA | `python -m pip install --group mining --group cuda13` |
-| Cloud regression and benchmarks | `python -m pip install --group benchmark --group cuda13` |
-| Static development tools | `python -m pip install --group dev` |
+| GFlowNet formula mining on CUDA | `python -m pip install --group mining --group cuda13` |
+| Cloud regression and benchmark suite | `python -m pip install --group benchmark --group cuda13` |
+| Local static checks (`pre-commit`, Ruff, `actionlint`) | `python -m pip install --group dev` |
 
-CUDA requires an appropriate NVIDIA driver. Choose `cuda12` or `cuda13` to match the compute host's CUDA major; install only one CuPy group. GPU GFlowNet mining needs a CUDA-enabled PyTorch wheel. The `mining` and `benchmark` groups include runtime dependencies; ordinary research does not require PyTorch. Use `backend="cpu"` when opening a CPU session.
+Install either `cuda12` or `cuda13` (never both) to match the host CUDA driver/runtime. PyTorch is required only for built-in GFlowNet policy training (`mining` / `benchmark`). Pass `backend="cpu"` when opening a CPU session.
 
-Native Windows Python can be the client without compiling the numerical extensions. On the compute host, start a service with an explicit portfolio path:
+### Remote client / server mode
+
+Start a single-worker JSON-RPC compute service on the Linux GPU host:
 
 ```python
 import foundry
+
 foundry.serve("var/runs/library.json", backend="cuda")
 ```
 
-Find its port with `python -m foundry status` on that host. Forward the loopback port over SSH when using another machine, then connect from Windows or Linux:
+Inspect its loopback port via `python -m foundry status`, forward the port over SSH if connecting across machines, and attach from Linux or native Windows Python:
 
 ```python
 with foundry.connect(("127.0.0.1", port)) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-The service owns computation. Closing a client does not stop it. [Remote sessions](guides/research.md#remote-sessions) also support deployed program references without shipping Python source or pickle objects.
+Closing a client session leaves the server running. [Remote sessions](guides/research.md#remote-sessions) transfer array batches as bounded binary NumPy bundles (1 GiB limit, no `pickle`) and invoke pre-deployed `ProgramReference` artifacts without sending executable source code.
 
-## Review before changing a portfolio
+## Read-only queries and atomic commits
 
 ```python
 with foundry.open("var/runs/my_portfolio.json") as session:
@@ -154,17 +155,17 @@ with foundry.open("var/runs/my_portfolio.json") as session:
     foundry.export(decision, "var/runs/decision.json")
 ```
 
-Evaluation is read-only. A report records the exact study and portfolio version; a stale submission requires an explicit refresh and reevaluation. `ok=True` means evaluation succeeded, while `row.decision.passed` is the admission conclusion.
+Queries never mutate portfolio state. Every report binds the exact `ResearchContext` (study snapshot + portfolio version); if concurrent work updates the library, `commit` raises `ContextConflict` until the caller explicitly calls `refresh()` and re-evaluates. Note the distinction between `row.ok` (valid execution) and `row.decision.passed` (passed G1/G2 portfolio admission).
 
-| Research task | Public call |
+| Workflow | Entry point |
 | --- | --- |
-| Inspect data, parameters and execution plan | `session.describe()` |
-| Get resident returns and a committable report in one query | `session.evaluate_device(inputs)` |
-| Register, keep or release candidates | `register(...)`, `retain(...)`, `release(...)` |
-| Diagnose gaps or check neighbouring variants | `diagnose()`, `judge_family(...)` |
-| Compare or submit portfolio weights | `trial_weights(...)`, `commit_weights(...)`, `reweight(...)` |
-| Score candidate proposals | `foundry.Discovery(session).evaluate(candidates)` |
-| Run built-in or external proposal loops | `foundry.mine(output, ...)` |
-| Generate causal model-fold predictions | `foundry.walk_forward(session, fit, predict, ...)` |
+| Inspect vocabulary, operators, clocks, and execution plan | `session.describe()` |
+| Obtain device-resident returns and a committable report together | `session.evaluate_device(inputs)` |
+| Manage candidate leases and durable artifacts | `session.register(...)`, `retain(...)`, `release(...)` |
+| Diagnose portfolio gaps or test parameter neighbourhoods | `session.diagnose()`, `judge_family(...)` |
+| Evaluate or optimize portfolio member weights | `session.trial_weights(...)`, `commit_weights(...)`, `reweight(...)` |
+| Score candidates with dense discovery rewards and archive novelty | `foundry.Discovery(session).evaluate(candidates)` |
+| Run autonomous or hybrid proposer loops with checkpointing | `foundry.mine(output, ...)` |
+| Fit and predict across strictly causal rolling/expanding folds | `foundry.walk_forward(session, fit, predict, ...)` |
 
-`foundry.schema()` provides the machine-readable API. [The research guide](guides/research.md) covers these workflows; [benchmark reports](guides/benchmarks/README.md) distinguish measured workloads, hardware and numerical scope.
+Call `foundry.schema()` (or `python -m foundry schema OUTPUT.json`) to export the machine-readable JSON-RPC and parameter schemas without loading market data or initializing a GPU. See the [Research guide](guides/research.md) for end-to-end patterns and [Benchmarks](guides/benchmarks/README.md) for hardware-specific validation reports.

@@ -1,38 +1,39 @@
-# Test market snapshots / 测试行情快照
+# Bundled Market Snapshots / 内置测试行情快照
 
-These are the market inputs used by the Colab PRO 6000 integration validation. The 18 files total 55,413,122 bytes (52.85 MiB); ordinary Git contains the actual files, with no Git LFS download or live market request required to load them. Source manifests and the two funding-transition proofs are included.
+This directory holds the read-only market fixtures used for offline examples and integration validation (18 tracked files, 55,413,122 bytes / 52.85 MiB). Files are stored directly in Git—no Git LFS or live network download is required.
 
-这些快照用于 Colab PRO 6000 集成验证。18 个文件合计 55,413,122 字节（52.85 MiB），通过普通 Git 直接保存；加载时无需 Git LFS 或在线行情接口。包含来源清单及两份资金费周期变更证据。
+本目录存放用于离线示例与集成验收的只读测试行情快照（共 18 个跟踪文件，55,413,122 字节 / 52.85 MiB）。文件直接保存在普通 Git 中，加载时无需 Git LFS 或联网拉取行情。
 
-| Directory / 目录 | Coverage / 用途 | Files / 文件 |
+| Directory / 目录 | Scope / 覆盖范围 | Included artifacts / 包含文件 |
 | --- | --- | --- |
-| `us_equity_daily` | US equities, 500 assets in the configured study / 配置研究中的 500 个美股资产 | Daily panel, historical membership, manifest / 日线、历史资格、清单 |
-| `a_share_pit` | A-shares, 365 assets / 365 个 A 股资产 | Raw signal prices, cumulative adjusted execution prices, membership, manifest / 原始信号价、累计复权执行价、资格、清单 |
-| `crypto_spot_daily` | 73 spot assets, history from 2015 through 2025 / 73 个现货资产、2015 至 2025 历史 | Preserved daily OHLCV and eligibility, manifest / 保留的日线及资格、清单 |
-| `crypto_perpetual` | BTC/ETH/SOL, 2025 hourly history / 3 合约、2025 小时历史 | Trade, mark and settled funding tables, manifest / 成交、标记价、已结算资金费、清单 |
-| `crypto_perpetual_scale` | 64 contracts, 2025 hourly history / 64 合约、2025 小时历史 | Same three tables plus two transition proofs / 同上三表及两份周期变更证据 |
+| `us_equity_daily` | 500 US equities (`2025-07-01` – `2026-06-30` study window) / 500 只美股 | `panel.parquet`, `membership.parquet`, `manifest.json` |
+| `a_share_pit` | 365 China A-shares with raw signal & `hfq` execution prices / 365 只 A 股（原始信号价与后复权执行价） | `panel.parquet`, `membership.parquet`, `manifest.json` |
+| `crypto_spot_daily` | 73 crypto spot pairs (`2015` – `2025` UTC daily history) / 73 个加密现货交易对 | `panel.parquet`, `manifest.json` |
+| `crypto_perpetual` | `BTCUSDT`, `ETHUSDT`, `SOLUSDT` hourly archive (`2025`) / 3 合约 2025 小时归档 | `trade.parquet`, `mark.parquet`, `funding.parquet`, `manifest.json` |
+| `crypto_perpetual_scale` | 64 USDT linear perpetual contracts (`2025` hourly archive) / 64 合约 2025 小时归档 | Same three Parquet tables, `manifest.json`, and 2 funding-transition JSON proofs |
 
-From the repository root on Linux, verify the exact snapshot bytes:
-
-在 Linux 仓库根目录核对快照字节：
+Verify snapshot integrity from the repository root on Linux / 在 Linux 仓库根目录核验文件校验和：
 
 ```bash
-sha256sum --check data/SHA256SUMS
+sha256sum --strict --check data/SHA256SUMS
 ```
 
-The public API's market presets point to these bundled datasets. Select one with `foundry.open(market="us_equity")`, or provide your own `data_dir`, `start` and `end`. See the [integration guide](../guides/research.md#bring-your-own-data) for formats and source metadata.
+Market presets in `foundry.open(...)` default to these directories (`crypto_perpetual` defaults to the 3-contract fixture; pass `data_dir="./data/crypto_perpetual_scale"` for the 64-contract fixture). To prepare your own datasets, see [Data contracts](../guides/data.md) ([中文数据契约指南](../guides/data.zh-CN.md)).
 
-公开 API 的市场默认值指向这些数据。用 `foundry.open(market="us_equity")` 选择市场，或传入自己的 `data_dir`、`start`、`end`。格式与来源记录见[接入指南](../guides/research.zh-CN.md#接入自己的数据)。
+`foundry.open(...)` 的各市场默认路径指向上述目录（`crypto_perpetual` 默认加载 3 合约快照；传入 `data_dir="./data/crypto_perpetual_scale"` 可加载 64 合约快照）。接入自有数据的格式规范与转换示例见[数据契约指南](../guides/data.zh-CN.md)（[English](../guides/data.md)）。
 
-For 64 contracts, use `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_scale")`. The manifest supplies the ordered contracts. Default study dates are 2025-07-01 through 2025-12-31, with history from 2025-01-01. The default perpetual dataset still contains three contracts; `symbols` selects contracts when importing a new dataset.
+## Provenance and limitations / 数据来源与局限披露
 
-使用 64 合约时调用 `foundry.open(market="crypto_perpetual", data_dir="./data/crypto_perpetual_scale")`，合约顺序由 manifest 给出。默认研究日期为 2025-07-01 至 2025-12-31，历史起点为 2025-01-01。默认永续数据仍为三合约；`symbols` 在导入新数据时选择合约。
+### English
+- **US equities:** legacy vendor snapshot; the manifest does not certify the upstream provider, original announcement timestamps, or revision vintages.
+- **China A-shares:** derived from Tencent daily raw and cumulative back-adjusted (`hfq`) series; historical intraday announcement timestamps and revision vintages are unavailable and disclosed as such.
+- **Crypto spot:** extracted from the preserved Quantiacs daily archive (source path and digest recorded in `manifest.json`).
+- **Crypto perpetuals:** imported from official Binance USD-M public archives with verified checksums and funding-interval transition proofs; raw acquisition `.zip` archives are not duplicated here.
+- **Scope:** these fixtures exist for reproducible execution and numerical validation, not as survivorship-free vendor PIT archives or evidence of out-of-sample profitability. The repository's MIT license applies to code and documentation, not to upstream market-data terms.
 
-## Provenance and scope / 来源与范围
-
-- US data is the existing legacy vendor artifact; its manifest does not establish the original provider, publication times or revision vintages. A-share metadata identifies Tencent raw/hfq daily history and the missing historical announcement/revision timestamps. / 美股是既有供应商历史工件，清单不足以确认原供应商及发布时间、修订版本；A 股清单标明腾讯原始/hfq 日线来源及公告时间、修订版本的缺口。
-- Spot data derives from the preserved Quantiacs daily panel. The source path/hash remain recorded in the manifest; loading this extracted snapshot does not require the larger original archive. Historical Quantiacs files remain preserved separately. / 现货提取自保留的 Quantiacs 日线面板，清单保留原始路径及摘要；加载此快照无需完整原始归档，其他 Quantiacs 历史文件仍保留。
-- Perpetual manifests retain Binance official archive URLs and checksums. ZIP archives are acquisition records, not loading dependencies, and are not duplicated here. Funding-transition JSON proofs are loading dependencies and are included. / 永续清单保留 Binance 官方归档 URL 和校验和；原始 ZIP 属于采集记录，加载无需使用，因此不重复纳入。周期变更 JSON 是加载所需证据，已纳入。
-- These are fixed research fixtures, not complete vendor PIT histories or a guarantee of out-of-sample performance. The software MIT license does not replace upstream market-data terms. / 这些是固定研究测试快照，不代表完整供应商 PIT 或样本外盈利证据；软件 MIT 许可不替代上游行情条款。
-
-Private portfolios, checkpoints, credentials and additional raw archives remain outside this published fixture set. / 私有组合、checkpoint、凭据和其他原始归档不属于这组已发布测试快照。
+### 中文
+- **美股：**既有历史供应商快照，清单不背书原始供应商身份、公告发布时间戳或历史修订版本。
+- **A 股：**源自腾讯日线原始价与累计后复权（`hfq`）序列，缺少历史公告精确发布时间与财务重述版本，已在 `DataContract` 中如实披露。
+- **加密现货：**提取自本地保留的 Quantiacs 日线面板，`manifest.json` 记录了源归档路径与哈希。
+- **加密永续：**由 Binance 官方公开归档经校验和核验导入，附带资金费结算周期变更证据；原始下载 `.zip` 包不重复纳入仓库。
+- **适用边界：**上述数据仅供可复现回测与数值一致性验证，不构成完整商业级 PIT 数据库或样本外盈利证明；仓库 MIT 许可证不替代上游行情数据条款。

@@ -1,17 +1,17 @@
 # GitHub checks and publication boundary
 
-[简体中文](github.zh-CN.md)
+[简体中文](github.zh-CN.md) · [Contributing](../.github/CONTRIBUTING.md)
 
-Publish the runtime library, bilingual documentation, dependencies and necessary GitHub Actions configuration. Tests and helper scripts remain local in `tests/` and `scripts/`, without renamed copies or source archives. Native build commands live in the README.
+The public repository tracks only the `foundry/` runtime package, bilingual user guides (`guides/`), reviewed test-data fixtures (`data/`), dependency metadata (`pyproject.toml`), and GitHub quality-gate configuration (`.github/`, `.pre-commit-config.yaml`). Local regression suites (`tests/`) and benchmark drivers (`scripts/`) stay untracked on disk, without renamed directories or embedded source archives. Native extension build commands live in the root [README](../README.md).
 
-| Check | Infrastructure |
+| Gate | Tooling |
 | --- | --- |
-| Static quality | pre-commit, Ruff, actionlint |
-| Dependency and security | GitHub Dependency Review, CodeQL, Dependabot |
-| Measured evidence | sha256sum for selected data, source digests embedded in summary.json, Actions Job Summary, upload-artifact |
+| Tracked-file allowlist & static quality | Allowlist check, `pre-commit`, Ruff, `actionlint`, C++ build check |
+| Dependency and security analysis | GitHub Dependency Review, CodeQL (`python`, `c-cpp`, `actions`), Dependabot |
+| Published data & benchmark summaries | `sha256sum` on `data/SHA256SUMS`, `summary.json` schema/status validation, Actions Job Summary |
 
-Run numerical acceptance on explicitly authorized cloud compute using pytest, pytest-benchmark and pytest-html. Complete and freeze edits first, reuse one GPU across adjacent tasks and run each condition once. CI does not start paid GPUs or replace market-rule and numerical checks.
+Numerical regression and CPU/CUDA performance benchmarks execute on explicitly authorized cloud instances with `pytest`, `pytest-benchmark`, and `pytest-html`. Freeze code changes first, reuse a single cloud session across adjacent checks, and measure each condition once. GitHub Actions never provisions paid GPUs or substitutes for market-rule and numerical acceptance.
 
-Publish compact Markdown, CSV tables and summary.json with embedded source digests. Full raw results and local test code stay outside Git. Historical reports do not establish acceptance of current source.
+Under `guides/benchmarks/`, publish only concise Markdown reports, CSV tables, and `summary.json` files; keep raw outputs and archives in local `var/runs/`. Saved reports document the exact revision and hardware measured at the time—they do not certify subsequent source changes.
 
-For local static checks, install `--group dev` and run `python -m pre_commit run --all-files`. Actions and hooks use fixed commits. GitHub continues to own branch protection, security analysis and dependency review. This change is not pushed or merged, so its workflows have not run on GitHub.
+For local static verification, install `--group dev` and run `python -m pre_commit run --all-files`. All workflow actions and pre-commit hooks are pinned to full commit SHAs.
