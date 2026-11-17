@@ -33,7 +33,27 @@ Foundry 是面向研究者、AI agent 和自动挖掘程序的 Linux 回测基�
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-bash build.sh
+```
+
+在同一个 Linux Python 环境中编译原生扩展（CUDA 内核在运行时由 CuPy 编译）：
+
+<!-- build:start -->
+```bash
+EXT=$(python -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+INC="-I$(python -c "import sysconfig; print(sysconfig.get_paths()['include'])") -I$(python -c 'import numpy; print(numpy.get_include())') -Ifoundry/include"
+WARN="-Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers"
+g++ -std=c++17 -O3 -march=native -fno-fast-math -ffp-contract=off -fno-strict-aliasing -fopenmp -fPIC $WARN -shared \
+    -Ifoundry/ops/src $INC foundry/ops/src/ops_ts.cpp foundry/ops/src/ops_xs.cpp \
+    foundry/ops/src/ops_inject_ts.cpp foundry/ops/src/module.cpp -o foundry/ops/_ops$EXT -lgomp -lm
+g++ -std=c++17 -O3 -march=native -ffast-math -fno-finite-math-only -fno-strict-aliasing -fopenmp -fPIC $WARN -shared \
+    -Ifoundry/backtest/src $INC foundry/backtest/src/kernel.cpp foundry/backtest/src/perpetual.cpp \
+    foundry/backtest/src/module.cpp -o foundry/backtest/_bt$EXT -lgomp -lm
+g++ -std=c++17 -O3 -fPIC $WARN -shared -Ifoundry/search/src $INC foundry/search/src/gfn.cpp \
+    -o foundry/search/_gfn$EXT -lgomp -lm
+```
+<!-- build:end -->
+
+```bash
 python -m foundry --help
 ```
 
