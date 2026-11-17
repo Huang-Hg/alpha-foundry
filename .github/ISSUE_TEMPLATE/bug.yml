@@ -1,0 +1,25 @@
+name: Bug report
+description: Report incorrect behavior, numerical differences or a performance regression.
+title: '[Bug] '
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include the public API call and a public dataset or synthetic input.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and evidence
+      description: Commit, OS, Python, market, backend/GPU, and relevant report or error output. Do not include credentials or private portfolios.
+    validations:
+      required: true
