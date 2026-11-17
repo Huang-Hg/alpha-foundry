@@ -1,0 +1,2190 @@
+{
+  "passed": true,
+  "validation": {
+    "passed": true,
+    "tests": 32,
+    "gpu": "NVIDIA L4, 23034 MiB, 580.82.07",
+    "source_sha256": "1385a1f80468746d740924358a372a4ab97584d890eea8f8491c9957cf86b27d",
+    "baseline_revision": "cc0f2b4",
+    "conditions_per_case": 1,
+    "performance_conditions": 12,
+    "no_full_regression_rerun": true,
+    "setup_repair": "Canonical JSON in the local driver; original failed setup preserved; no measured condition repeated",
+    "private_production": "Not read or rerecorded"
+  },
+  "environment": {
+    "gpu": "NVIDIA L4, 23034 MiB, 580.82.07",
+    "python": "3.13.16 (main, Oct  1 2026, 15:40:24) [GCC 13.3.0]",
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "cpu_usage": "No CPU performance baseline"
+  },
+  "cases": [
+    {
+      "name": "admissions-4-shared",
+      "registered_variants": 4,
+      "candidates": 4,
+      "workflow": "admissions",
+      "composition": "shared",
+      "research_speedup": 1.485375597473051,
+      "lifecycle_speedup": 1.9133696404870797,
+      "before": {
+        "stages": {
+          "prepare_s": 0.0005473880000863574,
+          "open_load_plan_jit_s": 27.375326891999975,
+          "register_s": 0.0007281179998699372,
+          "evaluate_s": 18.078268728000012,
+          "query_export_s": 0.00031365400013783074,
+          "ordered_commit_s": 23.340984697000067,
+          "pre_weight_evaluate_s": 11.432147131999955,
+          "weight_query_s": 3.644081217000121,
+          "weight_commit_s": 3.463604307999958,
+          "stale_commit_s": 3.888499986715033e-05,
+          "post_weight_evaluate_s": 11.431274857000062,
+          "post_weight_export_s": 0.0002093499999773485,
+          "post_weight_commit_s": 11.344535484000062,
+          "release_s": 4.878400000052352e-05,
+          "close_s": 0.0011914629999409954,
+          "query_ordered_commit_s": 41.41925342500008,
+          "weight_query_commit_s": 7.107685525000079,
+          "research_workflow_s": 82.7349353080001,
+          "open_through_close_s": 110.121466027,
+          "evidence_write_s": 0.001261989999875368,
+          "complete_case_s": 110.12273060200005
+        },
+        "transitions": {
+          "workflow": "admissions",
+          "composition": "shared",
+          "accepted": [
+            true,
+            true,
+            false,
+            false
+          ],
+          "admission_references": [
+            "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700",
+            "f7b8cce07a6dd704bd9a95bcec1637cb75909480bf96866ebe7cbeef83c8329b",
+            "a71fd95a3407e44ced4e0602e6d80df80e187b4347febec847008d3a3ca898c9",
+            "a71fd95a3407e44ced4e0602e6d80df80e187b4347febec847008d3a3ca898c9"
+          ],
+          "members_before_weights": 1,
+          "weights_before": [
+            1.0
+          ],
+          "weights_after": [
+            2.0
+          ],
+          "version_before_weights": "67c6cdacdb895958ccce91d3f261696e4e5a68d633fae14dec861ca3abfe096e",
+          "version_after_weights": "d74cd4add47cfc4fe5e02afdb99cb0fffd038fd1dc2c990ba9bb96c5b4cee52b",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 1,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 917.233344062332,
+          "ann_ret": 4.344036446614808,
+          "maxdd": 0.0,
+          "cagr": 75.93404561887087,
+          "total_ret": 0.024082385638681814,
+          "turnover": 0.0010416666666666675,
+          "exposure": 0.20956836114570088,
+          "margin_bps": 1190.146971675289,
+          "max_single_weight": 0.21900814698502913,
+          "concentration": 0.022065030646478856,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 917.233,
+              "attend": 1.0,
+              "lg": 0.0238
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 935.7280938895915,
+          "ann_ret": 8.589195816505026,
+          "maxdd": 0.0,
+          "cagr": 5349.50186813435,
+          "total_ret": 0.04816477127744889,
+          "turnover": 0.002083333333333335,
+          "exposure": 0.4142291744712357,
+          "margin_bps": 1176.602166644523,
+          "max_single_weight": 0.4279525352972815,
+          "concentration": 0.021817173955550034,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 935.728,
+              "attend": 1.0,
+              "lg": 0.047
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "sampled_device_peak_mib": 210.0
+      },
+      "after": {
+        "stages": {
+          "prepare_s": 0.0005914850000863225,
+          "open_load_plan_jit_s": 1.8428485340000407,
+          "register_s": 0.0006798710001021391,
+          "evaluate_s": 6.816109449000123,
+          "query_export_s": 0.0002652169998782483,
+          "ordered_commit_s": 19.371208632999924,
+          "pre_weight_evaluate_s": 11.382196958999884,
+          "weight_query_s": 3.3372544379999454,
+          "weight_commit_s": 3.3320082189998175,
+          "stale_commit_s": 3.945999992538418e-05,
+          "post_weight_evaluate_s": 11.460280095999906,
+          "post_weight_export_s": 0.00021087499999339343,
+          "post_weight_commit_s": 0.0005759119999311224,
+          "release_s": 5.0689000090642367e-05,
+          "close_s": 0.001142461000199546,
+          "query_ordered_commit_s": 26.187318082000047,
+          "weight_query_commit_s": 6.669262656999763,
+          "research_workflow_s": 55.69967316599946,
+          "open_through_close_s": 57.55368105399998,
+          "evidence_write_s": 0.0019899670000995684,
+          "complete_case_s": 57.56054036900014
+        },
+        "transitions": {
+          "workflow": "admissions",
+          "composition": "shared",
+          "accepted": [
+            true,
+            true,
+            false,
+            false
+          ],
+          "admission_references": [
+            "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700",
+            "f7b8cce07a6dd704bd9a95bcec1637cb75909480bf96866ebe7cbeef83c8329b",
+            "a71fd95a3407e44ced4e0602e6d80df80e187b4347febec847008d3a3ca898c9",
+            "a71fd95a3407e44ced4e0602e6d80df80e187b4347febec847008d3a3ca898c9"
+          ],
+          "members_before_weights": 1,
+          "weights_before": [
+            1.0
+          ],
+          "weights_after": [
+            2.0
+          ],
+          "version_before_weights": "67c6cdacdb895958ccce91d3f261696e4e5a68d633fae14dec861ca3abfe096e",
+          "version_after_weights": "d74cd4add47cfc4fe5e02afdb99cb0fffd038fd1dc2c990ba9bb96c5b4cee52b",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 1,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 917.233344062332,
+          "ann_ret": 4.344036446614808,
+          "maxdd": 0.0,
+          "cagr": 75.93404561887087,
+          "total_ret": 0.024082385638681814,
+          "turnover": 0.0010416666666666675,
+          "exposure": 0.20956836114570088,
+          "margin_bps": 1190.146971675289,
+          "max_single_weight": 0.21900814698502913,
+          "concentration": 0.022065030646478856,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 917.233,
+              "attend": 1.0,
+              "lg": 0.0238
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 935.7280938895915,
+          "ann_ret": 8.589195816505026,
+          "maxdd": 0.0,
+          "cagr": 5349.50186813435,
+          "total_ret": 0.04816477127744889,
+          "turnover": 0.002083333333333335,
+          "exposure": 0.4142291744712357,
+          "margin_bps": 1176.602166644523,
+          "max_single_weight": 0.4279525352972815,
+          "concentration": 0.021817173955550034,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 935.728,
+              "attend": 1.0,
+              "lg": 0.047
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "sampled_device_peak_mib": 210.0
+      },
+      "errors": {
+        "candidate_returns": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "nan_mismatch": 0,
+          "inf_mismatch": 0
+        },
+        "metrics_max_abs": 0.0,
+        "metrics_max_scaled": 0.0,
+        "decision_mismatches": 0,
+        "numeric_failures": 0,
+        "finite_mismatches": 0,
+        "allocation": {
+          "returns": {
+            "portfolio_before_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            },
+            "portfolio_after_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          },
+          "feasible_equal": true,
+          "selected_equal": true,
+          "changed_equal": true,
+          "weights": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "utility": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "delta": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "passed": true
+        }
+      }
+    },
+    {
+      "name": "reallocation-4-shared",
+      "registered_variants": 4,
+      "candidates": 2,
+      "workflow": "reallocation",
+      "composition": "shared",
+      "research_speedup": 1.4882460152326846,
+      "lifecycle_speedup": 1.420005391316478,
+      "before": {
+        "stages": {
+          "prepare_s": 0.00016974200002550788,
+          "historical_fixture_setup_s": 1.480169763000049,
+          "open_load_plan_jit_s": 4.729676171000165,
+          "register_s": 0.0007806019998497504,
+          "evaluate_s": 9.511906955000086,
+          "query_export_s": 0.00019038300001739117,
+          "ordered_commit_s": 9.336304430999917,
+          "pre_weight_evaluate_s": 9.298051961999818,
+          "weight_query_s": 4.657884435000142,
+          "weight_commit_s": 4.595416061999913,
+          "stale_commit_s": 4.242199997861462e-05,
+          "post_weight_evaluate_s": 9.27333370700012,
+          "post_weight_export_s": 0.0001437750001969107,
+          "post_weight_commit_s": 9.257908744999895,
+          "release_s": 3.536799999892537e-05,
+          "close_s": 0.0014431810000132828,
+          "query_ordered_commit_s": 18.848211386000003,
+          "weight_query_commit_s": 9.253300497000055,
+          "research_workflow_s": 55.93084871899987,
+          "open_through_close_s": 62.14906824800005,
+          "evidence_write_s": 0.0011391399998501583,
+          "complete_case_s": 62.150209054000015
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "shared",
+          "accepted": [
+            false,
+            false
+          ],
+          "admission_references": [
+            "258a0fe97ca2030a2bdd25c0338cea4b176f6ad07f917dfd60f522977a871fbd",
+            "258a0fe97ca2030a2bdd25c0338cea4b176f6ad07f917dfd60f522977a871fbd"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "a8383be70d34355db78a3aaea62f3112bd056632422874cd927cd14d634bfff8",
+          "version_after_weights": "57287d6747e1629cf48d8e3c2d182a4a6f355305dd9317d4d727e5e8a3f3fb8e",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.06041498985,
+          "ann_ret": 1.640896001364613,
+          "maxdd": 0.0,
+          "cagr": 4.1589893097695665,
+          "total_ret": 0.009030894614497242,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288508558,
+          "max_single_weight": 0.08335314118073756,
+          "concentration": 0.022224775219817132,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790636294,
+          "ann_ret": 3.2674775133410345,
+          "maxdd": 0.0,
+          "cagr": 25.228900305568686,
+          "total_ret": 0.018061789229033565,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916314252,
+          "max_single_weight": 0.16522748521623898,
+          "concentration": 0.02212847071604477,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 210.0
+      },
+      "after": {
+        "stages": {
+          "prepare_s": 0.00014763300009690283,
+          "historical_fixture_setup_s": 1.483851636999816,
+          "open_load_plan_jit_s": 4.693108678000044,
+          "register_s": 0.0006522829999084934,
+          "evaluate_s": 9.359151728000143,
+          "query_export_s": 0.0002272719998472894,
+          "ordered_commit_s": 0.0005203939999773866,
+          "pre_weight_evaluate_s": 9.392052836999937,
+          "weight_query_s": 4.692115274000116,
+          "weight_commit_s": 4.70142106000003,
+          "stale_commit_s": 4.485299996304093e-05,
+          "post_weight_evaluate_s": 9.435916312000018,
+          "post_weight_export_s": 0.00016587699997216987,
+          "post_weight_commit_s": 0.0005000170001494553,
+          "release_s": 3.794400004153431e-05,
+          "close_s": 0.0012589119999120157,
+          "query_ordered_commit_s": 9.35967212200012,
+          "weight_query_commit_s": 9.393536334000146,
+          "research_workflow_s": 37.58172247500033,
+          "open_through_close_s": 43.76678330100003,
+          "evidence_write_s": 0.0019067470000209141,
+          "complete_case_s": 43.771734525000056
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "shared",
+          "accepted": [
+            false,
+            false
+          ],
+          "admission_references": [
+            "258a0fe97ca2030a2bdd25c0338cea4b176f6ad07f917dfd60f522977a871fbd",
+            "258a0fe97ca2030a2bdd25c0338cea4b176f6ad07f917dfd60f522977a871fbd"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "a8383be70d34355db78a3aaea62f3112bd056632422874cd927cd14d634bfff8",
+          "version_after_weights": "57287d6747e1629cf48d8e3c2d182a4a6f355305dd9317d4d727e5e8a3f3fb8e",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.06041498985,
+          "ann_ret": 1.640896001364613,
+          "maxdd": 0.0,
+          "cagr": 4.1589893097695665,
+          "total_ret": 0.009030894614497242,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288508558,
+          "max_single_weight": 0.08335314118073756,
+          "concentration": 0.022224775219817132,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790636294,
+          "ann_ret": 3.2674775133410345,
+          "maxdd": 0.0,
+          "cagr": 25.228900305568686,
+          "total_ret": 0.018061789229033565,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916314252,
+          "max_single_weight": 0.16522748521623898,
+          "concentration": 0.02212847071604477,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 210.0
+      },
+      "errors": {
+        "candidate_returns": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "nan_mismatch": 0,
+          "inf_mismatch": 0
+        },
+        "metrics_max_abs": 0.0,
+        "metrics_max_scaled": 0.0,
+        "decision_mismatches": 0,
+        "numeric_failures": 0,
+        "finite_mismatches": 0,
+        "allocation": {
+          "returns": {
+            "portfolio_before_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            },
+            "portfolio_after_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          },
+          "feasible_equal": true,
+          "selected_equal": true,
+          "changed_equal": true,
+          "weights": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "utility": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "delta": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "passed": true
+        }
+      }
+    },
+    {
+      "name": "reallocation-4-independent",
+      "registered_variants": 4,
+      "candidates": 2,
+      "workflow": "reallocation",
+      "composition": "independent",
+      "research_speedup": 1.4966582642874624,
+      "lifecycle_speedup": 1.433315199311209,
+      "before": {
+        "stages": {
+          "prepare_s": 0.00015364099999715108,
+          "historical_fixture_setup_s": 1.8662956540001687,
+          "open_load_plan_jit_s": 6.9426964420001696,
+          "register_s": 0.0005965820000710664,
+          "evaluate_s": 14.093556873000125,
+          "query_export_s": 0.00018105300000570423,
+          "ordered_commit_s": 13.768477432000054,
+          "pre_weight_evaluate_s": 13.724069892000216,
+          "weight_query_s": 6.875153604000161,
+          "weight_commit_s": 6.817578634000029,
+          "stale_commit_s": 3.9771000047039706e-05,
+          "post_weight_evaluate_s": 13.669487383999922,
+          "post_weight_export_s": 0.00015882100001363142,
+          "post_weight_commit_s": 13.81996257500009,
+          "release_s": 3.65660000625212e-05,
+          "close_s": 0.002010602999916955,
+          "query_ordered_commit_s": 27.86203430500018,
+          "weight_query_commit_s": 13.69273223800019,
+          "research_workflow_s": 82.76832616500064,
+          "open_through_close_s": 91.58602367800017,
+          "evidence_write_s": 0.0011054569999942032,
+          "complete_case_s": 91.5871306470001
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "independent",
+          "accepted": [
+            false,
+            false
+          ],
+          "admission_references": [
+            "2aa7b36516cbd1106148ada6a2011bd83fb2b21bef0d7ca0e009b0d0b0ff3a18",
+            "2aa7b36516cbd1106148ada6a2011bd83fb2b21bef0d7ca0e009b0d0b0ff3a18"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "eca4dd78cc8aeac0b90dafccc7b10cc6e64533e6a1de1e8fa6e116242f77d0d5",
+          "version_after_weights": "60706bf723a0d813772014516dd247568bd944aad3efe820b037b0fee6f25930",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.0604149749342,
+          "ann_ret": 1.6408960013680165,
+          "maxdd": 0.0,
+          "cagr": 4.158989309787017,
+          "total_ret": 0.00903089461453277,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288533424,
+          "max_single_weight": 0.08335314118073778,
+          "concentration": 0.022224775220561294,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790511566,
+          "ann_ret": 3.2674775133436333,
+          "maxdd": 0.0,
+          "cagr": 25.228900305636444,
+          "total_ret": 0.01806178922905488,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916323744,
+          "max_single_weight": 0.16522748521623853,
+          "concentration": 0.02212847071622564,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 210.0
+      },
+      "after": {
+        "stages": {
+          "prepare_s": 0.00016144100004567008,
+          "historical_fixture_setup_s": 1.599026515000105,
+          "open_load_plan_jit_s": 6.988307703000146,
+          "register_s": 0.000562186000024667,
+          "evaluate_s": 13.857706539999981,
+          "query_export_s": 0.00024329400002898183,
+          "ordered_commit_s": 0.0005259469999145949,
+          "pre_weight_evaluate_s": 13.842626133000067,
+          "weight_query_s": 6.883933554999885,
+          "weight_commit_s": 6.936043221000091,
+          "stale_commit_s": 4.60270000530727e-05,
+          "post_weight_evaluate_s": 13.780712645999984,
+          "post_weight_export_s": 0.0001652500000091095,
+          "post_weight_commit_s": 0.0004933479999635892,
+          "release_s": 3.728399997271481e-05,
+          "close_s": 0.0018415739998545178,
+          "query_ordered_commit_s": 13.858232486999896,
+          "weight_query_commit_s": 13.819976775999976,
+          "research_workflow_s": 55.30208741699994,
+          "open_through_close_s": 63.89803423700005,
+          "evidence_write_s": 0.0019603759999426984,
+          "complete_case_s": 63.903012737000154
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "independent",
+          "accepted": [
+            false,
+            false
+          ],
+          "admission_references": [
+            "2aa7b36516cbd1106148ada6a2011bd83fb2b21bef0d7ca0e009b0d0b0ff3a18",
+            "2aa7b36516cbd1106148ada6a2011bd83fb2b21bef0d7ca0e009b0d0b0ff3a18"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "eca4dd78cc8aeac0b90dafccc7b10cc6e64533e6a1de1e8fa6e116242f77d0d5",
+          "version_after_weights": "60706bf723a0d813772014516dd247568bd944aad3efe820b037b0fee6f25930",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.0604149749342,
+          "ann_ret": 1.6408960013680165,
+          "maxdd": 0.0,
+          "cagr": 4.158989309787017,
+          "total_ret": 0.00903089461453277,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288533424,
+          "max_single_weight": 0.08335314118073778,
+          "concentration": 0.022224775220561294,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790511566,
+          "ann_ret": 3.2674775133436333,
+          "maxdd": 0.0,
+          "cagr": 25.228900305636444,
+          "total_ret": 0.01806178922905488,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916323744,
+          "max_single_weight": 0.16522748521623853,
+          "concentration": 0.02212847071622564,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 210.0
+      },
+      "errors": {
+        "candidate_returns": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "nan_mismatch": 0,
+          "inf_mismatch": 0
+        },
+        "metrics_max_abs": 0.0,
+        "metrics_max_scaled": 0.0,
+        "decision_mismatches": 0,
+        "numeric_failures": 0,
+        "finite_mismatches": 0,
+        "allocation": {
+          "returns": {
+            "portfolio_before_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            },
+            "portfolio_after_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          },
+          "feasible_equal": true,
+          "selected_equal": true,
+          "changed_equal": true,
+          "weights": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "utility": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "delta": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "passed": true
+        }
+      }
+    },
+    {
+      "name": "admissions-16-shared",
+      "registered_variants": 16,
+      "candidates": 16,
+      "workflow": "admissions",
+      "composition": "shared",
+      "research_speedup": 1.2744495294527745,
+      "lifecycle_speedup": 1.2664916956079102,
+      "before": {
+        "stages": {
+          "prepare_s": 0.0005166050000298128,
+          "open_load_plan_jit_s": 1.815471179999804,
+          "register_s": 0.00072106800007532,
+          "evaluate_s": 6.790572560999863,
+          "query_export_s": 0.0003466600001047482,
+          "ordered_commit_s": 22.962246209999876,
+          "pre_weight_evaluate_s": 11.507996558000059,
+          "weight_query_s": 3.3790755889999673,
+          "weight_commit_s": 3.3657769919998373,
+          "stale_commit_s": 4.466800010050065e-05,
+          "post_weight_evaluate_s": 11.396465056999887,
+          "post_weight_export_s": 0.00027830999988509575,
+          "post_weight_commit_s": 11.416254810999817,
+          "release_s": 5.5150999969555414e-05,
+          "close_s": 0.0016136229999119678,
+          "query_ordered_commit_s": 29.75281877099974,
+          "weight_query_commit_s": 6.744852580999805,
+          "research_workflow_s": 70.8184324459994,
+          "open_through_close_s": 72.65940133200002,
+          "evidence_write_s": 0.001368276999983209,
+          "complete_case_s": 72.6607717070001
+        },
+        "transitions": {
+          "workflow": "admissions",
+          "composition": "shared",
+          "accepted": [
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "admission_references": [
+            "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700",
+            "f1663a99eb56d8677987239021d0483c1a36b86d47ec84d3f1c545cd4e9f9c3c",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897"
+          ],
+          "members_before_weights": 1,
+          "weights_before": [
+            1.0
+          ],
+          "weights_after": [
+            2.0
+          ],
+          "version_before_weights": "54c3d6440c48b9259ad03add3e487c04a0358c8d9cead7db860c20700cce65db",
+          "version_after_weights": "3129483984df3efdce01d3a95e23769855b6439b9533d46b2a3b75a4f84e1aba",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 1,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 917.233344062332,
+          "ann_ret": 4.344036446614808,
+          "maxdd": 0.0,
+          "cagr": 75.93404561887087,
+          "total_ret": 0.024082385638681814,
+          "turnover": 0.0010416666666666675,
+          "exposure": 0.20956836114570088,
+          "margin_bps": 1190.146971675289,
+          "max_single_weight": 0.21900814698502913,
+          "concentration": 0.022065030646478856,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 917.233,
+              "attend": 1.0,
+              "lg": 0.0238
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 935.7280938895915,
+          "ann_ret": 8.589195816505026,
+          "maxdd": 0.0,
+          "cagr": 5349.50186813435,
+          "total_ret": 0.04816477127744889,
+          "turnover": 0.002083333333333335,
+          "exposure": 0.4142291744712357,
+          "margin_bps": 1176.602166644523,
+          "max_single_weight": 0.4279525352972815,
+          "concentration": 0.021817173955550034,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 935.728,
+              "attend": 1.0,
+              "lg": 0.047
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "sampled_device_peak_mib": 218.0
+      },
+      "after": {
+        "stages": {
+          "prepare_s": 0.0005520970000816305,
+          "open_load_plan_jit_s": 1.7775536520000514,
+          "register_s": 0.0007259970000177418,
+          "evaluate_s": 6.7729435549999835,
+          "query_export_s": 0.00033639200000834535,
+          "ordered_commit_s": 19.500807343999895,
+          "pre_weight_evaluate_s": 11.330517542999814,
+          "weight_query_s": 3.3571255770000334,
+          "weight_commit_s": 3.31662328099992,
+          "stale_commit_s": 5.846599992764823e-05,
+          "post_weight_evaluate_s": 11.288404865000075,
+          "post_weight_export_s": 0.000260813999830134,
+          "post_weight_commit_s": 0.0013789110000743676,
+          "release_s": 5.579300000135845e-05,
+          "close_s": 0.0015271120000761584,
+          "query_ordered_commit_s": 26.27375089899988,
+          "weight_query_commit_s": 6.6737488579999535,
+          "research_workflow_s": 55.567859541999724,
+          "open_through_close_s": 57.37061015400013,
+          "evidence_write_s": 0.0020395080000525923,
+          "complete_case_s": 57.384006048000174
+        },
+        "transitions": {
+          "workflow": "admissions",
+          "composition": "shared",
+          "accepted": [
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "admission_references": [
+            "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700",
+            "f1663a99eb56d8677987239021d0483c1a36b86d47ec84d3f1c545cd4e9f9c3c",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897",
+            "d9f727c19d2280fbfe1c5a59c68eb7cb9ae9baf960a600cb709b2b1b12c52897"
+          ],
+          "members_before_weights": 1,
+          "weights_before": [
+            1.0
+          ],
+          "weights_after": [
+            2.0
+          ],
+          "version_before_weights": "54c3d6440c48b9259ad03add3e487c04a0358c8d9cead7db860c20700cce65db",
+          "version_after_weights": "3129483984df3efdce01d3a95e23769855b6439b9533d46b2a3b75a4f84e1aba",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 1,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 917.233344062332,
+          "ann_ret": 4.344036446614808,
+          "maxdd": 0.0,
+          "cagr": 75.93404561887087,
+          "total_ret": 0.024082385638681814,
+          "turnover": 0.0010416666666666675,
+          "exposure": 0.20956836114570088,
+          "margin_bps": 1190.146971675289,
+          "max_single_weight": 0.21900814698502913,
+          "concentration": 0.022065030646478856,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 917.233,
+              "attend": 1.0,
+              "lg": 0.0238
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 935.7280938895915,
+          "ann_ret": 8.589195816505026,
+          "maxdd": 0.0,
+          "cagr": 5349.50186813435,
+          "total_ret": 0.04816477127744889,
+          "turnover": 0.002083333333333335,
+          "exposure": 0.4142291744712357,
+          "margin_bps": 1176.602166644523,
+          "max_single_weight": 0.4279525352972815,
+          "concentration": 0.021817173955550034,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 935.728,
+              "attend": 1.0,
+              "lg": 0.047
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 1
+        },
+        "sampled_device_peak_mib": 218.0
+      },
+      "errors": {
+        "candidate_returns": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "nan_mismatch": 0,
+          "inf_mismatch": 0
+        },
+        "metrics_max_abs": 0.0,
+        "metrics_max_scaled": 0.0,
+        "decision_mismatches": 0,
+        "numeric_failures": 0,
+        "finite_mismatches": 0,
+        "allocation": {
+          "returns": {
+            "portfolio_before_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            },
+            "portfolio_after_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          },
+          "feasible_equal": true,
+          "selected_equal": true,
+          "changed_equal": true,
+          "weights": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "utility": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "delta": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "passed": true
+        }
+      }
+    },
+    {
+      "name": "reallocation-16-shared",
+      "registered_variants": 16,
+      "candidates": 14,
+      "workflow": "reallocation",
+      "composition": "shared",
+      "research_speedup": 1.506032373902496,
+      "lifecycle_speedup": 1.4351940950402902,
+      "before": {
+        "stages": {
+          "prepare_s": 0.000193070000022999,
+          "historical_fixture_setup_s": 1.4861575720001383,
+          "open_load_plan_jit_s": 4.698830358999885,
+          "register_s": 0.0005887309998797718,
+          "evaluate_s": 9.404824744999814,
+          "query_export_s": 0.0003142939999634109,
+          "ordered_commit_s": 9.388360963999958,
+          "pre_weight_evaluate_s": 9.404168216000016,
+          "weight_query_s": 4.743962925000005,
+          "weight_commit_s": 4.66262579499994,
+          "stale_commit_s": 5.233000001680921e-05,
+          "post_weight_evaluate_s": 9.406262067999933,
+          "post_weight_export_s": 0.0002646010000262322,
+          "post_weight_commit_s": 9.411395063999862,
+          "release_s": 5.681700008608459e-05,
+          "close_s": 0.0020159760001661198,
+          "query_ordered_commit_s": 18.793185708999772,
+          "weight_query_commit_s": 9.406588719999945,
+          "research_workflow_s": 56.421652106999545,
+          "open_through_close_s": 62.62929858899997,
+          "evidence_write_s": 0.0012659750000239,
+          "complete_case_s": 62.63056638099988
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "shared",
+          "accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "admission_references": [
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "891503088ad78122d365d3ec59206f56ade9a1a871153def3d18c26904295c77",
+          "version_after_weights": "67025ea323ba0ac7ad627d61968b2f83b7eeafd098e8dbeb1b94fbb3424590cb",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.06041498985,
+          "ann_ret": 1.640896001364613,
+          "maxdd": 0.0,
+          "cagr": 4.1589893097695665,
+          "total_ret": 0.009030894614497242,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288508558,
+          "max_single_weight": 0.08335314118073756,
+          "concentration": 0.022224775219817132,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790636294,
+          "ann_ret": 3.2674775133410345,
+          "maxdd": 0.0,
+          "cagr": 25.228900305568686,
+          "total_ret": 0.018061789229033565,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916314252,
+          "max_single_weight": 0.16522748521623898,
+          "concentration": 0.02212847071604477,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 218.0
+      },
+      "after": {
+        "stages": {
+          "prepare_s": 0.0001591119998920476,
+          "historical_fixture_setup_s": 1.4692593330000818,
+          "open_load_plan_jit_s": 4.682565835000105,
+          "register_s": 0.0007818169999609381,
+          "evaluate_s": 9.39181027199993,
+          "query_export_s": 0.00034331999995629303,
+          "ordered_commit_s": 0.0015893889999460953,
+          "pre_weight_evaluate_s": 9.365213657999902,
+          "weight_query_s": 4.713883728999917,
+          "weight_commit_s": 4.645783602999927,
+          "stale_commit_s": 5.335799983186007e-05,
+          "post_weight_evaluate_s": 9.34388323799999,
+          "post_weight_export_s": 0.00025699299999359937,
+          "post_weight_commit_s": 0.0015538410000317526,
+          "release_s": 4.7537000000374974e-05,
+          "close_s": 0.001962923999826671,
+          "query_ordered_commit_s": 9.393399660999876,
+          "weight_query_commit_s": 9.359667331999844,
+          "research_workflow_s": 37.463771087999476,
+          "open_through_close_s": 43.63820810399989,
+          "evidence_write_s": 0.0019675979999647097,
+          "complete_case_s": 43.64959399700001
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "shared",
+          "accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "admission_references": [
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7",
+            "0dcd5095f5b6cdeb8fcabf17105d0e7d147a1dfc819c5e920bb460ac276e9ad7"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "891503088ad78122d365d3ec59206f56ade9a1a871153def3d18c26904295c77",
+          "version_after_weights": "67025ea323ba0ac7ad627d61968b2f83b7eeafd098e8dbeb1b94fbb3424590cb",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.06041498985,
+          "ann_ret": 1.640896001364613,
+          "maxdd": 0.0,
+          "cagr": 4.1589893097695665,
+          "total_ret": 0.009030894614497242,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288508558,
+          "max_single_weight": 0.08335314118073756,
+          "concentration": 0.022224775219817132,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790636294,
+          "ann_ret": 3.2674775133410345,
+          "maxdd": 0.0,
+          "cagr": 25.228900305568686,
+          "total_ret": 0.018061789229033565,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916314252,
+          "max_single_weight": 0.16522748521623898,
+          "concentration": 0.02212847071604477,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 218.0
+      },
+      "errors": {
+        "candidate_returns": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "nan_mismatch": 0,
+          "inf_mismatch": 0
+        },
+        "metrics_max_abs": 0.0,
+        "metrics_max_scaled": 0.0,
+        "decision_mismatches": 0,
+        "numeric_failures": 0,
+        "finite_mismatches": 0,
+        "allocation": {
+          "returns": {
+            "portfolio_before_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            },
+            "portfolio_after_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          },
+          "feasible_equal": true,
+          "selected_equal": true,
+          "changed_equal": true,
+          "weights": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "utility": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "delta": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "passed": true
+        }
+      }
+    },
+    {
+      "name": "reallocation-16-independent",
+      "registered_variants": 16,
+      "candidates": 14,
+      "workflow": "reallocation",
+      "composition": "independent",
+      "research_speedup": 1.4995673787267048,
+      "lifecycle_speedup": 1.4322739822587707,
+      "before": {
+        "stages": {
+          "prepare_s": 0.0001595520000137185,
+          "historical_fixture_setup_s": 1.603594189999967,
+          "open_load_plan_jit_s": 6.932876705000126,
+          "register_s": 0.0005950099998699443,
+          "evaluate_s": 13.903044843000089,
+          "query_export_s": 0.0002970999998979096,
+          "ordered_commit_s": 13.821032995999985,
+          "pre_weight_evaluate_s": 13.809829362000073,
+          "weight_query_s": 6.879584448999822,
+          "weight_commit_s": 6.887886059000039,
+          "stale_commit_s": 6.344999997054401e-05,
+          "post_weight_evaluate_s": 13.89586736299998,
+          "post_weight_export_s": 0.00026835499988919764,
+          "post_weight_commit_s": 13.848365091999995,
+          "release_s": 5.994200000714045e-05,
+          "close_s": 0.0024137979999068193,
+          "query_ordered_commit_s": 27.724077839000074,
+          "weight_query_commit_s": 13.76747050799986,
+          "research_workflow_s": 83.04567361399995,
+          "open_through_close_s": 91.60504352199996,
+          "evidence_write_s": 0.0012640850000025239,
+          "complete_case_s": 91.60630895500003
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "independent",
+          "accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "admission_references": [
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "57941ba76d01f63c5945df5832d4b9ab16980386b1f5ad21362d4b0f3275108e",
+          "version_after_weights": "94c93bbc5de32d713326ddd0b5ad7dac89b0ddcc0c6fab0fe4e361b70d8313d6",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.0604149749342,
+          "ann_ret": 1.6408960013680165,
+          "maxdd": 0.0,
+          "cagr": 4.158989309787017,
+          "total_ret": 0.00903089461453277,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288533424,
+          "max_single_weight": 0.08335314118073778,
+          "concentration": 0.022224775220561294,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790511566,
+          "ann_ret": 3.2674775133436333,
+          "maxdd": 0.0,
+          "cagr": 25.228900305636444,
+          "total_ret": 0.01806178922905488,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916323744,
+          "max_single_weight": 0.16522748521623853,
+          "concentration": 0.02212847071622564,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 224.0
+      },
+      "after": {
+        "stages": {
+          "prepare_s": 0.0001569490000292717,
+          "historical_fixture_setup_s": 1.6124045639999167,
+          "open_load_plan_jit_s": 6.942189146999908,
+          "register_s": 0.0007733099998858961,
+          "evaluate_s": 13.836209587999974,
+          "query_export_s": 0.0003087620000314928,
+          "ordered_commit_s": 0.0016443260001324234,
+          "pre_weight_evaluate_s": 13.89999391099991,
+          "weight_query_s": 6.922348113999988,
+          "weight_commit_s": 6.851313770999923,
+          "stale_commit_s": 5.0851999958467786e-05,
+          "post_weight_evaluate_s": 13.866628765000087,
+          "post_weight_export_s": 0.00047113700020418037,
+          "post_weight_commit_s": 0.0015653890000066895,
+          "release_s": 5.0852999947892386e-05,
+          "close_s": 0.002433237000104782,
+          "query_ordered_commit_s": 13.837853914000107,
+          "weight_query_commit_s": 13.77366188499991,
+          "research_workflow_s": 55.37975471599998,
+          "open_through_close_s": 63.957765523000035,
+          "evidence_write_s": 0.0019968940000580915,
+          "complete_case_s": 63.96971205099999
+        },
+        "transitions": {
+          "workflow": "reallocation",
+          "composition": "independent",
+          "accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "admission_references": [
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6",
+            "08cd00f109f4d9686c0e74358d4b8f7d302445e4ec415bf1e484b90d6d4774f6"
+          ],
+          "members_before_weights": 2,
+          "weights_before": [
+            0.25,
+            0.25
+          ],
+          "weights_after": [
+            0.5,
+            0.5
+          ],
+          "version_before_weights": "57941ba76d01f63c5945df5832d4b9ab16980386b1f5ad21362d4b0f3275108e",
+          "version_after_weights": "94c93bbc5de32d713326ddd0b5ad7dac89b0ddcc0c6fab0fe4e361b70d8313d6",
+          "weights_changed": true,
+          "returns_changed": true,
+          "stale_report_rejected": true,
+          "final_members": 2,
+          "post_weight_accepted": [
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false
+          ],
+          "query_fills": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        "portfolio_metrics_before_weights": {
+          "sharpe": 904.0604149749342,
+          "ann_ret": 1.6408960013680165,
+          "maxdd": 0.0,
+          "cagr": 4.158989309787017,
+          "total_ret": 0.00903089461453277,
+          "turnover": 0.00039062500000000094,
+          "exposure": 0.07917821613183011,
+          "margin_bps": 1198.8281288533424,
+          "max_single_weight": 0.08335314118073778,
+          "concentration": 0.022224775220561294,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 904.06,
+              "attend": 1.0,
+              "lg": 0.009
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "portfolio_metrics_after_weights": {
+          "sharpe": 912.1047790511566,
+          "ann_ret": 3.2674775133436333,
+          "maxdd": 0.0,
+          "cagr": 25.228900305636444,
+          "total_ret": 0.01806178922905488,
+          "turnover": 0.0007812500000000019,
+          "exposure": 0.15764550839392655,
+          "margin_bps": 1193.5990916323744,
+          "max_single_weight": 0.16522748521623853,
+          "concentration": 0.02212847071622564,
+          "yearly": [
+            {
+              "year": 2025,
+              "periods": 48,
+              "sharpe": 912.105,
+              "attend": 1.0,
+              "lg": 0.0179
+            }
+          ],
+          "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+          "n_periods": 48,
+          "activity_basis": "executed_fills",
+          "fills": 2
+        },
+        "sampled_device_peak_mib": 224.0
+      },
+      "errors": {
+        "candidate_returns": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "nan_mismatch": 0,
+          "inf_mismatch": 0
+        },
+        "metrics_max_abs": 0.0,
+        "metrics_max_scaled": 0.0,
+        "decision_mismatches": 0,
+        "numeric_failures": 0,
+        "finite_mismatches": 0,
+        "allocation": {
+          "returns": {
+            "portfolio_before_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            },
+            "portfolio_after_weights": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          },
+          "feasible_equal": true,
+          "selected_equal": true,
+          "changed_equal": true,
+          "weights": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "utility": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "delta": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "passed": true
+        }
+      }
+    }
+  ],
+  "model": {
+    "assets": 8,
+    "events": 576,
+    "decisions": 192,
+    "statistics": 48,
+    "market": "crypto_spot",
+    "precision": "paired",
+    "cost_rate": 0.001,
+    "admission_weight_steps": 4,
+    "min_sharpe_gain": 0.01
+  },
+  "baseline": "4bdda0826739afed045ff8bccd65c4e595e56630 study/cache.py and study/session.py; all other source and local harness shared",
+  "scope": "Actual consecutive replacement admissions and explicit two-member historical reallocation fixtures",
+  "source_sha256": "1385a1f80468746d740924358a372a4ab97584d890eea8f8491c9957cf86b27d",
+  "original_evidence_sha256": "2a596fda553fb5858570e7e7e9946d2529d8eddceb56d6194cdb5e1fb0f0ad89",
+  "runtime": "One L4 session; released after all conditions and evidence collection",
+  "conditions_per_case": 1,
+  "full_regression_repeated": false,
+  "local_artifacts": "Original logs, JUnit, pytest-benchmark JSON, returns, test/job source and raw reports remain local",
+  "source": {
+    "README.md": "8d360810a4508301b1bc7b6a3a228ea4608f77940839cf72fece68119f00550d",
+    "README.zh-CN.md": "841ee0e26b705466ac41afa6a65fcd77b24b6d2fcc875ca6610b2d5c599a6a80",
+    "foundry/__init__.py": "580b810d8eca07c4fde00c14eabf16c63ebd792ea48b14840566e38f5eae9c65",
+    "foundry/__main__.py": "a12ef9ec66ee1bc5563a0eaf29e78f28a66c7a116cf5da10cfdb1340c7163189",
+    "foundry/api.py": "4ea8b9aeda195ca5d21780928838cdecab2cfcefb440530e1012d428c23abe99",
+    "foundry/backtest/cpu.py": "06b61fbf02c058b4a6b4989e099c64a851a56f8a430f284833eb50a50ff0b952",
+    "foundry/backtest/cuda.py": "123c8401f7968979c60eff8a13a99b5c1009ecc1cdff849afc3b13d29870c513",
+    "foundry/backtest/kernels/backtest.cu": "8cbdd90dff97376f673766a077481ef05dd797635d1f07d39795391e96707afc",
+    "foundry/backtest/kernels/general.cu": "7d8ba9d4dd080600811178a0ff7cf10496f193d14bdc21fe258b1e4bde0901e9",
+    "foundry/backtest/kernels/orders.cu": "a82ee06fd3e54477c2818435147c6b8d5b3627d13e2eb67ef3e467007251411c",
+    "foundry/backtest/kernels/perpetual_asset.cu": "d29728f7ba18f3cb7ec0953e8a767f8a72263efa018b4694fd36584a3c71af52",
+    "foundry/backtest/kernels/perpetual_fingerprints.cu": "883ce23bb03e9c54d32d7171d6af6922cfd06a2ea89a7a46ff7ca115cec92ef8",
+    "foundry/backtest/kernels/reductions.cuh": "f37d18fb9f18bd27d0056274a9f59907e9b65d162b88e82a4ebdf0aad792568f",
+    "foundry/backtest/kernels/statistics.cuh": "f19525eb5261053203ca548155bb5203690322004aa57896ed07ac4f7555a852",
+    "foundry/backtest/orders.py": "475911651e1b39fdb720cd99f52ed49126d562ae88c724afd85ee5f8b98a0b7c",
+    "foundry/backtest/orders_cuda.py": "8a333ef822137a5b1a72b7dd9510a04acae46c4b1df45364caafb82d92d551b3",
+    "foundry/backtest/perpetual.py": "54b5aacaed9cb99e11ee4cea6ffe0517e935d4bb13b50f400121ebd84a9ff05b",
+    "foundry/backtest/perpetual_cpu.py": "8ac3c724fc0435a7946af0a8b8284612bac26663a9297d19836dcbc1fa40bfd5",
+    "foundry/backtest/perpetual_cuda.py": "715f20844ad03bd391f50fa9229817761ae4d9a903ba4d38dc605e40df8a8681",
+    "foundry/backtest/src/kernel.cpp": "be5e3447e8659c638e92a708ac56b6806da788ab8f7a8e3ade5353f9430f9498",
+    "foundry/backtest/src/kernel.hpp": "0c59f0d4e90a42f9bd93d4ef77ad92c87ed359fe8f0fa4abd977c12a4e3f3b27",
+    "foundry/backtest/src/module.cpp": "b45bafabe3df7f7be42f4dd1cd601aa5c03c35eae039b9c6f8ef1b61fd3248a8",
+    "foundry/backtest/src/order_digest.hpp": "a0888515c2cc184047338bb919ed3ad99a655cded04f62636b619d655fc1f2d9",
+    "foundry/backtest/src/orders.hpp": "9af45ec8627c822d7edeb045213d7fc421b42b4c6a1a5984ffa331d31c435a09",
+    "foundry/backtest/src/orders_module.cpp": "439897fe02fe03faf07caac4a09cf9902f73b212272a176f87e7d17eb3b6e0b3",
+    "foundry/backtest/src/perpetual.cpp": "7044e622c94d9b5987c2a1e50c2a14d0982818564240f3440b9069edf91d25fb",
+    "foundry/backtest/src/perpetual.hpp": "c712fffea7820b91d687ae1b07284971f796fdc8545ab9fc06f909de2d3298ff",
+    "foundry/backtest/src/perpetual_output.hpp": "3b190ab25097bfd17a45bcfc07fb425dcf517b1ca3374c876958b88f9d320cf9",
+    "foundry/backtest/src/weights.cpp": "45f6b50b16960728658c96fe6c29a8b3f09a038b1c15a531e7781fc5e0be371d",
+    "foundry/backtest/weights.py": "0bb7f562cffbd7f8fbc6c959b93384933d0cfaf3cd0b519e6763e8561d150cd4",
+    "foundry/config.py": "af21ed520224c49e80f0c85aa21892362f8ddd4fd7c54a0fe8a9b8c5dc2e332a",
+    "foundry/include/npy_glue.h": "e6f7ffae59191c7eaf09e3a0cc1acac606f92c82126074ff1fe55a36c6fb352b",
+    "foundry/market/a_share.py": "867152a883294edde3f001b4a645fb12b9be8b418d60ca48d89e8eb3ccfef479",
+    "foundry/market/base.py": "120ee413962c5651bd6553304bc3730f33e7a5d56607fac096198c76f0da5285",
+    "foundry/market/clock.py": "fcb7935ada7a0b6d21b0707a5f46bcf0074a4c85a61d7946c56af2e4b521872b",
+    "foundry/market/crypto_spot.py": "26182db5ec7d92fafe6a3406a02ea3d9a4b16ee02b4fa75e0bf925e181e3c7de",
+    "foundry/market/data.py": "47343493a9193299857d0e17d6374832134b70f872b8d9e317ee6bfe930c79ec",
+    "foundry/market/execution.py": "cf06c67ec45eb7f6b8e61648af4c29aaa35e9261cbc76f84a4ec0e3187b37d5d",
+    "foundry/market/intraday.py": "c40389fb56e336911dae4105465f5f5b3276dd06c727ea0ea6708077119ea35f",
+    "foundry/market/orders.py": "aa91684001141ffd3e6d19278c19cbbf3cd0b46c55a0f836dd8f2c7b3bb623f8",
+    "foundry/market/panel.py": "e1e80e8e4b07d46f9c31903cdf039b2ec7e5befc988c9b25c2c0681f2189084f",
+    "foundry/market/perpetual.py": "2b42002216600a0442962fe62ee99b82a1b37d5a4df63ffa94614c8b7bee1197",
+    "foundry/market/pit.py": "3f8d90b59ac5e1f24ce87d450627b5012dbc7e451cf26b840fd3a1090b3d761f",
+    "foundry/market/us_equity.py": "3a2faad5d44a9b30d927cfa6d10a0b484cb8968c88ebb1577708524d60dd2db5",
+    "foundry/monitor/cells.py": "cf6119b037ee3da0ad6d7949e44d43c0ac59a5f7e0caec82bbd6b58323fe329c",
+    "foundry/monitor/components.py": "5701816350eb537ed3d98791126a33f9a6c7fe4d29f8131e7f0b738b15ac354a",
+    "foundry/monitor/launcher.py": "ddf04a1f40932a5862d916aad39ad53009121c94948811663e84947f2ba7ae05",
+    "foundry/monitor/objectives.py": "ab2913e3f0fc34a2d28975fb245b74a17f55aa9e7cea4391215734073616c4b8",
+    "foundry/monitor/preview.py": "6541f38c63d8e93954f37d91d9110e965a9e4575b572fdba3535d015158bc3a8",
+    "foundry/monitor/schema.py": "acd88462923269c53ca1e8ebee3fac428af68e0c45057dc93a16b6c26a6839d4",
+    "foundry/monitor/view.py": "5dc1287396214ffd5a4d5f37f031a6878adccb54b9e9dc4c67eac4cc1babe064",
+    "foundry/monitor/watch.py": "a77669247dca1da4bfaa799f2a922cfc18082e1f2fed7eba784e5863f3d25bcc",
+    "foundry/numeric/allocation.py": "ede105656a12b1a6a2c156067f95d5b2937ab952c66f6127d52e614b1410616c",
+    "foundry/numeric/cuda.py": "bf96b886a2d425ce668a7a1968d0c437d726691880e845710105564fccf4e2c7",
+    "foundry/numeric/cuda_source.py": "d33bb07960a6e98331bd47e7262736173e7a1a8a012b11ff2f36fd3eb873bc7d",
+    "foundry/numeric/float_pair.cuh": "16f11b0fe8d3db91f47287d6861d2fb029fd3b39e29634fee907c4f2823b7483",
+    "foundry/numeric/host.py": "6f2b0a9d242642bdca08782067c0a6fba0c81b85e156c423dbe7aae67916c96c",
+    "foundry/numeric/host_pair.hpp": "88694c6bf430099f73ec2a0595f2e168ce1b9e2d382310b2b79aac2134bc104e",
+    "foundry/numeric/metrics.py": "60003996979d9ba59accb3ab77d1c38f5f9fd869c37a15e2790c3c1572db6bf0",
+    "foundry/numeric/moments.cu": "0fa609dfe5d18ad8130697ce4d82b720e212dd41a9624cdebe7749f7b814d582",
+    "foundry/numeric/parallel.py": "59213bb7ab91fa1f2c71eb21daa877db1c670af495ec983918fa0b1c68b365e9",
+    "foundry/numeric/semantics.py": "65554b339f8645389988cfe6c7b028f6bbb5aee3ea1f99fdb089f3c0ead4a1d2",
+    "foundry/ops/ast.py": "ccebc3cd1ac633c09d57c815049b51c6e292ef4c3f6f3c83c41b3f4d8fb95b79",
+    "foundry/ops/cpu.py": "5d357f567327a939a6d4c010bebd9656fdc62d5c0fd8826dd58567fc6721cdc6",
+    "foundry/ops/cuda.py": "5020c909a7b1bdb0c0cc1533923ab47b7e2d99a5930a7352959e4a6d25b5dfbb",
+    "foundry/ops/evaluate.py": "4432368bd3c86b466f43519ce4b469ddb6c0707fd04730799b7a6387a7e0c368",
+    "foundry/ops/kernels/ops.cu": "cc30c2a8da58ee899ddd46df0bd607bef7b686955ab9525aac822908ae28318f",
+    "foundry/ops/kernels/paths.cu": "9c2824aa87888263e3623b5b7b572f2930535cd7e5ca184cc9484050c3a4b3fb",
+    "foundry/ops/kernels/rolling.cu": "a64e6401b220c11964d6924c257280cb7ef497834127ec60ef7e4ee9ca4cb102",
+    "foundry/ops/kernels/select.cu": "6fa92b6af3833418637d551d2af72c30c9ea7a74f927a9d644415bb20dc50663",
+    "foundry/ops/parse.py": "38f336c3e60d5fa21c6f700253c82b32da9cd4e0498bd465484ff52e0d71c62b",
+    "foundry/ops/portable.py": "1ab0ef6c9a7ae1f88d8b09825341ed0636d3cb630c972b0c536c8619dc4fbd02",
+    "foundry/ops/registry.py": "435f8ddc1545ef713c968f91c15d89dd6e29753b0c7b22435da34d7c18dda6ce",
+    "foundry/ops/src/module.cpp": "f84df16260847674a062e1c0bca60546744041611798a930e6d324cf7a6b6fe9",
+    "foundry/ops/src/ops.hpp": "a365ce84eeeed9f736531b5beed73fcf04eaa9ed3b9ccea43324c8e251d97afb",
+    "foundry/ops/src/ops_inject_ts.cpp": "2a2af132a0a3a5df38cd892032f1d05b98662793196a19b572191d58f1373089",
+    "foundry/ops/src/ops_ts.cpp": "ae21a5604757c704fd8f519f3e3d69bdca80e780f3d510c32b7e32ad71d9e04c",
+    "foundry/ops/src/ops_xs.cpp": "29c95249d90c7e93a8e005653f04950e00f91914ce3d8f8cd10a3aee9515cc7e",
+    "foundry/ops/two_point.hpp": "b3cd0a0c326c1fd098088535b80ab78649f3ab7e38421711e1833e29e549b1c7",
+    "foundry/portfolio/admission.py": "2027d2b10af304862cf490924fad092c05f57e4d9b5d1064753e226bb8f51761",
+    "foundry/portfolio/allocation.py": "d68fa501105e0319f4b689caa9f701a0347f5aedd30f1371d57f26302e86ad3d",
+    "foundry/portfolio/library.py": "2e1cd42c89ad67ad3ff9f57e82b31e852a3d5618394ed1453f14fa1f4a4287a5",
+    "foundry/portfolio/portfolio.py": "98954cbf3adf0274412ed79e7853e27f91629333fd63847f4c1d0f45fb4beb8d",
+    "foundry/portfolio/reference.py": "873ef7bc7fafe812db2c9596380c8de8cbe4d1184eb96f2741aff1ac53942b4a",
+    "foundry/portfolio/reweight.py": "b9eabefef977582e315837692b603bcc9df6f29e7ed6f22c35569cbda8661d99",
+    "foundry/rpc/client.py": "680e86b07dcd3608da2ea2415fb0d73de325b9fb405151e78b1a7e16e083e77c",
+    "foundry/rpc/codec.py": "b631c1ae8b5d525ef68b1183193407a515a1af8756b6d19efebe52774f64dde8",
+    "foundry/rpc/schema.py": "760f4ca4789a2a3644a5bfe42570e1faccdb05e86d790cbbfa2a8bcbafe5c30c",
+    "foundry/rpc/server.py": "a196b6e66bcab8d99642da3bcbeced44ce731596e4cfb885b8d6cd9fbb454b06",
+    "foundry/search/archive.py": "d4a1b68c0d6be97654a97708bbc4e8f9b88e956ed9372f50a8240a254872de1d",
+    "foundry/search/calibrate.py": "36cd5c7d81d50a9dc375df55a4bdf397edce5cb6f7e6201ef1353e7cb9d01be6",
+    "foundry/search/diagnostics.py": "f358be318e0d965e9ee1bad48c9ce72c9e64908329162b637629f5394275f73f",
+    "foundry/search/driver.py": "07b254e12522a983c4729e0291669095843ec1cd9af977b7653784ac642df22b",
+    "foundry/search/objective.py": "f6f14331f2f214cdc5044b0937ee39d82a2e86da831d9617c8b72df58c2056eb",
+    "foundry/search/proposer/batch.py": "125e11ad9a4bbba21c259fef7d5a03379edc1559d9f7f773887d09038f4b37b1",
+    "foundry/search/proposer/device_sampling.py": "ce2df76f68d95bf0e63a134c10d9ed7c7d683c7fd6cc3b58360e061eb12ad08f",
+    "foundry/search/proposer/external.py": "9b267a661c5d4f2d55fdd36f2c107d540a9607a4f18b213f4c6fb2436bbfc81a",
+    "foundry/search/proposer/gfn.py": "f6aa1efc13d3913a4f014f0962162f9dea3959f495718bd100ba3759e951cfa2",
+    "foundry/search/proposer/grammar.py": "57f39a722af6c634c6daffba549213faa7583ca61b98af41bc3d2a4a6e4f4c80",
+    "foundry/search/proposer/model.py": "5e801ced7e1cfc75ba7930a3be763abb903623d9ecc0e616eea618031476f219",
+    "foundry/search/proposer/random.py": "4d1cbb6991f7ebd4bb3dd85384747a7b8eed357064e0942670b7c61695cb45b9",
+    "foundry/search/proposer/sampling.py": "a60889c316f6db3003a550fd083fc6de1afeb4f0908d509d42fa45ec753d70cc",
+    "foundry/search/robustness.py": "35dee9e2f0be24bfdb07987716b86c675489ebcda7157e2bb8587bab0efc3e57",
+    "foundry/study/cache.py": "487524214e48095c209466084037db55dc83c587035ba986c9d6cf9b8d62c8f6",
+    "foundry/study/feedback.py": "414e24930607d3ae5988def07f23039349373b10e931cccfffb6a54649f20e55",
+    "foundry/study/identity.py": "81040ecc06d3a3b60dcf21a342d55387633c77b34753064e35d7c6c0f920ab2d",
+    "foundry/study/inputs.py": "dc3a502ee55e10bb717a2b9b68a54c9772dad8ccdfa72774ebe16c4553190f06",
+    "foundry/study/pipeline.py": "4c64e5f0c046ed84f9e258ddd78e28a6f8a913ae57052e65cfac988f6506d267",
+    "foundry/study/program_registry.py": "4a39203191b7a4b28b865116563c3881d39a6db13a78f6592c7e6673748fe450",
+    "foundry/study/programs.py": "5b37aaa9fbe85fa11f19e42841a416366610ce4a5f4fcc8de4551701009bb584",
+    "foundry/study/replay.py": "55fbbd2bb9dec0a4dc7bfd19d9e9c457e54a34eb361334943527bb6e77602ff1",
+    "foundry/study/replay_evaluation.py": "3f1dd0b0c4e2262ee2076c3107fe05578a2df267c9307d0090b7be09fc0f60dd",
+    "foundry/study/report.py": "2dbd53f97c8e9a91eee03ce4ebaec5fe3cce78bd18beff0320d7d9dd1a637525",
+    "foundry/study/resources.py": "44bd827f9f34c89a78282ba6a794aaf18a83fb22e9ac78b36ce2a187b3f8f3df",
+    "foundry/study/session.py": "0e9914a661bb07d4b9ddfcb9f61ad5daf0edce683675edf8f3578722181b5994",
+    "foundry/study/src/array_hash.cu": "4251da4b914b2e09a78d179d7d71cea05be587d80a95f44a35ca4af309adb554",
+    "foundry/study/store.py": "d6803ee2c62c6198f6320a4a5ba9f56a8aaf98af1c18f35862a8768ebcb9b6f4",
+    "foundry/study/transforms.py": "68c88911e98f5df3b04eb047e0f007c995498679d6ba4c3a05bf1eb956dde95b",
+    "foundry/study/walk_forward.py": "11d118fc740db99d7743d9bce09f681ed9d96ba9f23a67a68baef6b92557be63",
+    "foundry/types.py": "3a7c670d380f89a0fd1a53bd608dd0ba92793be71df68ba66b4248b5ab9fced4",
+    "pyproject.toml": "5d7d6596acf7ea98fca4a947ec21c7ea4c001b7f2fae2b690a749813faf12653"
+  }
+}
