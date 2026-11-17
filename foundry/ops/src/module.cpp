@@ -13,6 +13,7 @@
 
 #include "npy_glue.h"
 #include "ops.hpp"
+#include <omp.h>
 
 /* Local aliases for shared glue (foundry/include/npy_glue.h): C-contiguous / zero-copy row-strided view / out view / alloc. */
 #define as_panel     bt_as_2d
@@ -34,8 +35,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                        \
                                : alloc_panel(T, S, &ldo);                            \
     if (!out) { Py_DECREF(x); return NULL; }                                         \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(x), (double*)PyArray_DATA(out),                 \
          (int64_t)T, (int64_t)S, ldx, ldo);                                          \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(x);                                                                    \
     return (PyObject*)out;                                                           \
 }
@@ -70,8 +73,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
                                : alloc_panel(T, S, &ldo);                             \
     if (!out) { Py_DECREF(a); Py_DECREF(b); return NULL; }                            \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(a), (const double*)PyArray_DATA(b),              \
          (double*)PyArray_DATA(out), (int64_t)T, (int64_t)S, lda, ldb, ldo);          \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(a); Py_DECREF(b);                                                       \
     return (PyObject*)out;                                                            \
 }
@@ -113,9 +118,11 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                           \
                                : alloc_panel(T, S, &ldo);                               \
     if (!out) { Py_DECREF(a); Py_DECREF(b); Py_DECREF(c); return NULL; }                \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(a), (const double*)PyArray_DATA(b),                \
          (const double*)PyArray_DATA(c), (double*)PyArray_DATA(out),                    \
          (int64_t)T, (int64_t)S, lda, ldb, ldc, ldo);                                   \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(a); Py_DECREF(b); Py_DECREF(c);                                           \
     return (PyObject*)out;                                                              \
 }
@@ -136,8 +143,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
                                : alloc_panel(T, S, &ldo);                             \
     if (!out) { Py_DECREF(x); return NULL; }                                          \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(x), k, (double*)PyArray_DATA(out),               \
          (int64_t)T, (int64_t)S, ldx, ldo);                                           \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(x);                                                                     \
     return (PyObject*)out;                                                            \
 }
@@ -172,8 +181,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
                                : alloc_panel(T, S, &ldo);                             \
     if (!out) { Py_DECREF(x); return NULL; }                                          \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(x), (double*)PyArray_DATA(out),                  \
          (int64_t)T, (int64_t)S, (int64_t)w, ldx, ldo);                               \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(x);                                                                     \
     return (PyObject*)out;                                                            \
 }
@@ -190,9 +201,11 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
                                : alloc_panel(T, S, &ldo);                             \
     if (!out) { Py_DECREF(x); return NULL; }                                          \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(x), (double*)PyArray_DATA(out),                  \
          (int64_t)T, (int64_t)S, (int64_t)w, ldx, ldo,                                \
          _AS_I64_OR_NULL(o_lo), _AS_I64_OR_NULL(o_hi));                               \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(x);                                                                     \
     return (PyObject*)out;                                                            \
 }
@@ -237,9 +250,11 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
                                : alloc_panel(T, S, &ldo);                             \
     if (!out) { Py_DECREF(a); Py_DECREF(b); return NULL; }                            \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(a), (const double*)PyArray_DATA(b),              \
          (double*)PyArray_DATA(out), (int64_t)T, (int64_t)S, (int64_t)w,              \
          lda, ldb, ldo, _AS_I64_OR_NULL(o_lo), _AS_I64_OR_NULL(o_hi));               \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(a); Py_DECREF(b);                                                       \
     return (PyObject*)out;                                                            \
 }
@@ -268,8 +283,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo)                         \
                                : alloc_panel(T, S, &ldo);                             \
     if (!out) { Py_DECREF(x); return NULL; }                                          \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(x), (double*)PyArray_DATA(out),                  \
          (int64_t)T, (int64_t)S, (int64_t)w, k, ldx, ldo);                            \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(x);                                                                     \
     return (PyObject*)out;                                                            \
 }
@@ -294,9 +311,11 @@ static PyObject* py_ts_regression(PyObject* self, PyObject* args) {
     npy_intp T = PyArray_DIM(y, 0), S = PyArray_DIM(y, 1);
     PyArrayObject* out = o_out ? as_out_ld(o_out, T, S, &ldo) : alloc_panel(T, S, &ldo);
     if (!out) { Py_DECREF(y); Py_DECREF(x); return NULL; }
+    Py_BEGIN_ALLOW_THREADS
     fm_ts_regression((const double*)PyArray_DATA(y), (const double*)PyArray_DATA(x),
                      (double*)PyArray_DATA(out), (int64_t)T, (int64_t)S, (int64_t)w, k,
                      ldy, ldx, ldo);
+    Py_END_ALLOW_THREADS
     Py_DECREF(y); Py_DECREF(x);
     return (PyObject*)out;
 }
@@ -313,8 +332,10 @@ static PyObject* py_##py_name(PyObject* self, PyObject* args) {                 
     int64_t ld_unused;                                                              \
     PyArrayObject* out = alloc_panel(T, S, &ld_unused);                             \
     if (!out) { Py_DECREF(x); return NULL; }                                        \
+    Py_BEGIN_ALLOW_THREADS \
     c_fn((const double*)PyArray_DATA(x), (double*)PyArray_DATA(out),                \
          (int64_t)T, (int64_t)S);                                                   \
+    Py_END_ALLOW_THREADS \
     Py_DECREF(x);                                                                   \
     return (PyObject*)out;                                                          \
 }
@@ -327,7 +348,15 @@ DEF_CS(cs_scale,  fm_cs_scale)
 
 /* ---------- Method table ---------- */
 
+static PyObject* py_worker_init(PyObject*, PyObject*) {
+    // Each host worker owns one independent candidate; never nest OpenMP teams.
+    omp_set_num_threads(1);
+    omp_set_dynamic(0);
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef methods[] = {
+    {"worker_init", py_worker_init, METH_NOARGS, "Use one native lane inside each host worker."},
     {"abs_",   py_abs_,   METH_VARARGS, "|x|"},
     {"neg",    py_neg,    METH_VARARGS, "-x"},
     {"sign",   py_sign,   METH_VARARGS, "sign(x)"},

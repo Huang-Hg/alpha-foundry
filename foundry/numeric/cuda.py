@@ -4,7 +4,7 @@ from pathlib import Path
 import cupy as cp
 import numpy as np
 
-from foundry.contracts import ReturnMoments
+from foundry.types import ReturnMoments
 from foundry.numeric.cuda_source import paired_source
 
 

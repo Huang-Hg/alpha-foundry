@@ -1,14 +1,16 @@
-// foundry/ops/kernels/paths.cu — path-dependent operators: out[t] depends on out[t-1], so one thread walks one
-// column. Compiled with --fmad=false to keep the CPU reference's rounding.
+// Chronological accumulators replay their prefix per output tile. This exposes
+// time tiles without changing addition order or resetting cancellation history.
+// Compiled with --fmad=false to keep the CPU reference's rounding.
 #define NAN __longlong_as_double((long long)0x7ff8000000000000ULL)
 
-extern "C" __global__ void k_std(const double* x,double* out,int T,int S,int w) {
+extern "C" __global__ void k_std(const double* x,double* out,int T,int S,int w,int tile) {
     int s=blockIdx.x*blockDim.x+threadIdx.x;
     if(s>=S)return;
+    int begin=blockIdx.y*tile,end=min(T,begin+tile);
     int lo=0;while(lo<T && isnan(x[lo*S+s]))lo++;
     double sum=0.,squares=0.;int missing=0;
-    for(int t=0;t<T;t++) {
-        int i=t*S+s;out[i]=NAN;
+    for(int t=0;t<end;t++) {
+        int i=t*S+s;if(t>=begin)out[i]=NAN;
         if(t<lo)continue;
         double v=x[i];
         if(isnan(v))missing++;else{sum+=v;squares+=v*v;}
@@ -16,7 +18,7 @@ extern "C" __global__ void k_std(const double* x,double* out,int T,int S,int w) 
             double old=x[i-w*S];
             if(isnan(old))missing--;else{sum-=old;squares-=old*old;}
         }
-        if(t-lo>=w-1 && missing==0) {
+        if(t>=begin && t-lo>=w-1 && missing==0) {
             double mean=sum/double(w),variance=(squares-mean*sum)/double(w-1);
             if(variance<0.)variance=0.;
             out[i]=sqrt(variance);
@@ -24,49 +26,17 @@ extern "C" __global__ void k_std(const double* x,double* out,int T,int S,int w) 
     }
 }
 
-// Keep the native reference's chronological recurrence and resynchronization.
-// A window-local recomputation is not numerically interchangeable after an
-// extreme observation leaves the rolling window.
-extern "C" __global__ void k_slope(const double* x,double* out,int T,int S,int w) {
+extern "C" __global__ void k_pair(const double* a,const double* b,double* out,int T,int S,int w,int mode,int tile) {
     int s=blockIdx.x*blockDim.x+threadIdx.x;
     if(s>=S)return;
-    for(int t=0;t<T;t++)out[t*S+s]=NAN;
-    int lo=0;while(lo<T && isnan(x[lo*S+s]))lo++;
-    if(lo+w>T)return;
-    double sx=0.,skx=0.,mean=(w-1)/2.,var=(double(w)*w-1.)/12.;int missing=0;
-    for(int k=0;k<w;k++) {
-        double v=x[(lo+k)*S+s];
-        if(isnan(v))missing++;else{sx+=v;skx+=double(k)*v;}
-    }
-    out[(lo+w-1)*S+s]=missing?NAN:(skx-mean*sx)/double(w)/var;
-    for(int t=lo+w;t<T;t++) {
-        if(((t-lo)&65535)==0) {
-            sx=skx=0.;missing=0;
-            for(int k=0;k<w;k++) {
-                double v=x[(t-w+1+k)*S+s];
-                if(isnan(v))missing++;else{sx+=v;skx+=double(k)*v;}
-            }
-        } else {
-            double next=x[t*S+s],old=x[(t-w)*S+s];
-            bool nn=isnan(next),no=isnan(old);
-            double nv=nn?0.:next,ov=no?0.:old;
-            skx=skx-sx+ov+double(w-1)*nv;sx=sx+nv-ov;
-            missing+=int(nn)-int(no);
-        }
-        out[t*S+s]=missing?NAN:(skx-mean*sx)/double(w)/var;
-    }
-}
-
-extern "C" __global__ void k_pair(const double* a,const double* b,double* out,int T,int S,int w,int mode) {
-    int s=blockIdx.x*blockDim.x+threadIdx.x;
-    if(s>=S)return;
+    int begin=blockIdx.y*tile,end=min(T,begin+tile);
     int la=0,lb=0;
     while(la<T && isnan(a[la*S+s]))la++;
     while(lb<T && isnan(b[lb*S+s]))lb++;
     int lo=la>lb?la:lb,missing=0,constant_a=0,constant_b=0;
     double sa=0.,sb=0.,sab=0.,saa=0.,sbb=0.;
-    for(int t=0;t<T;t++) {
-        int i=t*S+s;out[i]=NAN;
+    for(int t=0;t<end;t++) {
+        int i=t*S+s;if(t>=begin)out[i]=NAN;
         if(t<lo)continue;
         double va=a[i],vb=b[i];
         constant_a=t>lo && va==a[i-S]?constant_a+1:1;
@@ -78,7 +48,7 @@ extern "C" __global__ void k_pair(const double* a,const double* b,double* out,in
             if(isnan(oa)||isnan(ob))missing--;
             else{sa-=oa;sb-=ob;sab-=oa*ob;saa-=oa*oa;sbb-=ob*ob;}
         }
-        if(t-lo>=w-1 && missing==0) {
+        if(t>=begin && t-lo>=w-1 && missing==0) {
             double ma=sa/double(w),mb=sb/double(w);
             double cov=(sab-ma*sb)/double(w-1);
             double va=(saa-ma*sa)/double(w-1),vb=(sbb-mb*sb)/double(w-1);
@@ -111,31 +81,16 @@ extern "C" __global__ void k_standardize(const double* x,double* out,int T,int S
 
 // mode 0 trade_when(entry=x, alpha=y, exit=z): exit>0 -> 0; entry>0 -> alpha; else hold.
 // mode 1 hump(x, k): take x only when it moves more than k from the held value.
-// mode 2 ts_backfill(x, window): the last valid value, if it is less than `window` rows old.
 extern "C" __global__ void k_recursive(const double* x, const double* y, const double* z,
-        double* out, int T, int S, int mode, int window, double k) {
+        double* out, int T, int S, int mode, double k) {
     int s=blockIdx.x*blockDim.x+threadIdx.x;
     if(s>=S)return;
-    double prev=mode==1?NAN:0.; int last=-1;
+    double prev=mode==1?NAN:0.;
     for(int t=0;t<T;t++) {
         int i=t*S+s; double v=x[i];
         if(mode==0) prev=z[i]>0?0.:(v>0?y[i]:prev);
-        else if(mode==1) { if(!isnan(v)&&(isnan(prev)||fabs(v-prev)>k))prev=v; }
-        else { if(!isnan(v)){prev=v;last=t;} }
-        out[i]=(mode==2&&(last<0||t-last>=window))?NAN:prev;
-    }
-}
-
-// The non-NaN mean exists before a full window is available, unlike ts_mean.
-extern "C" __global__ void k_av_diff(const double* x,double* out,int T,int S,int w) {
-    int s=blockIdx.x*blockDim.x+threadIdx.x;
-    if(s>=S)return;
-    double sum=0.;int count=0;
-    for(int t=0;t<T;++t) {
-        int i=t*S+s;double v=x[i];
-        if(!isnan(v)){sum+=v;++count;}
-        if(t>=w) {double old=x[i-w*S];if(!isnan(old)){sum-=old;--count;}}
-        out[i]=count>0&&!isnan(v)?v-sum/double(count):NAN;
+        else { if(!isnan(v)&&(isnan(prev)||fabs(v-prev)>k))prev=v; }
+        out[i]=prev;
     }
 }
 
