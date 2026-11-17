@@ -1,21 +1,23 @@
 """One persistent terminal screen with switchable status sources.
 
-Data rate and frame rate are decoupled: snapshots arrive every couple of seconds (a local producer, or
-`python -m foundry mirror` for a cloud one), the screen is redrawn every [monitor] frame_seconds from
+Data rate and frame rate are decoupled: snapshots arrive every couple of seconds from a local producer
+or an externally synchronized remote status file, the screen is redrawn every [monitor] frame_seconds from
 the local file only. Between snapshots the readings glide from the value on screen to the
 newest reported one, so motion is smooth but nothing beyond a reported value is ever shown.
 Which readings glide is declared in schema.py.
 """
 import json
 import os
-from pathlib import Path
 import sys
 import time
+from copy import deepcopy
+from pathlib import Path
+
 from rich.console import Console
 from rich.live import Live
 
 from .cells import BASE
-from .schema import ENDED, GLIDE, RESTART
+from .schema import ENDED, GLIDE, RESTART, reading, validate_status
 from .view import render
 
 
@@ -28,16 +30,23 @@ class Glide:
         shown = self.at(now)
         self.span = min(5., max(.2, now-self.arrived)) if self.target else 1.
         # A counter that moved backwards is a new run (or a restarted service): show it at once instead of counting down.
-        restart = any(state.get(k) is not None and shown.get(k) is not None and state[k] < shown[k] for k in RESTART)
-        self.start = {k: state[k] if restart or shown.get(k) is None else shown[k] for k in GLIDE if state.get(k) is not None}
+        restart = any(reading(state, key) is not None and reading(shown, key) is not None
+                      and reading(state, key) < reading(shown, key) for key in RESTART)
+        self.start = {key: reading(state, key) if restart or reading(shown, key) is None else reading(shown, key)
+                      for key in GLIDE if reading(state, key) is not None}
         self.target, self.arrived = state, now
 
     def at(self, now):
         share = min(1., (now-self.arrived)/self.span)
-        out = dict(self.target)
-        for k, a in self.start.items():
-            value = a+(self.target[k]-a)*share
-            out[k] = round(value) if isinstance(self.target[k], int) else value
+        out = deepcopy(self.target)
+        for key, start in self.start.items():
+            target = reading(self.target, key)
+            value = start + (target - start) * share
+            container = out
+            parts = key.split('.')
+            for part in parts[:-1]:
+                container = container[part]
+            container[parts[-1]] = round(value) if isinstance(target, int) else value
         # Wall time needs no report to advance while the run is alive.
         if out.get('elapsed_seconds') is not None and out.get('phase') not in ENDED and '_source_mtime' in out:
             out['elapsed_seconds'] += max(0., time.time()-out['_source_mtime'])
@@ -76,7 +85,7 @@ def watch(path, frame_seconds, once=False, heartbeat=None):
             if 'status_path' in value:
                 source=Path(value['status_path'])
                 text,value,stat=load(source)
-            return (str(source),text),dict(value,_source_mtime=stat.st_mtime,_source_name=source.name)
+            return (str(source),text),dict(validate_status(value),_source_mtime=stat.st_mtime,_source_name=source.name)
         except FileNotFoundError:
             return (str(source),None),dict(_source_name=source.name)
         except (PermissionError,json.JSONDecodeError):
