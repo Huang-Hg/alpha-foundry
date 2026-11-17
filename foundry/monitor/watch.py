@@ -1,7 +1,7 @@
 """One persistent terminal screen with switchable status sources.
 
-Data rate and frame rate are decoupled: snapshots arrive every couple of seconds (a local producer, or
-`python -m foundry mirror` for a cloud one), the screen is redrawn every [monitor] frame_seconds from
+Data rate and frame rate are decoupled: snapshots arrive every couple of seconds from a local producer
+or an externally synchronized remote status file, the screen is redrawn every [monitor] frame_seconds from
 the local file only. Between snapshots the readings glide from the value on screen to the
 newest reported one, so motion is smooth but nothing beyond a reported value is ever shown.
 Which readings glide is declared in schema.py.

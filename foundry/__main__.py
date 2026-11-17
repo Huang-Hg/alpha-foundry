@@ -3,12 +3,13 @@
   schema OUTPUT                     write the machine-readable request contract
   request INPUT.jsonl OUTPUT.jsonl   send JSON-RPC requests to the configured service
   fields | ops                      inspect the active market vocabulary
-  serve | status | stop | attach [HOST] | detach | mirror HOST REMOTE LOCAL
+  serve | status | stop | attach ADDRESS PORT | detach
   mine OUTPUT                       run the configured mining program
   import-perpetual OUTPUT            import verified public USD-M archives
   calibrate RUN | monitor | preview
 
-Start or attach the service explicitly. request never starts a local GPU process.
+Start or select the service explicitly. Manage SSH tunnels with system ssh.
+request never starts a local GPU process.
 """
 from __future__ import annotations
 
@@ -49,10 +50,7 @@ def cmd_ops(a):
 
 
 def cmd_serve(a):
-    from foundry.rpc import client, schema
     from foundry import serve
-    if schema.PORTFILE.exists():
-        client.stop()
     serve(ROOT / 'production' / 'library.json', **a.parameters)
 
 
@@ -69,22 +67,15 @@ def cmd_stop(a):
 
 
 def cmd_attach(a):
-    from foundry.rpc import client, schema
-    d = client.info() if schema.PORTFILE.exists() else {}
-    if d and 'host' not in d:            # free the local card before attaching to the cloud
-        print(client.stop() or '(无本地服务)')
-    client.attach(a.host or client.DEFAULT_HOST)
+    from foundry.rpc import client
+    endpoint = client.attach(a.address, a.port)
+    print(f'已连接 {endpoint["address"]}:{endpoint["port"]}')
 
 
 def cmd_detach(a):
-    from foundry.rpc import client, schema
+    from foundry.rpc import schema
     schema.PORTFILE.unlink(missing_ok=True)
-    print('已断开;云端服务未动(要停用先 attach 再 stop)')
-
-
-def cmd_mirror(a):
-    from foundry.rpc import client, schema
-    client.mirror(a.host, a.remote, Path(a.local), configure(**a.parameters).monitor.push_seconds)
+    print('已断开；服务继续运行')
 
 
 def cmd_mine(a):
@@ -131,12 +122,9 @@ def main():
     sub.add_parser('status')
     sub.add_parser('stop')
     s = sub.add_parser('attach')
-    s.add_argument('host', nargs='?')
+    s.add_argument('address')
+    s.add_argument('port', type=int)
     sub.add_parser('detach')
-    s = sub.add_parser('mirror')
-    s.add_argument('host')
-    s.add_argument('remote')
-    s.add_argument('local')
     s = sub.add_parser('mine')
     s.add_argument('output')
     s = sub.add_parser('import-perpetual')
@@ -154,7 +142,7 @@ def main():
     from foundry.rpc.schema import describe
     parameters = json.loads(a.parameters)
     validate(parameters, describe()['parameters'])
-    if parameters and a.command not in {'fields', 'ops', 'serve', 'mine', 'import-perpetual', 'calibrate', 'monitor', 'mirror'}:
+    if parameters and a.command not in {'fields', 'ops', 'serve', 'mine', 'import-perpetual', 'calibrate', 'monitor'}:
         raise ValueError('parameters apply at compute/job startup, not when connecting to an existing service')
     a.parameters = parameters_from_json(parameters)
     globals()['cmd_' + a.command.replace('-', '_')](a)
