@@ -1,0 +1,3600 @@
+{
+  "validation": {
+    "passed": true,
+    "tests": {
+      "smoke": {
+        "total": 39,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "regression": {
+        "total": 483,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      }
+    },
+    "gpu": "NVIDIA L4, 23034 MiB, 580.82.07",
+    "source_sha256": "25aa6d4d2c614f0acb504eab22f2f9b09e7d859793d5c366d3480541d5b0254c",
+    "baseline_revision": "d96fe84ddc59a0e1afea52a1cec82f7f07a5405d",
+    "daily_parity": "Exact metrics, risk, decisions and ordered weights across four markets",
+    "conditions_per_case": 1,
+    "private_production": "Not migrated or rerecorded"
+  },
+  "cases": [
+    {
+      "name": "orders-16-shared",
+      "candidates": 16,
+      "composition": "shared",
+      "shape": {
+        "assets": 8,
+        "decisions": 192,
+        "events": 576,
+        "statistics": 48
+      },
+      "before": {
+        "model": "orders",
+        "composition": "shared",
+        "precision": "paired",
+        "candidates": 16,
+        "candidate_capacity": 16,
+        "shape": {
+          "assets": 8,
+          "decisions": 192,
+          "events": 576,
+          "statistics": 48
+        },
+        "stages": {
+          "candidate_production_s": 0.0008335079999142181,
+          "register_s": 0.0008408029998463462,
+          "evaluate_s": 7.437363168999809,
+          "measurement_export_s": 0.0003320089999760967,
+          "ordered_commit_s": 6.835565417999987,
+          "retain_s": 0.000309475999983988,
+          "evidence_write_s": 0.022274383999956626,
+          "release_s": 9.131199999501405e-05,
+          "portfolio_report_s": 2.9038000093351002e-05,
+          "case_prepare_s": 0.00025727599995661876,
+          "open_load_plan_jit_s": 1.7970711069999652,
+          "close_s": 0.0013953449999917211,
+          "query_ordered_commit_s": 14.272928586999797,
+          "open_through_close_s": 16.097049464000065,
+          "orchestration_s": 0.0006866190005894168,
+          "case_summary_write_s": 0.0004192429998965963,
+          "complete_case_s": 16.098013691000006
+        },
+        "training": null,
+        "source_production": "immutable deployed feedback variants",
+        "program_weight_steps": 4,
+        "actual_standalone_fills": 27,
+        "fill_scope": "standalone evaluation only; excludes admission and ordered-commit replay accounts",
+        "sampled_device_peak_mib": 218.0,
+        "peak_sampling_seconds": 0.02,
+        "peak_is_lower_bound": true,
+        "accepted": [],
+        "batches": [
+          {
+            "offset": 0,
+            "candidates": 16,
+            "actual_standalone_fills": 27,
+            "hard_g1": 16,
+            "hard_g2": 0,
+            "admission_trials": 69,
+            "accepted": 0
+          }
+        ],
+        "portfolio": {
+          "context": {
+            "id": "583607d557eaa2f0a0fde0a17f047143919bfbcbd53bec3b0a94dbb038b3ab9a",
+            "snapshot": {
+              "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+              "study": {
+                "market": "crypto_spot",
+                "start": "2025-01-01T00:00:00Z",
+                "asof": "2025-01-03T00:00:00Z"
+              },
+              "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+              "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+              "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+              "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+              "data_contract": {
+                "schema": "crypto-bars-v1",
+                "source": "deterministic runtime-generated benchmark",
+                "retrieved_at": "synthetic-runtime",
+                "features": "completed 5-minute OHLCV with exact publication times",
+                "execution_prices": "synthetic factual trade OHLC; no revisions",
+                "publication": "every [open,close) Bar is available exactly at close_ns",
+                "membership": "all synthetic assets eligible throughout the declared source span"
+              },
+              "evaluation": "in_sample_research",
+              "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+              "execution": "next_base_bar_open",
+              "allocation": {
+                "max_gross": 1.0,
+                "allow_short": false
+              },
+              "precision": {
+                "requested": "paired",
+                "effective": "paired",
+                "reason": "fixed_study_policy",
+                "supported": [
+                  "mixed",
+                  "paired"
+                ]
+              }
+            },
+            "portfolio": "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700"
+          },
+          "sources": [
+            {
+              "kind": "equal_weight"
+            }
+          ],
+          "weights": [
+            1.0
+          ],
+          "metrics": {
+            "sharpe": 30.239914682922972,
+            "ann_ret": 8.591313117107092,
+            "maxdd": -0.012832887211752464,
+            "cagr": 5149.367306118031,
+            "total_ret": 0.04794584355102671,
+            "turnover": 0.006706921377499453,
+            "exposure": 0.9997177508799192,
+            "margin_bps": 365.5714191794827,
+            "max_single_weight": 0.12549163622322124,
+            "concentration": 0.2165629331923506,
+            "yearly": [
+              {
+                "year": 2025,
+                "periods": 48,
+                "sharpe": 30.24,
+                "attend": 1.0,
+                "lg": 0.0468
+              }
+            ],
+            "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+            "n_periods": 48,
+            "activity_basis": "executed_fills",
+            "fills": 1497
+          },
+          "baseline": true
+        },
+        "snapshot": {
+          "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+          "study": {
+            "market": "crypto_spot",
+            "start": "2025-01-01T00:00:00Z",
+            "asof": "2025-01-03T00:00:00Z"
+          },
+          "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+          "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+          "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+          "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+          "data_contract": {
+            "schema": "crypto-bars-v1",
+            "source": "deterministic runtime-generated benchmark",
+            "retrieved_at": "synthetic-runtime",
+            "features": "completed 5-minute OHLCV with exact publication times",
+            "execution_prices": "synthetic factual trade OHLC; no revisions",
+            "publication": "every [open,close) Bar is available exactly at close_ns",
+            "membership": "all synthetic assets eligible throughout the declared source span"
+          },
+          "evaluation": "in_sample_research",
+          "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+          "execution": "next_base_bar_open",
+          "allocation": {
+            "max_gross": 1.0,
+            "allow_short": false
+          },
+          "precision": {
+            "requested": "paired",
+            "effective": "paired",
+            "reason": "fixed_study_policy",
+            "supported": [
+              "mixed",
+              "paired"
+            ]
+          }
+        },
+        "parameters": {
+          "market": "crypto_spot",
+          "backend": "cuda",
+          "data_dir": "/content/quant/var/runs/reviewed/before-16/synthetic-source",
+          "start": "2025-01-01T00:00:00Z",
+          "end": "2025-01-03T00:00:00Z",
+          "cost_rate": 0.001,
+          "clock": {
+            "decision": "15min",
+            "statistics": "1h"
+          },
+          "sizing": {
+            "rule": "equal_slots",
+            "scale": 1.0
+          },
+          "account": {
+            "margin": "cash",
+            "leverage": 1.0,
+            "gross_limit": 1.0,
+            "initial_cash": 1.0,
+            "composition": "shared"
+          },
+          "execution": {
+            "fill": "next_open",
+            "model": "orders",
+            "precision": "paired",
+            "bar_path": "open_low_high_close",
+            "participation": 1.0,
+            "order_capacity": 32,
+            "command_capacity": 32,
+            "quantity_step": 0.0,
+            "price_tick": 0.0
+          },
+          "cuda": {
+            "streams": 8,
+            "candidate_batch": 16,
+            "trial_batch": 256,
+            "return_atol": 1e-06,
+            "perpetual_host_cells": 100000,
+            "measurement_cache_mib": 32
+          },
+          "cpu": {
+            "workers": 8,
+            "candidate_batch": 32,
+            "measurement_cache_mib": 32
+          },
+          "admission": {
+            "artifact_dir": "/content/quant/var/runs/reviewed/before-16/orders-16-shared/artifacts",
+            "weight_sum_atol": 1e-07,
+            "metric_atol": 1e-10,
+            "min_sharpe_gain": 0.01,
+            "weight_steps": 4,
+            "recent_halflife_days": 1095,
+            "max_members": 40,
+            "sharpe_scale": 0.1,
+            "growth_scale": 0.02
+          },
+          "operators": {
+            "max_cost": 25
+          },
+          "search": {
+            "violation_scale_wsharpe": 0.081,
+            "violation_scale_sharpe": 0.063,
+            "violation_scale_cagr": 0.079,
+            "violation_scale_growth": 0.024,
+            "mode": "gfn",
+            "seed_portfolio": "equal",
+            "objective": "portfolio",
+            "noise_control": false,
+            "accept": false,
+            "seed": 25,
+            "epochs": 5,
+            "batch_size": 128,
+            "probes": 2,
+            "max_tokens": 13,
+            "max_ts_depth": 2,
+            "train_steps": 4,
+            "learning_rate": 0.002,
+            "opd_strength": 0.1,
+            "rho_max": 0.9,
+            "archive_size": 32,
+            "reweight_iterations": 3,
+            "reweight_batch": 32,
+            "reweight_every": 5
+          },
+          "single": {
+            "calibration_sample": 8192,
+            "anchor_correlation": 0.7,
+            "anchor_sharpe": 1.5,
+            "recent_years": 2,
+            "recent_year_sharpe": 1.0,
+            "weight_sharpe": 0.6,
+            "weight_drawdown": 0.2,
+            "weight_return": 0.2,
+            "sharpe_scale": 2.0,
+            "drawdown_full": 0.6,
+            "return_scale": 1.0,
+            "violation_scale_sharpe": 1.3,
+            "violation_scale_year": 3.35
+          },
+          "monitor": {
+            "frame_seconds": 0.1,
+            "push_seconds": 2.0
+          }
+        },
+        "comparisons": [],
+        "error_summary": null,
+        "passed": true,
+        "persisted_artifacts": 0,
+        "persisted_bytes": 454896
+      },
+      "after": {
+        "model": "orders",
+        "composition": "shared",
+        "precision": "paired",
+        "candidates": 16,
+        "candidate_capacity": 16,
+        "shape": {
+          "assets": 8,
+          "decisions": 192,
+          "events": 576,
+          "statistics": 48
+        },
+        "stages": {
+          "candidate_production_s": 0.0008897819998310297,
+          "register_s": 0.0009159229998658702,
+          "evaluate_s": 6.875598595999918,
+          "measurement_export_s": 0.000361036999947828,
+          "ordered_commit_s": 0.0011587799999688286,
+          "retain_s": 0.0002743469999586523,
+          "evidence_write_s": 0.028604640999901676,
+          "release_s": 9.581899985278142e-05,
+          "portfolio_report_s": 2.830499988704105e-05,
+          "case_prepare_s": 0.00024230700000771321,
+          "open_load_plan_jit_s": 1.7712846940000873,
+          "close_s": 0.001363793000109581,
+          "query_ordered_commit_s": 6.876757375999887,
+          "open_through_close_s": 8.681502950000095,
+          "orchestration_s": 0.0006849260007584235,
+          "case_summary_write_s": 0.0008938490000218735,
+          "complete_case_s": 8.682992730000024
+        },
+        "training": null,
+        "source_production": "immutable deployed feedback variants",
+        "program_weight_steps": 4,
+        "actual_standalone_fills": 27,
+        "fill_scope": "standalone evaluation only; excludes admission and ordered-commit replay accounts",
+        "sampled_device_peak_mib": 216.0,
+        "peak_sampling_seconds": 0.02,
+        "peak_is_lower_bound": true,
+        "accepted": [],
+        "batches": [
+          {
+            "offset": 0,
+            "candidates": 16,
+            "actual_standalone_fills": 27,
+            "hard_g1": 16,
+            "hard_g2": 0,
+            "admission_trials": 69,
+            "accepted": 0
+          }
+        ],
+        "portfolio": {
+          "context": {
+            "id": "583607d557eaa2f0a0fde0a17f047143919bfbcbd53bec3b0a94dbb038b3ab9a",
+            "snapshot": {
+              "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+              "study": {
+                "market": "crypto_spot",
+                "start": "2025-01-01T00:00:00Z",
+                "asof": "2025-01-03T00:00:00Z"
+              },
+              "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+              "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+              "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+              "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+              "data_contract": {
+                "schema": "crypto-bars-v1",
+                "source": "deterministic runtime-generated benchmark",
+                "retrieved_at": "synthetic-runtime",
+                "features": "completed 5-minute OHLCV with exact publication times",
+                "execution_prices": "synthetic factual trade OHLC; no revisions",
+                "publication": "every [open,close) Bar is available exactly at close_ns",
+                "membership": "all synthetic assets eligible throughout the declared source span"
+              },
+              "evaluation": "in_sample_research",
+              "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+              "execution": "next_base_bar_open",
+              "allocation": {
+                "max_gross": 1.0,
+                "allow_short": false
+              },
+              "precision": {
+                "requested": "paired",
+                "effective": "paired",
+                "reason": "fixed_study_policy",
+                "supported": [
+                  "mixed",
+                  "paired"
+                ]
+              }
+            },
+            "portfolio": "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700"
+          },
+          "sources": [
+            {
+              "kind": "equal_weight"
+            }
+          ],
+          "weights": [
+            1.0
+          ],
+          "metrics": {
+            "sharpe": 30.239914682922972,
+            "ann_ret": 8.591313117107092,
+            "maxdd": -0.012832887211752464,
+            "cagr": 5149.367306118031,
+            "total_ret": 0.04794584355102671,
+            "turnover": 0.006706921377499453,
+            "exposure": 0.9997177508799192,
+            "margin_bps": 365.5714191794827,
+            "max_single_weight": 0.12549163622322124,
+            "concentration": 0.2165629331923506,
+            "yearly": [
+              {
+                "year": 2025,
+                "periods": 48,
+                "sharpe": 30.24,
+                "attend": 1.0,
+                "lg": 0.0468
+              }
+            ],
+            "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+            "n_periods": 48,
+            "activity_basis": "executed_fills",
+            "fills": 1497
+          },
+          "baseline": true
+        },
+        "snapshot": {
+          "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+          "study": {
+            "market": "crypto_spot",
+            "start": "2025-01-01T00:00:00Z",
+            "asof": "2025-01-03T00:00:00Z"
+          },
+          "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+          "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+          "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+          "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+          "data_contract": {
+            "schema": "crypto-bars-v1",
+            "source": "deterministic runtime-generated benchmark",
+            "retrieved_at": "synthetic-runtime",
+            "features": "completed 5-minute OHLCV with exact publication times",
+            "execution_prices": "synthetic factual trade OHLC; no revisions",
+            "publication": "every [open,close) Bar is available exactly at close_ns",
+            "membership": "all synthetic assets eligible throughout the declared source span"
+          },
+          "evaluation": "in_sample_research",
+          "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+          "execution": "next_base_bar_open",
+          "allocation": {
+            "max_gross": 1.0,
+            "allow_short": false
+          },
+          "precision": {
+            "requested": "paired",
+            "effective": "paired",
+            "reason": "fixed_study_policy",
+            "supported": [
+              "mixed",
+              "paired"
+            ]
+          }
+        },
+        "parameters": {
+          "market": "crypto_spot",
+          "backend": "cuda",
+          "data_dir": "/content/quant/var/runs/reviewed/after-16/synthetic-source",
+          "start": "2025-01-01T00:00:00Z",
+          "end": "2025-01-03T00:00:00Z",
+          "cost_rate": 0.001,
+          "clock": {
+            "decision": "15min",
+            "statistics": "1h"
+          },
+          "sizing": {
+            "rule": "equal_slots",
+            "scale": 1.0
+          },
+          "account": {
+            "margin": "cash",
+            "leverage": 1.0,
+            "gross_limit": 1.0,
+            "initial_cash": 1.0,
+            "composition": "shared"
+          },
+          "execution": {
+            "fill": "next_open",
+            "model": "orders",
+            "precision": "paired",
+            "bar_path": "open_low_high_close",
+            "participation": 1.0,
+            "order_capacity": 32,
+            "command_capacity": 32,
+            "quantity_step": 0.0,
+            "price_tick": 0.0
+          },
+          "cuda": {
+            "streams": 8,
+            "candidate_batch": 16,
+            "trial_batch": 256,
+            "return_atol": 1e-06,
+            "perpetual_host_cells": 100000,
+            "measurement_cache_mib": 32
+          },
+          "cpu": {
+            "workers": 8,
+            "candidate_batch": 32,
+            "measurement_cache_mib": 32
+          },
+          "admission": {
+            "artifact_dir": "/content/quant/var/runs/reviewed/after-16/orders-16-shared/artifacts",
+            "weight_sum_atol": 1e-07,
+            "metric_atol": 1e-10,
+            "min_sharpe_gain": 0.01,
+            "weight_steps": 4,
+            "recent_halflife_days": 1095,
+            "max_members": 40,
+            "sharpe_scale": 0.1,
+            "growth_scale": 0.02
+          },
+          "operators": {
+            "max_cost": 25
+          },
+          "search": {
+            "violation_scale_wsharpe": 0.081,
+            "violation_scale_sharpe": 0.063,
+            "violation_scale_cagr": 0.079,
+            "violation_scale_growth": 0.024,
+            "mode": "gfn",
+            "seed_portfolio": "equal",
+            "objective": "portfolio",
+            "noise_control": false,
+            "accept": false,
+            "seed": 25,
+            "epochs": 5,
+            "batch_size": 128,
+            "probes": 2,
+            "max_tokens": 13,
+            "max_ts_depth": 2,
+            "train_steps": 4,
+            "learning_rate": 0.002,
+            "opd_strength": 0.1,
+            "rho_max": 0.9,
+            "archive_size": 32,
+            "reweight_iterations": 3,
+            "reweight_batch": 32,
+            "reweight_every": 5
+          },
+          "single": {
+            "calibration_sample": 8192,
+            "anchor_correlation": 0.7,
+            "anchor_sharpe": 1.5,
+            "recent_years": 2,
+            "recent_year_sharpe": 1.0,
+            "weight_sharpe": 0.6,
+            "weight_drawdown": 0.2,
+            "weight_return": 0.2,
+            "sharpe_scale": 2.0,
+            "drawdown_full": 0.6,
+            "return_scale": 1.0,
+            "violation_scale_sharpe": 1.3,
+            "violation_scale_year": 3.35
+          },
+          "monitor": {
+            "frame_seconds": 0.1,
+            "push_seconds": 2.0
+          }
+        },
+        "comparisons": [
+          {
+            "decisions": [],
+            "finite": [],
+            "numeric": {
+              "row.weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.ann_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.total_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.turnover": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.exposure": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.margin_bps": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.max_single_weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.concentration": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].year": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].attend": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].lg": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.n_periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.fills": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.funding": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.trading_fees": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.liquidation_fees": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.isolated_loss_cap": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.liquidations": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.first_liquidation_ns": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.ending_equity": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.max_gross_leverage": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.checks[].delta": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.checks[].required": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.trials": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.wsharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.recent_growth": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.utility": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "portfolio.weights[]": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.ann_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.total_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.turnover": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.exposure": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.margin_bps": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.max_single_weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.concentration": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].year": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].attend": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].lg": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.n_periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.fills": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              }
+            },
+            "numeric_failures": [],
+            "passed": true,
+            "returns": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          }
+        ],
+        "error_summary": {
+          "returns": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "metrics": {
+            "row.weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.ann_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.total_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.turnover": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.exposure": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.margin_bps": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.max_single_weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.concentration": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].year": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].attend": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].lg": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.n_periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.fills": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.funding": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.trading_fees": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.liquidation_fees": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.isolated_loss_cap": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.liquidations": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.first_liquidation_ns": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.ending_equity": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.max_gross_leverage": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.checks[].delta": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.checks[].required": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.trials": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.wsharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.recent_growth": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.utility": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.weights[]": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.ann_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.total_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.turnover": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.exposure": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.margin_bps": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.max_single_weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.concentration": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].year": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].attend": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].lg": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.n_periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.fills": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            }
+          },
+          "decision_mismatches": 0,
+          "finite_mismatches": 0,
+          "numeric_failures": 0
+        },
+        "passed": true,
+        "persisted_artifacts": 0,
+        "persisted_bytes": 454896
+      },
+      "query_commit_speedup": 2.075531795961392,
+      "lifecycle_speedup": 1.8541777335916116
+    },
+    {
+      "name": "orders-16-independent",
+      "candidates": 16,
+      "composition": "independent",
+      "shape": {
+        "assets": 8,
+        "decisions": 192,
+        "events": 576,
+        "statistics": 48
+      },
+      "before": {
+        "model": "orders",
+        "composition": "independent",
+        "precision": "paired",
+        "candidates": 16,
+        "candidate_capacity": 16,
+        "shape": {
+          "assets": 8,
+          "decisions": 192,
+          "events": 576,
+          "statistics": 48
+        },
+        "stages": {
+          "candidate_production_s": 0.0006067919998713478,
+          "register_s": 0.0006842119998964336,
+          "evaluate_s": 8.522984066999925,
+          "measurement_export_s": 0.0003245110001444118,
+          "ordered_commit_s": 8.523534100000006,
+          "retain_s": 0.0003272369999649527,
+          "evidence_write_s": 0.019805037999958586,
+          "release_s": 0.00011682099989229755,
+          "portfolio_report_s": 2.4760000087553635e-05,
+          "case_prepare_s": 0.00011961500013057957,
+          "open_load_plan_jit_s": 1.6048432150000735,
+          "close_s": 0.0016827820002163207,
+          "query_ordered_commit_s": 17.04651816699993,
+          "open_through_close_s": 18.67557475900003,
+          "orchestration_s": 0.0005216089998612006,
+          "case_summary_write_s": 0.00041944399981730385,
+          "complete_case_s": 18.676511634000008
+        },
+        "training": null,
+        "source_production": "immutable deployed feedback variants",
+        "program_weight_steps": 4,
+        "actual_standalone_fills": 27,
+        "fill_scope": "standalone evaluation only; excludes admission and ordered-commit replay accounts",
+        "sampled_device_peak_mib": 222.0,
+        "peak_sampling_seconds": 0.02,
+        "peak_is_lower_bound": true,
+        "accepted": [],
+        "batches": [
+          {
+            "offset": 0,
+            "candidates": 16,
+            "actual_standalone_fills": 27,
+            "hard_g1": 16,
+            "hard_g2": 0,
+            "admission_trials": 69,
+            "accepted": 0
+          }
+        ],
+        "portfolio": {
+          "context": {
+            "id": "2c54b8446df5103d62404002982d4f43565a773b82862f6fbe645bffd78b963b",
+            "snapshot": {
+              "id": "88119ff267dd0d206f7cbcddffcc39ba3556dd9b91a928ead2526dda6b37d399",
+              "study": {
+                "market": "crypto_spot",
+                "start": "2025-01-01T00:00:00Z",
+                "asof": "2025-01-03T00:00:00Z"
+              },
+              "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+              "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+              "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+              "configuration": "690b02c76793e3497a5adc92a6789ca5c23fc7d701b212a85f65d7f6fc237bfb",
+              "data_contract": {
+                "schema": "crypto-bars-v1",
+                "source": "deterministic runtime-generated benchmark",
+                "retrieved_at": "synthetic-runtime",
+                "features": "completed 5-minute OHLCV with exact publication times",
+                "execution_prices": "synthetic factual trade OHLC; no revisions",
+                "publication": "every [open,close) Bar is available exactly at close_ns",
+                "membership": "all synthetic assets eligible throughout the declared source span"
+              },
+              "evaluation": "in_sample_research",
+              "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+              "execution": "next_base_bar_open",
+              "allocation": {
+                "max_gross": 1.0,
+                "allow_short": false
+              },
+              "precision": {
+                "requested": "paired",
+                "effective": "paired",
+                "reason": "fixed_study_policy",
+                "supported": [
+                  "mixed",
+                  "paired"
+                ]
+              }
+            },
+            "portfolio": "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700"
+          },
+          "sources": [
+            {
+              "kind": "equal_weight"
+            }
+          ],
+          "weights": [
+            1.0
+          ],
+          "metrics": {
+            "sharpe": 30.239914682922972,
+            "ann_ret": 8.591313117107092,
+            "maxdd": -0.012832887211752464,
+            "cagr": 5149.367306118031,
+            "total_ret": 0.04794584355102671,
+            "turnover": 0.006706921377499453,
+            "exposure": 0.9997177508799192,
+            "margin_bps": 365.5714191794827,
+            "max_single_weight": 0.12549163622322124,
+            "concentration": 0.2165629331923506,
+            "yearly": [
+              {
+                "year": 2025,
+                "periods": 48,
+                "sharpe": 30.24,
+                "attend": 1.0,
+                "lg": 0.0468
+              }
+            ],
+            "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+            "n_periods": 48,
+            "activity_basis": "executed_fills",
+            "fills": 1497
+          },
+          "baseline": true
+        },
+        "snapshot": {
+          "id": "88119ff267dd0d206f7cbcddffcc39ba3556dd9b91a928ead2526dda6b37d399",
+          "study": {
+            "market": "crypto_spot",
+            "start": "2025-01-01T00:00:00Z",
+            "asof": "2025-01-03T00:00:00Z"
+          },
+          "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+          "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+          "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+          "configuration": "690b02c76793e3497a5adc92a6789ca5c23fc7d701b212a85f65d7f6fc237bfb",
+          "data_contract": {
+            "schema": "crypto-bars-v1",
+            "source": "deterministic runtime-generated benchmark",
+            "retrieved_at": "synthetic-runtime",
+            "features": "completed 5-minute OHLCV with exact publication times",
+            "execution_prices": "synthetic factual trade OHLC; no revisions",
+            "publication": "every [open,close) Bar is available exactly at close_ns",
+            "membership": "all synthetic assets eligible throughout the declared source span"
+          },
+          "evaluation": "in_sample_research",
+          "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+          "execution": "next_base_bar_open",
+          "allocation": {
+            "max_gross": 1.0,
+            "allow_short": false
+          },
+          "precision": {
+            "requested": "paired",
+            "effective": "paired",
+            "reason": "fixed_study_policy",
+            "supported": [
+              "mixed",
+              "paired"
+            ]
+          }
+        },
+        "parameters": {
+          "market": "crypto_spot",
+          "backend": "cuda",
+          "data_dir": "/content/quant/var/runs/reviewed/before-16/synthetic-source",
+          "start": "2025-01-01T00:00:00Z",
+          "end": "2025-01-03T00:00:00Z",
+          "cost_rate": 0.001,
+          "clock": {
+            "decision": "15min",
+            "statistics": "1h"
+          },
+          "sizing": {
+            "rule": "equal_slots",
+            "scale": 1.0
+          },
+          "account": {
+            "margin": "cash",
+            "leverage": 1.0,
+            "gross_limit": 1.0,
+            "initial_cash": 1.0,
+            "composition": "independent"
+          },
+          "execution": {
+            "fill": "next_open",
+            "model": "orders",
+            "precision": "paired",
+            "bar_path": "open_low_high_close",
+            "participation": 1.0,
+            "order_capacity": 32,
+            "command_capacity": 32,
+            "quantity_step": 0.0,
+            "price_tick": 0.0
+          },
+          "cuda": {
+            "streams": 8,
+            "candidate_batch": 16,
+            "trial_batch": 256,
+            "return_atol": 1e-06,
+            "perpetual_host_cells": 100000,
+            "measurement_cache_mib": 32
+          },
+          "cpu": {
+            "workers": 8,
+            "candidate_batch": 32,
+            "measurement_cache_mib": 32
+          },
+          "admission": {
+            "artifact_dir": "/content/quant/var/runs/reviewed/before-16/orders-16-independent/artifacts",
+            "weight_sum_atol": 1e-07,
+            "metric_atol": 1e-10,
+            "min_sharpe_gain": 0.01,
+            "weight_steps": 4,
+            "recent_halflife_days": 1095,
+            "max_members": 40,
+            "sharpe_scale": 0.1,
+            "growth_scale": 0.02
+          },
+          "operators": {
+            "max_cost": 25
+          },
+          "search": {
+            "violation_scale_wsharpe": 0.081,
+            "violation_scale_sharpe": 0.063,
+            "violation_scale_cagr": 0.079,
+            "violation_scale_growth": 0.024,
+            "mode": "gfn",
+            "seed_portfolio": "equal",
+            "objective": "portfolio",
+            "noise_control": false,
+            "accept": false,
+            "seed": 25,
+            "epochs": 5,
+            "batch_size": 128,
+            "probes": 2,
+            "max_tokens": 13,
+            "max_ts_depth": 2,
+            "train_steps": 4,
+            "learning_rate": 0.002,
+            "opd_strength": 0.1,
+            "rho_max": 0.9,
+            "archive_size": 32,
+            "reweight_iterations": 3,
+            "reweight_batch": 32,
+            "reweight_every": 5
+          },
+          "single": {
+            "calibration_sample": 8192,
+            "anchor_correlation": 0.7,
+            "anchor_sharpe": 1.5,
+            "recent_years": 2,
+            "recent_year_sharpe": 1.0,
+            "weight_sharpe": 0.6,
+            "weight_drawdown": 0.2,
+            "weight_return": 0.2,
+            "sharpe_scale": 2.0,
+            "drawdown_full": 0.6,
+            "return_scale": 1.0,
+            "violation_scale_sharpe": 1.3,
+            "violation_scale_year": 3.35
+          },
+          "monitor": {
+            "frame_seconds": 0.1,
+            "push_seconds": 2.0
+          }
+        },
+        "comparisons": [],
+        "error_summary": null,
+        "passed": true,
+        "persisted_artifacts": 0,
+        "persisted_bytes": 452688
+      },
+      "after": {
+        "model": "orders",
+        "composition": "independent",
+        "precision": "paired",
+        "candidates": 16,
+        "candidate_capacity": 16,
+        "shape": {
+          "assets": 8,
+          "decisions": 192,
+          "events": 576,
+          "statistics": 48
+        },
+        "stages": {
+          "candidate_production_s": 0.0005801629999950819,
+          "register_s": 0.0006870719998914865,
+          "evaluate_s": 8.59824200800017,
+          "measurement_export_s": 0.0003929110000626679,
+          "ordered_commit_s": 0.0012507449998793163,
+          "retain_s": 0.00029672400000890775,
+          "evidence_write_s": 0.025521796000020913,
+          "release_s": 9.528400005365256e-05,
+          "portfolio_report_s": 2.7204999923924333e-05,
+          "case_prepare_s": 0.00012681599991992698,
+          "open_load_plan_jit_s": 1.6031653349998578,
+          "close_s": 0.0017694919999939884,
+          "query_ordered_commit_s": 8.59949275300005,
+          "open_through_close_s": 10.232685656000058,
+          "orchestration_s": 0.0005301050002799457,
+          "case_summary_write_s": 0.0009045140000125684,
+          "complete_case_s": 10.234187267999914
+        },
+        "training": null,
+        "source_production": "immutable deployed feedback variants",
+        "program_weight_steps": 4,
+        "actual_standalone_fills": 27,
+        "fill_scope": "standalone evaluation only; excludes admission and ordered-commit replay accounts",
+        "sampled_device_peak_mib": 222.0,
+        "peak_sampling_seconds": 0.02,
+        "peak_is_lower_bound": true,
+        "accepted": [],
+        "batches": [
+          {
+            "offset": 0,
+            "candidates": 16,
+            "actual_standalone_fills": 27,
+            "hard_g1": 16,
+            "hard_g2": 0,
+            "admission_trials": 69,
+            "accepted": 0
+          }
+        ],
+        "portfolio": {
+          "context": {
+            "id": "2c54b8446df5103d62404002982d4f43565a773b82862f6fbe645bffd78b963b",
+            "snapshot": {
+              "id": "88119ff267dd0d206f7cbcddffcc39ba3556dd9b91a928ead2526dda6b37d399",
+              "study": {
+                "market": "crypto_spot",
+                "start": "2025-01-01T00:00:00Z",
+                "asof": "2025-01-03T00:00:00Z"
+              },
+              "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+              "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+              "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+              "configuration": "690b02c76793e3497a5adc92a6789ca5c23fc7d701b212a85f65d7f6fc237bfb",
+              "data_contract": {
+                "schema": "crypto-bars-v1",
+                "source": "deterministic runtime-generated benchmark",
+                "retrieved_at": "synthetic-runtime",
+                "features": "completed 5-minute OHLCV with exact publication times",
+                "execution_prices": "synthetic factual trade OHLC; no revisions",
+                "publication": "every [open,close) Bar is available exactly at close_ns",
+                "membership": "all synthetic assets eligible throughout the declared source span"
+              },
+              "evaluation": "in_sample_research",
+              "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+              "execution": "next_base_bar_open",
+              "allocation": {
+                "max_gross": 1.0,
+                "allow_short": false
+              },
+              "precision": {
+                "requested": "paired",
+                "effective": "paired",
+                "reason": "fixed_study_policy",
+                "supported": [
+                  "mixed",
+                  "paired"
+                ]
+              }
+            },
+            "portfolio": "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700"
+          },
+          "sources": [
+            {
+              "kind": "equal_weight"
+            }
+          ],
+          "weights": [
+            1.0
+          ],
+          "metrics": {
+            "sharpe": 30.239914682922972,
+            "ann_ret": 8.591313117107092,
+            "maxdd": -0.012832887211752464,
+            "cagr": 5149.367306118031,
+            "total_ret": 0.04794584355102671,
+            "turnover": 0.006706921377499453,
+            "exposure": 0.9997177508799192,
+            "margin_bps": 365.5714191794827,
+            "max_single_weight": 0.12549163622322124,
+            "concentration": 0.2165629331923506,
+            "yearly": [
+              {
+                "year": 2025,
+                "periods": 48,
+                "sharpe": 30.24,
+                "attend": 1.0,
+                "lg": 0.0468
+              }
+            ],
+            "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+            "n_periods": 48,
+            "activity_basis": "executed_fills",
+            "fills": 1497
+          },
+          "baseline": true
+        },
+        "snapshot": {
+          "id": "88119ff267dd0d206f7cbcddffcc39ba3556dd9b91a928ead2526dda6b37d399",
+          "study": {
+            "market": "crypto_spot",
+            "start": "2025-01-01T00:00:00Z",
+            "asof": "2025-01-03T00:00:00Z"
+          },
+          "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+          "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+          "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+          "configuration": "690b02c76793e3497a5adc92a6789ca5c23fc7d701b212a85f65d7f6fc237bfb",
+          "data_contract": {
+            "schema": "crypto-bars-v1",
+            "source": "deterministic runtime-generated benchmark",
+            "retrieved_at": "synthetic-runtime",
+            "features": "completed 5-minute OHLCV with exact publication times",
+            "execution_prices": "synthetic factual trade OHLC; no revisions",
+            "publication": "every [open,close) Bar is available exactly at close_ns",
+            "membership": "all synthetic assets eligible throughout the declared source span"
+          },
+          "evaluation": "in_sample_research",
+          "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+          "execution": "next_base_bar_open",
+          "allocation": {
+            "max_gross": 1.0,
+            "allow_short": false
+          },
+          "precision": {
+            "requested": "paired",
+            "effective": "paired",
+            "reason": "fixed_study_policy",
+            "supported": [
+              "mixed",
+              "paired"
+            ]
+          }
+        },
+        "parameters": {
+          "market": "crypto_spot",
+          "backend": "cuda",
+          "data_dir": "/content/quant/var/runs/reviewed/after-16/synthetic-source",
+          "start": "2025-01-01T00:00:00Z",
+          "end": "2025-01-03T00:00:00Z",
+          "cost_rate": 0.001,
+          "clock": {
+            "decision": "15min",
+            "statistics": "1h"
+          },
+          "sizing": {
+            "rule": "equal_slots",
+            "scale": 1.0
+          },
+          "account": {
+            "margin": "cash",
+            "leverage": 1.0,
+            "gross_limit": 1.0,
+            "initial_cash": 1.0,
+            "composition": "independent"
+          },
+          "execution": {
+            "fill": "next_open",
+            "model": "orders",
+            "precision": "paired",
+            "bar_path": "open_low_high_close",
+            "participation": 1.0,
+            "order_capacity": 32,
+            "command_capacity": 32,
+            "quantity_step": 0.0,
+            "price_tick": 0.0
+          },
+          "cuda": {
+            "streams": 8,
+            "candidate_batch": 16,
+            "trial_batch": 256,
+            "return_atol": 1e-06,
+            "perpetual_host_cells": 100000,
+            "measurement_cache_mib": 32
+          },
+          "cpu": {
+            "workers": 8,
+            "candidate_batch": 32,
+            "measurement_cache_mib": 32
+          },
+          "admission": {
+            "artifact_dir": "/content/quant/var/runs/reviewed/after-16/orders-16-independent/artifacts",
+            "weight_sum_atol": 1e-07,
+            "metric_atol": 1e-10,
+            "min_sharpe_gain": 0.01,
+            "weight_steps": 4,
+            "recent_halflife_days": 1095,
+            "max_members": 40,
+            "sharpe_scale": 0.1,
+            "growth_scale": 0.02
+          },
+          "operators": {
+            "max_cost": 25
+          },
+          "search": {
+            "violation_scale_wsharpe": 0.081,
+            "violation_scale_sharpe": 0.063,
+            "violation_scale_cagr": 0.079,
+            "violation_scale_growth": 0.024,
+            "mode": "gfn",
+            "seed_portfolio": "equal",
+            "objective": "portfolio",
+            "noise_control": false,
+            "accept": false,
+            "seed": 25,
+            "epochs": 5,
+            "batch_size": 128,
+            "probes": 2,
+            "max_tokens": 13,
+            "max_ts_depth": 2,
+            "train_steps": 4,
+            "learning_rate": 0.002,
+            "opd_strength": 0.1,
+            "rho_max": 0.9,
+            "archive_size": 32,
+            "reweight_iterations": 3,
+            "reweight_batch": 32,
+            "reweight_every": 5
+          },
+          "single": {
+            "calibration_sample": 8192,
+            "anchor_correlation": 0.7,
+            "anchor_sharpe": 1.5,
+            "recent_years": 2,
+            "recent_year_sharpe": 1.0,
+            "weight_sharpe": 0.6,
+            "weight_drawdown": 0.2,
+            "weight_return": 0.2,
+            "sharpe_scale": 2.0,
+            "drawdown_full": 0.6,
+            "return_scale": 1.0,
+            "violation_scale_sharpe": 1.3,
+            "violation_scale_year": 3.35
+          },
+          "monitor": {
+            "frame_seconds": 0.1,
+            "push_seconds": 2.0
+          }
+        },
+        "comparisons": [
+          {
+            "decisions": [],
+            "finite": [],
+            "numeric": {
+              "row.weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.ann_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.total_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.turnover": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.exposure": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.margin_bps": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.max_single_weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.concentration": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].year": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].attend": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].lg": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.n_periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.fills": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.funding": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.trading_fees": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.liquidation_fees": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.isolated_loss_cap": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.liquidations": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.first_liquidation_ns": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.ending_equity": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.max_gross_leverage": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.checks[].delta": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.checks[].required": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.trials": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.wsharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.recent_growth": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.utility": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "portfolio.weights[]": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.ann_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.total_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.turnover": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.exposure": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.margin_bps": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.max_single_weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.concentration": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].year": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].attend": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].lg": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.n_periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.fills": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              }
+            },
+            "numeric_failures": [],
+            "passed": true,
+            "returns": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          }
+        ],
+        "error_summary": {
+          "returns": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "metrics": {
+            "row.weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.ann_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.total_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.turnover": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.exposure": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.margin_bps": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.max_single_weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.concentration": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].year": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].attend": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].lg": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.n_periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.fills": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.funding": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.trading_fees": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.liquidation_fees": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.isolated_loss_cap": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.liquidations": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.first_liquidation_ns": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.ending_equity": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.max_gross_leverage": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.checks[].delta": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.checks[].required": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.trials": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.wsharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.recent_growth": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.utility": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.weights[]": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.ann_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.total_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.turnover": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.exposure": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.margin_bps": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.max_single_weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.concentration": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].year": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].attend": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].lg": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.n_periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.fills": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            }
+          },
+          "decision_mismatches": 0,
+          "finite_mismatches": 0,
+          "numeric_failures": 0
+        },
+        "passed": true,
+        "persisted_artifacts": 0,
+        "persisted_bytes": 452688
+      },
+      "query_commit_speedup": 1.9822701939080096,
+      "lifecycle_speedup": 1.8250902438353884
+    },
+    {
+      "name": "orders-256-shared",
+      "candidates": 256,
+      "composition": "shared",
+      "shape": {
+        "assets": 8,
+        "decisions": 192,
+        "events": 576,
+        "statistics": 48
+      },
+      "before": {
+        "model": "orders",
+        "composition": "shared",
+        "precision": "paired",
+        "candidates": 256,
+        "candidate_capacity": 256,
+        "shape": {
+          "assets": 8,
+          "decisions": 192,
+          "events": 576,
+          "statistics": 48
+        },
+        "stages": {
+          "candidate_production_s": 0.0008162340000126278,
+          "register_s": 0.0035293100002036226,
+          "evaluate_s": 21.188290552999888,
+          "measurement_export_s": 0.0011414699999932054,
+          "ordered_commit_s": 21.112569599999915,
+          "retain_s": 0.0003464250000888569,
+          "evidence_write_s": 0.39627344099994843,
+          "release_s": 0.0005592120000983414,
+          "portfolio_report_s": 3.1452000030185445e-05,
+          "case_prepare_s": 0.00023078000003806665,
+          "open_load_plan_jit_s": 1.789782644999832,
+          "close_s": 0.0022240960001909116,
+          "query_ordered_commit_s": 42.3008601529998,
+          "open_through_close_s": 44.49649837300012,
+          "orchestration_s": 0.0007031549998828268,
+          "case_summary_write_s": 0.0004519359999903827,
+          "complete_case_s": 44.497598528000026
+        },
+        "training": null,
+        "source_production": "immutable deployed feedback variants",
+        "program_weight_steps": 4,
+        "actual_standalone_fills": 346,
+        "fill_scope": "standalone evaluation only; excludes admission and ordered-commit replay accounts",
+        "sampled_device_peak_mib": 250.0,
+        "peak_sampling_seconds": 0.02,
+        "peak_is_lower_bound": true,
+        "accepted": [],
+        "batches": [
+          {
+            "offset": 0,
+            "candidates": 256,
+            "actual_standalone_fills": 346,
+            "hard_g1": 256,
+            "hard_g2": 0,
+            "admission_trials": 1152,
+            "accepted": 0
+          }
+        ],
+        "portfolio": {
+          "context": {
+            "id": "583607d557eaa2f0a0fde0a17f047143919bfbcbd53bec3b0a94dbb038b3ab9a",
+            "snapshot": {
+              "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+              "study": {
+                "market": "crypto_spot",
+                "start": "2025-01-01T00:00:00Z",
+                "asof": "2025-01-03T00:00:00Z"
+              },
+              "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+              "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+              "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+              "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+              "data_contract": {
+                "schema": "crypto-bars-v1",
+                "source": "deterministic runtime-generated benchmark",
+                "retrieved_at": "synthetic-runtime",
+                "features": "completed 5-minute OHLCV with exact publication times",
+                "execution_prices": "synthetic factual trade OHLC; no revisions",
+                "publication": "every [open,close) Bar is available exactly at close_ns",
+                "membership": "all synthetic assets eligible throughout the declared source span"
+              },
+              "evaluation": "in_sample_research",
+              "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+              "execution": "next_base_bar_open",
+              "allocation": {
+                "max_gross": 1.0,
+                "allow_short": false
+              },
+              "precision": {
+                "requested": "paired",
+                "effective": "paired",
+                "reason": "fixed_study_policy",
+                "supported": [
+                  "mixed",
+                  "paired"
+                ]
+              }
+            },
+            "portfolio": "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700"
+          },
+          "sources": [
+            {
+              "kind": "equal_weight"
+            }
+          ],
+          "weights": [
+            1.0
+          ],
+          "metrics": {
+            "sharpe": 30.239914682922972,
+            "ann_ret": 8.591313117107092,
+            "maxdd": -0.012832887211752464,
+            "cagr": 5149.367306118031,
+            "total_ret": 0.04794584355102671,
+            "turnover": 0.006706921377499453,
+            "exposure": 0.9997177508799192,
+            "margin_bps": 365.5714191794827,
+            "max_single_weight": 0.12549163622322124,
+            "concentration": 0.2165629331923506,
+            "yearly": [
+              {
+                "year": 2025,
+                "periods": 48,
+                "sharpe": 30.24,
+                "attend": 1.0,
+                "lg": 0.0468
+              }
+            ],
+            "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+            "n_periods": 48,
+            "activity_basis": "executed_fills",
+            "fills": 1497
+          },
+          "baseline": true
+        },
+        "snapshot": {
+          "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+          "study": {
+            "market": "crypto_spot",
+            "start": "2025-01-01T00:00:00Z",
+            "asof": "2025-01-03T00:00:00Z"
+          },
+          "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+          "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+          "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+          "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+          "data_contract": {
+            "schema": "crypto-bars-v1",
+            "source": "deterministic runtime-generated benchmark",
+            "retrieved_at": "synthetic-runtime",
+            "features": "completed 5-minute OHLCV with exact publication times",
+            "execution_prices": "synthetic factual trade OHLC; no revisions",
+            "publication": "every [open,close) Bar is available exactly at close_ns",
+            "membership": "all synthetic assets eligible throughout the declared source span"
+          },
+          "evaluation": "in_sample_research",
+          "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+          "execution": "next_base_bar_open",
+          "allocation": {
+            "max_gross": 1.0,
+            "allow_short": false
+          },
+          "precision": {
+            "requested": "paired",
+            "effective": "paired",
+            "reason": "fixed_study_policy",
+            "supported": [
+              "mixed",
+              "paired"
+            ]
+          }
+        },
+        "parameters": {
+          "market": "crypto_spot",
+          "backend": "cuda",
+          "data_dir": "/content/quant/var/runs/reviewed/before-256/synthetic-source",
+          "start": "2025-01-01T00:00:00Z",
+          "end": "2025-01-03T00:00:00Z",
+          "cost_rate": 0.001,
+          "clock": {
+            "decision": "15min",
+            "statistics": "1h"
+          },
+          "sizing": {
+            "rule": "equal_slots",
+            "scale": 1.0
+          },
+          "account": {
+            "margin": "cash",
+            "leverage": 1.0,
+            "gross_limit": 1.0,
+            "initial_cash": 1.0,
+            "composition": "shared"
+          },
+          "execution": {
+            "fill": "next_open",
+            "model": "orders",
+            "precision": "paired",
+            "bar_path": "open_low_high_close",
+            "participation": 1.0,
+            "order_capacity": 32,
+            "command_capacity": 32,
+            "quantity_step": 0.0,
+            "price_tick": 0.0
+          },
+          "cuda": {
+            "streams": 8,
+            "candidate_batch": 256,
+            "trial_batch": 256,
+            "return_atol": 1e-06,
+            "perpetual_host_cells": 100000,
+            "measurement_cache_mib": 32
+          },
+          "cpu": {
+            "workers": 8,
+            "candidate_batch": 32,
+            "measurement_cache_mib": 32
+          },
+          "admission": {
+            "artifact_dir": "/content/quant/var/runs/reviewed/before-256/orders-256-shared/artifacts",
+            "weight_sum_atol": 1e-07,
+            "metric_atol": 1e-10,
+            "min_sharpe_gain": 0.01,
+            "weight_steps": 4,
+            "recent_halflife_days": 1095,
+            "max_members": 40,
+            "sharpe_scale": 0.1,
+            "growth_scale": 0.02
+          },
+          "operators": {
+            "max_cost": 25
+          },
+          "search": {
+            "violation_scale_wsharpe": 0.081,
+            "violation_scale_sharpe": 0.063,
+            "violation_scale_cagr": 0.079,
+            "violation_scale_growth": 0.024,
+            "mode": "gfn",
+            "seed_portfolio": "equal",
+            "objective": "portfolio",
+            "noise_control": false,
+            "accept": false,
+            "seed": 25,
+            "epochs": 5,
+            "batch_size": 128,
+            "probes": 2,
+            "max_tokens": 13,
+            "max_ts_depth": 2,
+            "train_steps": 4,
+            "learning_rate": 0.002,
+            "opd_strength": 0.1,
+            "rho_max": 0.9,
+            "archive_size": 32,
+            "reweight_iterations": 3,
+            "reweight_batch": 32,
+            "reweight_every": 5
+          },
+          "single": {
+            "calibration_sample": 8192,
+            "anchor_correlation": 0.7,
+            "anchor_sharpe": 1.5,
+            "recent_years": 2,
+            "recent_year_sharpe": 1.0,
+            "weight_sharpe": 0.6,
+            "weight_drawdown": 0.2,
+            "weight_return": 0.2,
+            "sharpe_scale": 2.0,
+            "drawdown_full": 0.6,
+            "return_scale": 1.0,
+            "violation_scale_sharpe": 1.3,
+            "violation_scale_year": 3.35
+          },
+          "monitor": {
+            "frame_seconds": 0.1,
+            "push_seconds": 2.0
+          }
+        },
+        "comparisons": [],
+        "error_summary": null,
+        "passed": true,
+        "persisted_artifacts": 0,
+        "persisted_bytes": 6919277
+      },
+      "after": {
+        "model": "orders",
+        "composition": "shared",
+        "precision": "paired",
+        "candidates": 256,
+        "candidate_capacity": 256,
+        "shape": {
+          "assets": 8,
+          "decisions": 192,
+          "events": 576,
+          "statistics": 48
+        },
+        "stages": {
+          "candidate_production_s": 0.0008186299999124458,
+          "register_s": 0.003453395999940767,
+          "evaluate_s": 20.83605237500001,
+          "measurement_export_s": 0.0011793529999977181,
+          "ordered_commit_s": 0.015236163000054148,
+          "retain_s": 0.0003222059999643534,
+          "evidence_write_s": 0.4770663649999278,
+          "release_s": 0.0004752209999878687,
+          "portfolio_report_s": 2.9101000109221786e-05,
+          "case_prepare_s": 0.0002461890001086431,
+          "open_load_plan_jit_s": 1.7777412650000315,
+          "close_s": 0.002435851999962324,
+          "query_ordered_commit_s": 20.851288538000063,
+          "open_through_close_s": 23.115805143999978,
+          "orchestration_s": 0.0007490279999728955,
+          "case_summary_write_s": 0.0010247500001696608,
+          "complete_case_s": 23.117528167000046
+        },
+        "training": null,
+        "source_production": "immutable deployed feedback variants",
+        "program_weight_steps": 4,
+        "actual_standalone_fills": 346,
+        "fill_scope": "standalone evaluation only; excludes admission and ordered-commit replay accounts",
+        "sampled_device_peak_mib": 250.0,
+        "peak_sampling_seconds": 0.02,
+        "peak_is_lower_bound": true,
+        "accepted": [],
+        "batches": [
+          {
+            "offset": 0,
+            "candidates": 256,
+            "actual_standalone_fills": 346,
+            "hard_g1": 256,
+            "hard_g2": 0,
+            "admission_trials": 1152,
+            "accepted": 0
+          }
+        ],
+        "portfolio": {
+          "context": {
+            "id": "583607d557eaa2f0a0fde0a17f047143919bfbcbd53bec3b0a94dbb038b3ab9a",
+            "snapshot": {
+              "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+              "study": {
+                "market": "crypto_spot",
+                "start": "2025-01-01T00:00:00Z",
+                "asof": "2025-01-03T00:00:00Z"
+              },
+              "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+              "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+              "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+              "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+              "data_contract": {
+                "schema": "crypto-bars-v1",
+                "source": "deterministic runtime-generated benchmark",
+                "retrieved_at": "synthetic-runtime",
+                "features": "completed 5-minute OHLCV with exact publication times",
+                "execution_prices": "synthetic factual trade OHLC; no revisions",
+                "publication": "every [open,close) Bar is available exactly at close_ns",
+                "membership": "all synthetic assets eligible throughout the declared source span"
+              },
+              "evaluation": "in_sample_research",
+              "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+              "execution": "next_base_bar_open",
+              "allocation": {
+                "max_gross": 1.0,
+                "allow_short": false
+              },
+              "precision": {
+                "requested": "paired",
+                "effective": "paired",
+                "reason": "fixed_study_policy",
+                "supported": [
+                  "mixed",
+                  "paired"
+                ]
+              }
+            },
+            "portfolio": "ddac2bec584dc2f7f731877807e28f7162d5ac9f5fd48b25eb078e0efce61700"
+          },
+          "sources": [
+            {
+              "kind": "equal_weight"
+            }
+          ],
+          "weights": [
+            1.0
+          ],
+          "metrics": {
+            "sharpe": 30.239914682922972,
+            "ann_ret": 8.591313117107092,
+            "maxdd": -0.012832887211752464,
+            "cagr": 5149.367306118031,
+            "total_ret": 0.04794584355102671,
+            "turnover": 0.006706921377499453,
+            "exposure": 0.9997177508799192,
+            "margin_bps": 365.5714191794827,
+            "max_single_weight": 0.12549163622322124,
+            "concentration": 0.2165629331923506,
+            "yearly": [
+              {
+                "year": 2025,
+                "periods": 48,
+                "sharpe": 30.24,
+                "attend": 1.0,
+                "lg": 0.0468
+              }
+            ],
+            "span": "2025-01-01T00:00:00.000000000..2025-01-02T23:00:00.000000000",
+            "n_periods": 48,
+            "activity_basis": "executed_fills",
+            "fills": 1497
+          },
+          "baseline": true
+        },
+        "snapshot": {
+          "id": "2ecc867f7bbd5dacc4908db197ce257098a45a5cac32a0b7698dab210d7ecfb8",
+          "study": {
+            "market": "crypto_spot",
+            "start": "2025-01-01T00:00:00Z",
+            "asof": "2025-01-03T00:00:00Z"
+          },
+          "data_snapshot": "de72b88917c5542d4d4bd6d8e7b6160362e84ef7363008d4f4768a3eeefa475b",
+          "execution_snapshot": "3e12c57f3c965085a3b11f400f2f6430bfde0f8f8bf11950e3bd5ca804eb6aac",
+          "implementation": "56b0c5a4392798f75e29450790311972948f01ba9ae795d267ad518f9fbd13a3",
+          "configuration": "ded99c738bf1393200896413536caf6da2342c053f6c9da06934662cebd4a633",
+          "data_contract": {
+            "schema": "crypto-bars-v1",
+            "source": "deterministic runtime-generated benchmark",
+            "retrieved_at": "synthetic-runtime",
+            "features": "completed 5-minute OHLCV with exact publication times",
+            "execution_prices": "synthetic factual trade OHLC; no revisions",
+            "publication": "every [open,close) Bar is available exactly at close_ns",
+            "membership": "all synthetic assets eligible throughout the declared source span"
+          },
+          "evaluation": "in_sample_research",
+          "decision": "15min complete bars [open,close); vintages available_ns<=decision close; late bars and revisions never rewrite earlier decisions",
+          "execution": "next_base_bar_open",
+          "allocation": {
+            "max_gross": 1.0,
+            "allow_short": false
+          },
+          "precision": {
+            "requested": "paired",
+            "effective": "paired",
+            "reason": "fixed_study_policy",
+            "supported": [
+              "mixed",
+              "paired"
+            ]
+          }
+        },
+        "parameters": {
+          "market": "crypto_spot",
+          "backend": "cuda",
+          "data_dir": "/content/quant/var/runs/reviewed/after-256/synthetic-source",
+          "start": "2025-01-01T00:00:00Z",
+          "end": "2025-01-03T00:00:00Z",
+          "cost_rate": 0.001,
+          "clock": {
+            "decision": "15min",
+            "statistics": "1h"
+          },
+          "sizing": {
+            "rule": "equal_slots",
+            "scale": 1.0
+          },
+          "account": {
+            "margin": "cash",
+            "leverage": 1.0,
+            "gross_limit": 1.0,
+            "initial_cash": 1.0,
+            "composition": "shared"
+          },
+          "execution": {
+            "fill": "next_open",
+            "model": "orders",
+            "precision": "paired",
+            "bar_path": "open_low_high_close",
+            "participation": 1.0,
+            "order_capacity": 32,
+            "command_capacity": 32,
+            "quantity_step": 0.0,
+            "price_tick": 0.0
+          },
+          "cuda": {
+            "streams": 8,
+            "candidate_batch": 256,
+            "trial_batch": 256,
+            "return_atol": 1e-06,
+            "perpetual_host_cells": 100000,
+            "measurement_cache_mib": 32
+          },
+          "cpu": {
+            "workers": 8,
+            "candidate_batch": 32,
+            "measurement_cache_mib": 32
+          },
+          "admission": {
+            "artifact_dir": "/content/quant/var/runs/reviewed/after-256/orders-256-shared/artifacts",
+            "weight_sum_atol": 1e-07,
+            "metric_atol": 1e-10,
+            "min_sharpe_gain": 0.01,
+            "weight_steps": 4,
+            "recent_halflife_days": 1095,
+            "max_members": 40,
+            "sharpe_scale": 0.1,
+            "growth_scale": 0.02
+          },
+          "operators": {
+            "max_cost": 25
+          },
+          "search": {
+            "violation_scale_wsharpe": 0.081,
+            "violation_scale_sharpe": 0.063,
+            "violation_scale_cagr": 0.079,
+            "violation_scale_growth": 0.024,
+            "mode": "gfn",
+            "seed_portfolio": "equal",
+            "objective": "portfolio",
+            "noise_control": false,
+            "accept": false,
+            "seed": 25,
+            "epochs": 5,
+            "batch_size": 128,
+            "probes": 2,
+            "max_tokens": 13,
+            "max_ts_depth": 2,
+            "train_steps": 4,
+            "learning_rate": 0.002,
+            "opd_strength": 0.1,
+            "rho_max": 0.9,
+            "archive_size": 32,
+            "reweight_iterations": 3,
+            "reweight_batch": 32,
+            "reweight_every": 5
+          },
+          "single": {
+            "calibration_sample": 8192,
+            "anchor_correlation": 0.7,
+            "anchor_sharpe": 1.5,
+            "recent_years": 2,
+            "recent_year_sharpe": 1.0,
+            "weight_sharpe": 0.6,
+            "weight_drawdown": 0.2,
+            "weight_return": 0.2,
+            "sharpe_scale": 2.0,
+            "drawdown_full": 0.6,
+            "return_scale": 1.0,
+            "violation_scale_sharpe": 1.3,
+            "violation_scale_year": 3.35
+          },
+          "monitor": {
+            "frame_seconds": 0.1,
+            "push_seconds": 2.0
+          }
+        },
+        "comparisons": [
+          {
+            "decisions": [],
+            "finite": [],
+            "numeric": {
+              "row.weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.ann_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.total_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.turnover": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.exposure": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.margin_bps": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.max_single_weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.concentration": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].year": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].attend": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.yearly[].lg": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.n_periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.metrics.fills": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.funding": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.trading_fees": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.liquidation_fees": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.isolated_loss_cap": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.liquidations": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.first_liquidation_ns": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.ending_equity": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "row.risk.max_gross_leverage": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.checks[].delta": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.checks[].required": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.trials": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.wsharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.recent_growth": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "proposal.utility": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "query/timed-feedback:0",
+                "failures": 0
+              },
+              "portfolio.weights[]": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.ann_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.maxdd": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.cagr": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.total_ret": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.turnover": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.exposure": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.margin_bps": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.max_single_weight": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.concentration": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].year": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].sharpe": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].attend": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.yearly[].lg": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.n_periods": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              },
+              "portfolio.metrics.fills": {
+                "max_abs": 0.0,
+                "max_scaled": 0.0,
+                "worst_id": "final_portfolio",
+                "failures": 0
+              }
+            },
+            "numeric_failures": [],
+            "passed": true,
+            "returns": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "nan_mismatch": 0,
+              "inf_mismatch": 0
+            }
+          }
+        ],
+        "error_summary": {
+          "returns": {
+            "max_abs": 0.0,
+            "max_scaled": 0.0,
+            "nan_mismatch": 0,
+            "inf_mismatch": 0
+          },
+          "metrics": {
+            "row.weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.ann_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.total_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.turnover": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.exposure": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.margin_bps": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.max_single_weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.concentration": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].year": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].attend": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.yearly[].lg": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.n_periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.metrics.fills": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.funding": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.trading_fees": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.liquidation_fees": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.isolated_loss_cap": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.liquidations": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.first_liquidation_ns": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.ending_equity": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "row.risk.max_gross_leverage": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.checks[].delta": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.checks[].required": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.trials": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.wsharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.recent_growth": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "proposal.utility": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.weights[]": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.ann_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.maxdd": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.cagr": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.total_ret": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.turnover": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.exposure": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.margin_bps": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.max_single_weight": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.concentration": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].year": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].sharpe": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].attend": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.yearly[].lg": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.n_periods": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            },
+            "portfolio.metrics.fills": {
+              "max_abs": 0.0,
+              "max_scaled": 0.0,
+              "failures": 0
+            }
+          },
+          "decision_mismatches": 0,
+          "finite_mismatches": 0,
+          "numeric_failures": 0
+        },
+        "passed": true,
+        "persisted_artifacts": 0,
+        "persisted_bytes": 6919277
+      },
+      "query_commit_speedup": 2.0286928587607114,
+      "lifecycle_speedup": 1.9249382877130625
+    }
+  ],
+  "conditions_per_case": 1,
+  "baseline_revision": "d96fe84ddc59a0e1afea52a1cec82f7f07a5405d",
+  "source_sha256": "25aa6d4d2c614f0acb504eab22f2f9b09e7d859793d5c366d3480541d5b0254c",
+  "precision": "paired",
+  "market": "crypto_spot",
+  "program_weight_steps": 4,
+  "excluded_comparison_metadata": [
+    "query.rows[].decision.source.scope",
+    "commit.rows[].decision.source.scope"
+  ],
+  "excluded_metadata_reason": "Each fresh registration receives a random lease token; all source semantics are still compared",
+  "limitation": "Stress candidates all rejected; acceptance, changed-portfolio replay and atomic publication are covered by regression, not a speed claim",
+  "memory": "One host report batch only; no retained returns, positions or live accounts",
+  "cpu_performance_baseline": null,
+  "runtime_status": "Stopped after verified evidence download"
+}

@@ -8,19 +8,21 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
                             const T* o_raw, const T* pcl, const T* off, const T* cff,
                             const T* buy, const T* sell, const T* carry,
                             const unsigned char* live, const unsigned char* block, int flags,
-                            int Tn, int S, long long i0, double ppy, double* rr_out, double* stats) {
+                            const long long* decision, const long long* measurement,
+                            int Dn, int En, int Vn, int S, long long i0, double ppy, double* rr_out, double* stats) {
     const int tid = threadIdx.x, b = blockIdx.x;
-    const T* Wb = W + (MIX ? owners[b] : b) * (long long)Tn * S;
+    const T* Wb = W + (MIX ? owners[b] : b) * (long long)Dn * S;
     const C alpha = MIX ? weights[b] : C(0);
-    const C* eown = MIX ? eown_all + owners[b] * (long long)Tn : nullptr;
-    double* rr = rr_out + (long long)b * Tn;
+    const C* eown = MIX ? eown_all + owners[b] * (long long)Dn : nullptr;
+    double* rr = rr_out + (long long)b * Vn;
     A shares[GEN_SLOTS], last_open[GEN_SLOTS];
     #pragma unroll
     for (int j=0; j<GEN_SLOTS; ++j) { shares[j]=A(0); last_open[j]=A(0); }
     A eq_after=A(0), previous=A(1);
-    for (int day=0; day<Tn; ++day) {
+    for (int day=0; day<En; ++day) {
         const long long row=(long long)day*S;
-        const C den=blend_den<MIX>(eref,eown,day>0?day-1:0,alpha);
+        const long long d=decision[day];
+        const C den=d>=0?blend_den<MIX>(eref,eown,d,alpha):C(1);
         A w[GEN_SLOTS], o[GEN_SLOTS], c[GEN_SLOTS];
         bool ul[GEN_SLOTS], tr[GEN_SLOTS];
         unsigned char bk[GEN_SLOTS];
@@ -28,7 +30,7 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
         #pragma unroll
         for (int j=0; j<GEN_SLOTS; ++j) {
             const int a=tid+128*j;
-            w[j]=(day>0 && a<S) ? A(blend_weight<T,MIX>(Wb,ref,row-S+a,alpha,den)) : A(0);
+            w[j]=(d>=0 && a<S) ? A(blend_weight<T,MIX>(Wb,ref,d*S+a,alpha,den)) : A(0);
             if (!isfinite(w[j])) w[j]=A(0);
             s1+=fabs(w[j]);
             o[j]=a<S ? A(off[row+a]) : A(0);
@@ -43,7 +45,7 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
         #pragma unroll
         for(int j=0;j<GEN_SLOTS;++j) {
             const int a=tid+128*j;
-            if(day>0 && a<S) {
+            if(d>=0 && a<S) {
                 A v=(w[j]/s1)*A(o_raw[row+a])/A(pcl[row+a]);
                 w[j]=isfinite(v)?v:A(0);
             }
@@ -86,7 +88,7 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
             if(!__syncthreads_or(changed)) break;
         }
         A fee=A(0);
-        if(operable<A(PRICE_EPS)) eq_after=eq_before;
+        if(d<0 || operable<A(PRICE_EPS)) eq_after=eq_before;
         else {
             #pragma unroll
             for(int j=0;j<GEN_SLOTS;++j) {
@@ -109,12 +111,14 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
         }
         if(flags&4) eq_after=eq_after-block_sum(financing);
         const A tonight=eq_after+block_sum(intraday);
-        A v=tonight/previous-A(1);
-        if(!isfinite(v)) v=A(0);
-        if(LimitedRange<A>::value && (!isfinite(tonight)||!isfinite(eq_after)||
-                                     !isfinite(previous)||fabs(previous)<A(1e-30))) v=A(__int_as_float(0x7fffffff));
-        if(tid==0) rr[day]=(double)v;
-        previous=tonight;
+        if(day+1==En || measurement[day+1]!=measurement[day]) {
+            A v=tonight/previous-A(1);
+            if(!isfinite(v)) v=A(0);
+            if(LimitedRange<A>::value && (!isfinite(tonight)||!isfinite(eq_after)||
+                                         !isfinite(previous)||fabs(previous)<A(1e-30))) v=A(__int_as_float(0x7fffffff));
+            if(tid==0) rr[measurement[day]]=(double)v;
+            previous=tonight;
+        }
         #pragma unroll
         for(int j=0;j<GEN_SLOTS;++j) { if(!ul[j]) shares[j]=A(0); last_open[j]=o[j]; }
         rebase(eq_after,previous,shares);
@@ -127,8 +131,8 @@ __device__ void general_core(const T* W, const T* ref, const int* owners, const 
 extern "C" __global__ void NAME(const T* W,const T* ref,const int* owners,const C* weights, \
  const C* eref,const C* eown,const T* o,const T* p,const T* off,const T* c,const T* buy, \
  const T* sell,const T* carry,const unsigned char* live,const unsigned char* block,int flags, \
- int Tn,int S,long long start,double ppy,double* rr,double* st) { \
- general_core<T,A,C,MIX>(W,ref,owners,weights,eref,eown,o,p,off,c,buy,sell,carry,live,block,flags,Tn,S,start,ppy,rr,st); }
+ const long long* decision,const long long* measurement,int Dn,int En,int Vn,int S,long long start,double ppy,double* rr,double* st) { \
+ general_core<T,A,C,MIX>(W,ref,owners,weights,eref,eown,o,p,off,c,buy,sell,carry,live,block,flags,decision,measurement,Dn,En,Vn,S,start,ppy,rr,st); }
 GENERAL(k_general_mixed,float,float,double,false)
 GENERAL(k_general_paired,FloatPair,FloatPair,FloatPair,false)
 GENERAL(k_general_blend_mixed,float,float,double,true)

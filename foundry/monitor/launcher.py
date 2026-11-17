@@ -1,6 +1,6 @@
 """python -m foundry monitor [--source STATUS] [--attach] [--once]: the dashboard in its own named terminal window.
 
-The renderer (watch.py) reads tmp/monitor/source.json, which names the status file to show, so a second call only
+The renderer (watch.py) reads var/monitor/source.json, which names the status file to show, so a second call only
 retargets the running window; owner.json is the renderer's heartbeat. `python -m foundry preview` exports the
 same frames to HTML.
 """
@@ -10,20 +10,17 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Mapping
+from pathlib import Path
 
-from foundry.config import ROOT
-from foundry.adapters.files import publish
+from foundry.config import ROOT, MonitorConfig
 from .cells import BASE
 from .watch import watch
 
-STATE = ROOT/'tmp'/'monitor'
+STATE = ROOT/'var'/'monitor'
 SOURCE = STATE/'source.json'
 OWNER = STATE/'owner.json'
 LIVE = STATE/'live.json'                     # the search run mirrors its status here
-
-
-def write(path, value):
-    publish(path, json.dumps(value, ensure_ascii=False).encode('utf-8'))
 
 
 def alive(owner):
@@ -32,9 +29,13 @@ def alive(owner):
     return owner.get('pid',0)>0 and 0<=time.time()-owner.get('heartbeat',0)<3
 
 
-def main(source, attach, once, config):
+def main(source: Path | None, attach: bool, once: bool, config: MonitorConfig,
+         *, publish: Callable[[Path, bytes], None]) -> None:
     """source: status file to show from now on (None keeps the current one, the live search run at first);
     attach: render in this terminal; once: print one complete frame and exit."""
+    def write(path: Path, value: Mapping[str, str | int | float]) -> None:
+        publish(path, json.dumps(value, ensure_ascii=False).encode('utf-8'))
+
     STATE.mkdir(parents=True,exist_ok=True)
     if source or not SOURCE.exists():
         write(SOURCE,{'status_path':str((source or LIVE).resolve())})

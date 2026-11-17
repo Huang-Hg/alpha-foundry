@@ -1,17 +1,21 @@
-"""The portfolio's additive book and its reference metrics."""
+"""Immutable portfolio books and moments assembled from evaluated tensors."""
 from dataclasses import dataclass
-from foundry.contracts import ReturnMeasure
-from foundry.portfolio.library import SEED
-from foundry.portfolio.allocation import cap_book
+from types import ModuleType
+
+from foundry.config import PortfolioConfig
+from foundry.portfolio.library import Member
+from foundry.types import Backend, FloatArray, Metrics, ReturnMeasure, Source, StatsRow
 
 
-@dataclass
+@dataclass(frozen=True)
 class Reference:
-    U: object
-    W: object
-    rr: object
-    p: object
-    metrics: object
+    """Resident (T,S) books and (T,) returns share the supplied backend's device."""
+
+    U: FloatArray | None
+    W: FloatArray | None
+    rr: FloatArray
+    p: FloatArray
+    metrics: Metrics
     sharpe: float
     cagr: float
     maxdd: float
@@ -19,25 +23,22 @@ class Reference:
     recent_growth: float
     n: int
     seed: bool
-    keys: frozenset
-    xp: object
-    cfg: object
+    keys: tuple[Source, ...]
+    xp: ModuleType
+    cfg: PortfolioConfig
     measure: ReturnMeasure
-    version: str = ''
+    version: str
+    mean_exposure: float
 
     @staticmethod
-    def build(engine, members, null_shift=False):
-        with engine.resources.scope():
-            xp, cfg = engine.xp, engine.portfolio_cfg
-            seed = not members
-            members = members or (SEED,)
-            books = [book for book, _ in engine.members([m.source for m in members], null_shift)]
-            U = xp.sum(xp.stack(books) * xp.asarray([m.weight for m in members])[:, None, None], axis=0)
-            U[:engine.start] = 0
-            st = engine.metrics([cap_book(U, engine.allocation, xp)])[0]
-            p = engine.recency_weights
-            moments = engine.backend.measure(st.returns, p, engine.ppy)
-            ws, growth = engine.to_host(xp.stack((moments.weighted_sharpe, moments.recent_growth))).tolist()
-            return Reference(U, st.book, st.returns, p, st.metrics, st.metrics.sharpe, st.metrics.cagr,
-                             st.metrics.maxdd, ws, growth, len(books), seed,
-                             frozenset(m.source for m in members), xp, cfg, engine.backend.measure)
+    def build(U: FloatArray | None, measured: StatsRow, p: FloatArray, ppy: float,
+              members: tuple[Member, ...], seed: bool, backend: Backend,
+              cfg: PortfolioConfig, version: str, *, mean_exposure: float) -> 'Reference':
+        """Derive reference moments without owning evaluation or mutable state."""
+        xp = backend.xp
+        moments = backend.measure(measured.returns, p, ppy)
+        ws, growth = backend.to_host(xp.stack((moments.weighted_sharpe, moments.recent_growth))).tolist()
+        return Reference(U, measured.book, measured.returns, p, measured.metrics,
+                         measured.metrics.sharpe, measured.metrics.cagr, measured.metrics.maxdd,
+                         ws, growth, len(members), seed, tuple(m.source for m in members),
+                         xp, cfg, backend.measure, version, mean_exposure)

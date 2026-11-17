@@ -1,13 +1,27 @@
 """Native CPU reference for the explicit isolated linear-perpetual model."""
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 import numpy as np
+from foundry.numeric.allocation import cap_book
+from foundry.numeric.parallel import HostWorkers
 
 from foundry.backtest import _bt
-from foundry.backtest.perpetual import (ARRAY_FIELDS, PerpetualSpec, book_fingerprints, host_statistics,
-                                      concatenate_results, simulation_result)
-from foundry.contracts import Allocation
-from foundry.portfolio.allocation import cap_book
+from foundry.backtest.perpetual import (
+    book_fingerprints,
+    concatenate_results,
+    host_statistics,
+    simulation_result,
+)
+from foundry.types import (
+    PERPETUAL_ARRAY_FIELDS,
+    Allocation,
+    FloatArray,
+    IntArray,
+    PerpetualSpec,
+    SimulationResult,
+)
 
 
 @dataclass(frozen=True)
@@ -17,34 +31,45 @@ class HostSpec:
 
 
 class Executor:
-    parallel_trials = False
+    parallel_trials = True
     precisions = frozenset({'native'})
 
-    def device_spec(self, host):
+    def __init__(self, workers: HostWorkers | None = None):
+        self.map = map if workers is None else workers.map
+
+    def device_spec(self, host: PerpetualSpec) -> HostSpec:
         return HostSpec(host)
 
-    def simulate(self, W, spec, start, ppy, precision):
+    def simulate(self, W: FloatArray, spec: HostSpec, start: int, ppy: float, precision: str) -> SimulationResult:
         assert precision == 'native'
-        arrays = _bt.perpetual(np.ascontiguousarray(W, dtype=np.float64),
-                               tuple(getattr(spec.host, name) for name in ARRAY_FIELDS),
-                               spec.host.leverage)
+        s = spec.host
+        inputs = (s.schedule.event_ns, s.schedule.measurement_index, s.schedule.decision_index,
+                  *(getattr(s, name) for name in PERPETUAL_ARRAY_FIELDS))
+        def account(w: FloatArray) -> tuple[FloatArray, ...]:
+            return _bt.perpetual(np.ascontiguousarray(w[None], dtype=np.float64), inputs,
+                                 s.leverage, s.schedule.measurement_count)
+        arrays = tuple(np.concatenate(parts) for parts in zip(*self.map(account, W)))
         return simulation_result(arrays, host_statistics(arrays[0], start, ppy))
 
-    def blend(self, W, U, owners, weights, spec, start, ppy, precision, batch):
-        results = []
-        allocation = Allocation(spec.host.leverage, True)
-        for lo in range(0, len(weights), batch):
-            books = U[None] + weights[lo:lo + batch, None, None] * W[owners[lo:lo + batch]]
+    def blend(self, W: FloatArray, U: FloatArray, owners: IntArray, weights: FloatArray,
+              spec: HostSpec, start: int, ppy: float, precision: str, batch: int) -> SimulationResult:
+        allocation = Allocation(spec.host.gross_limit, True)
+        s = spec.host
+        inputs = (s.schedule.event_ns, s.schedule.measurement_index, s.schedule.decision_index,
+                  *(getattr(s, name) for name in PERPETUAL_ARRAY_FIELDS))
+        def trial(i: int) -> SimulationResult:
+            books = U[None] + weights[i] * W[owners[i]][None]
             books = cap_book(books, allocation, np)
-            results.append(self.simulate(books, spec, start, ppy, precision))
-        return concatenate_results(results, start, np)
+            arrays = _bt.perpetual(books, inputs, s.leverage, s.schedule.measurement_count)
+            return simulation_result(arrays, host_statistics(arrays[0], start, ppy))
+        return concatenate_results(list(self.map(trial, range(len(weights)))), start, np)
 
-    def fingerprints(self, W):
+    def fingerprints(self, W: FloatArray) -> list[int]:
         return book_fingerprints(W, np, np.asarray)
 
-    def close(self):
+    def close(self) -> None:
         pass
 
 
-def prepare():
-    return Executor()
+def prepare(workers: HostWorkers | None = None) -> Executor:
+    return Executor(workers)

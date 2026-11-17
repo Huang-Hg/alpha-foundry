@@ -1,0 +1,17 @@
+name: Feature request
+description: Propose an API, market, data adapter or performance improvement.
+title: '[Feature] '
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What are you trying to accomplish?
+    validations:
+      required: true
+  - type: textarea
+    id: interface
+    attributes:
+      label: Proposed behavior or API
+      description: Include a small caller-facing example when useful.
+    validations:
+      required: true

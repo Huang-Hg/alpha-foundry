@@ -1,8 +1,7 @@
-/* foundry/backtest/src/kernel.hpp — market-agnostic daily execution kernel (CPU reference).
+/* Scheduled cash execution kernel (CPU reference).
  *
- * Daily execution semantics:
- * yesterday's weights -> rebalance to target notional at today's open (cost per traded share) -> mark to market at
- * close. Three generalisations let the same recurrence cover multiple markets:
+ * Each event marks the actual account, applies a scheduled target if present,
+ * and values the close. Three optional rule panels cover multiple markets:
  *   cost_sell  separate per-share cost for sells (share reductions, e.g. sell-only stamp duty); nullptr = symmetric
  *              with cost_buy.
  *   block      direction freeze bits: bit 0 forbids increasing shares today, bit 1 forbids decreasing shares today
@@ -24,20 +23,23 @@
 
 namespace bt {
 
-/* All panels are (T,S) C-contiguous, row = trading day:
- *   w           target weights; row t executes at day t+1 open (non-finite treated as 0)
+/* Target w is (D,S); market panels are (E,S), all C-contiguous:
+ *   w           target equity fractions (non-finite scores have already been mapped)
  *   open_raw    raw open price (NaN = missing); prev_close = prior close; their ratio adjusts weights to the open
  *   open_ff0    open price forward-filled with remaining NaNs set to 0, close_ff0 likewise — pricing basis for shares,
  *               mark-to-market, and costs
  *   cost_buy    per-share cost (in price units); cost_sell likewise for share reductions only, may be nullptr
  *   live        non-zero = tradable today; 0 = untradable, notional locked, shares zeroed after tonight's close
  *   block       direction freeze bits, may be nullptr; carry = daily short financing rate, may be nullptr
- * rr_out: (T,) daily returns, caller-allocated. */
+ *   decision    (E,) target row, or -1 to retain actual quantities without rebalancing
+ *   measurement (E,) contiguous measurement bucket, in [0,V)
+ * rr_out: (V,) returns between measurement closes, caller-allocated. */
 void simulate(const double* w,
               const double* open_raw, const double* prev_close,
               const double* open_ff0, const double* close_ff0,
               const double* cost_buy, const double* cost_sell,
               const uint8_t* live, const uint8_t* block, const double* carry,
-              int64_t T, int64_t S, double* rr_out);
+              const int64_t* decision, const int64_t* measurement,
+              int64_t E, int64_t S, double* rr_out);
 
 }  // namespace bt
