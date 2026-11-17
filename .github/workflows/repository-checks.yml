@@ -1,0 +1,51 @@
+name: Repository checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Static checks only: tracked-file policy, Python syntax and the native build
+# documented in README.md. Numerical tests and benchmarks run on authorized
+# cloud compute and are never stored in this repository.
+jobs:
+  required:
+    name: Repository checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Enforce the tracked-file policy
+        run: |
+          forbidden='^(tests?|scripts|validation|tmp|var|logs|output|docs|production|venues|mcp-ssh|\.claude|\.codex)/'
+          forbidden+='|^(AGENTS\.md|CLAUDE\.md|build\.sh|\.mcp\.json)$'
+          forbidden+='|(^|/)(\.env(\..*)?|hosts\.json|id_(rsa|ed25519)[^/]*)$'
+          forbidden+='|\.(pem|key|p12|pfx|log|tar|tar\.gz|tgz|zip|7z|pkl|pickle|npz|npy|pyc|pyd|so|dll)$'
+          bad=$(git ls-files | grep -E "$forbidden" || true)
+          raw=$(git ls-files guides/benchmarks | grep -vE '\.(md|csv)$|/summary\.json$' || true)
+          if [ -n "$bad$raw" ]; then
+            printf 'Files that must stay local:\n%s\n%s\n' "$bad" "$raw"
+            exit 1
+          fi
+      - name: Compile Python sources
+        run: python -m compileall -q foundry
+      - name: Build native extensions with the README commands
+        run: |
+          python -m pip install numpy
+          sed -n '/<!-- build:start -->/,/<!-- build:end -->/p' README.md | sed -n '/^```bash$/,/^```$/p' | sed '1d;$d' > /tmp/build.sh
+          test -s /tmp/build.sh
+          bash -euo pipefail /tmp/build.sh

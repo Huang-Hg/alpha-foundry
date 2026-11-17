@@ -1,0 +1,56 @@
+name: Benchmark evidence
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-evidence-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Published benchmarks are compact: Markdown reports, CSV tables and summary.json.
+# Raw evidence (pytest XML/HTML, source archives, run logs) stays in local var/runs/.
+# This job verifies the published files only; it executes no numerical code.
+jobs:
+  report:
+    name: Benchmark evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Verify selected data snapshots
+        run: sha256sum --strict -c data/SHA256SUMS
+      - name: Verify published benchmark summaries
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path('guides/benchmarks')
+          allowed = {'.md', '.csv'}
+          raw = [p for p in root.rglob('*') if p.is_file() and p.suffix not in allowed and p.name != 'summary.json']
+          if raw:
+              raise SystemExit('Raw benchmark evidence must stay local: ' + ', '.join(map(str, raw)))
+          failed = []
+          for summary in sorted(root.rglob('summary.json')):
+              record = json.loads(summary.read_text(encoding='utf-8'))
+              if record.get('passed') is False:
+                  failed.append(str(summary))
+          if failed:
+              raise SystemExit('Published benchmark summaries report failures: ' + ', '.join(failed))
+          reports = sorted(p for p in root.rglob('*.md'))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('Published benchmark reports (no numerical code executed):\n\n')
+              output.writelines(f'- `{path}`\n' for path in reports)
