@@ -1,0 +1,918 @@
+{
+  "schema": "foundry-benchmark-v1",
+  "passed": true,
+  "validation": {
+    "tests": 7720,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 1
+  },
+  "operator_count": 66,
+  "report_renderer_sha256": "3b5defc384ad3252a5b6672c4bbf159e2a351ec3d71c775cd357c5ffe9d9e9da",
+  "incomplete": [],
+  "missing_flows": [],
+  "comparisons": {
+    "1": {
+      "decisions": [],
+      "finite": [],
+      "numeric": {
+        "row.weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.sharpe": {
+          "max_abs": 5.314015893986834e-11,
+          "max_scaled": 2.6827636899562766e-11,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.ann_ret": {
+          "max_abs": 2.366232210171404e-13,
+          "max_scaled": 2.366232210171404e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.maxdd": {
+          "max_abs": 3.26405569239796e-14,
+          "max_scaled": 3.26405569239796e-14,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.cagr": {
+          "max_abs": 2.396832732287635e-13,
+          "max_scaled": 2.396832732287635e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.total_ret": {
+          "max_abs": 2.327027459614328e-13,
+          "max_scaled": 2.327027459614328e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.turnover": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.exposure": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.margin_bps": {
+          "max_abs": 9.01021479648989e-10,
+          "max_scaled": 2.841142415769413e-11,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.max_single_weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.concentration": {
+          "max_abs": 9.278300350246127e-12,
+          "max_scaled": 9.278300350246127e-12,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].year": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].sharpe": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].attend": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].lg": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.n_days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.checks[].delta": {
+          "max_abs": 9.838796444228137e-13,
+          "max_scaled": 9.838796444228137e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.checks[].required": {
+          "max_abs": 1.0012604352398202e-13,
+          "max_scaled": 1.0012604352398202e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.trials": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.wsharpe": {
+          "max_abs": 1.6331380692236053e-12,
+          "max_scaled": 9.022881832059353e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.sharpe": {
+          "max_abs": 1.6722179196904108e-12,
+          "max_scaled": 9.504657579530993e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.cagr": {
+          "max_abs": 2.6212365611399946e-13,
+          "max_scaled": 2.6212365611399946e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.recent_growth": {
+          "max_abs": 2.1160850849355484e-13,
+          "max_scaled": 2.1160850849355484e-13,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.maxdd": {
+          "max_abs": 1.4432899320127035e-14,
+          "max_scaled": 1.4432899320127035e-14,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.utility": {
+          "max_abs": 7.692624315325247e-12,
+          "max_scaled": 7.692624315325247e-12,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "portfolio.weights[]": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.sharpe": {
+          "max_abs": 1.7894574710908273e-12,
+          "max_scaled": 1.0171031129124985e-12,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.ann_ret": {
+          "max_abs": 2.281785871360853e-13,
+          "max_scaled": 2.281785871360853e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.maxdd": {
+          "max_abs": 1.4432899320127035e-14,
+          "max_scaled": 1.4432899320127035e-14,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.cagr": {
+          "max_abs": 2.8343993818680246e-13,
+          "max_scaled": 2.8343993818680246e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.total_ret": {
+          "max_abs": 2.69340105774063e-13,
+          "max_scaled": 2.69340105774063e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.turnover": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.exposure": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.margin_bps": {
+          "max_abs": 9.135874279309064e-10,
+          "max_scaled": 1.0402037746742309e-12,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.max_single_weight": {
+          "max_abs": 4.336808689942018e-19,
+          "max_scaled": 4.336808689942018e-19,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.concentration": {
+          "max_abs": 2.4474866577861576e-13,
+          "max_scaled": 2.4474866577861576e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].year": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].sharpe": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].attend": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].lg": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.n_days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        }
+      },
+      "numeric_failures": [],
+      "passed": true
+    },
+    "64": {
+      "decisions": [],
+      "finite": [],
+      "numeric": {
+        "row.weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.sharpe": {
+          "max_abs": 1.3750187655148238e-09,
+          "max_scaled": 1.3750187655148238e-09,
+          "worst_id": "query/3d5e7c67aab09372f7d2857e62f25c6f484ea712bce4b4095adc8e1c3cacbf23",
+          "failures": 0
+        },
+        "row.metrics.ann_ret": {
+          "max_abs": 3.3054115000652473e-13,
+          "max_scaled": 3.3054115000652473e-13,
+          "worst_id": "query/c2e9c1b000f7705a5c22d01d1b41758b5bc5aa32509054187155c746e45a54a2",
+          "failures": 0
+        },
+        "row.metrics.maxdd": {
+          "max_abs": 1.1002310174035301e-13,
+          "max_scaled": 1.1002310174035301e-13,
+          "worst_id": "query/a45acc5f9465c33784a1e6adab4c77a88974a18c30a4db8755a42b4e22814422",
+          "failures": 0
+        },
+        "row.metrics.cagr": {
+          "max_abs": 4.1014414087214845e-13,
+          "max_scaled": 4.1014414087214845e-13,
+          "worst_id": "query/c2e9c1b000f7705a5c22d01d1b41758b5bc5aa32509054187155c746e45a54a2",
+          "failures": 0
+        },
+        "row.metrics.total_ret": {
+          "max_abs": 4.3942627314663696e-13,
+          "max_scaled": 4.3942627314663696e-13,
+          "worst_id": "query/c2e9c1b000f7705a5c22d01d1b41758b5bc5aa32509054187155c746e45a54a2",
+          "failures": 0
+        },
+        "row.metrics.turnover": {
+          "max_abs": 5.551115123125783e-17,
+          "max_scaled": 5.551115123125783e-17,
+          "worst_id": "query/2764cff774417ece8822adf4743149dcfe2b386afcac0589466fc3ff71c35122",
+          "failures": 0
+        },
+        "row.metrics.exposure": {
+          "max_abs": 1.1102230246251565e-16,
+          "max_scaled": 1.1102230246251565e-16,
+          "worst_id": "query/b5a6aaabaa6a66515f8d8c3032f90b7d665e5cbae48ed3438e736da2ae8a7c5c",
+          "failures": 0
+        },
+        "row.metrics.margin_bps": {
+          "max_abs": 3.554799477001325e-08,
+          "max_scaled": 1.4557351617426106e-09,
+          "worst_id": "query/86de14ca12074f8534d66e819e85574c229d737b00fa1be4ed8da1b90164d73f",
+          "failures": 0
+        },
+        "row.metrics.max_single_weight": {
+          "max_abs": 1.5178830414797062e-18,
+          "max_scaled": 1.5178830414797062e-18,
+          "worst_id": "query/8930560fc023d6438cb4c5f9716a0a0f0dfe98f2b60bc4cae7dbd9bcda82b1f9",
+          "failures": 0
+        },
+        "row.metrics.concentration": {
+          "max_abs": 1.502948654419356e-09,
+          "max_scaled": 1.3947454926860345e-09,
+          "worst_id": "query/86de14ca12074f8534d66e819e85574c229d737b00fa1be4ed8da1b90164d73f",
+          "failures": 0
+        },
+        "row.metrics.yearly[].year": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].sharpe": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].attend": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].lg": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.n_days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.checks[].delta": {
+          "max_abs": 1.5569767697343195e-12,
+          "max_scaled": 1.5569767697343195e-12,
+          "worst_id": "commit/9f5df52be6db6d09bf7bc7fc05d3bac445b25ef8cafccc24ea1ff6dc1434fae6",
+          "failures": 0
+        },
+        "proposal.checks[].required": {
+          "max_abs": 3.8283100105805656e-13,
+          "max_scaled": 3.8283100105805656e-13,
+          "worst_id": "commit/d89a4b76f0fcafde59912c9b96591f1aaf0519eec91aa92db7c6ae9daee3bbeb",
+          "failures": 0
+        },
+        "proposal.weight": {
+          "max_abs": 3.142900870112264e-12,
+          "max_scaled": 3.142900870112264e-12,
+          "worst_id": "query/79516655e049d06efcff9cb02a8fc2100d3ee7b9aca1ce2b1d05a3ebf4f59006",
+          "failures": 0
+        },
+        "proposal.trials": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.wsharpe": {
+          "max_abs": 3.269384762916161e-12,
+          "max_scaled": 1.7486255094087245e-12,
+          "worst_id": "query/9231cd9b79a2a03e63b57f623096e78e69f64194bc573f530132b26b72ef3f25",
+          "failures": 0
+        },
+        "proposal.sharpe": {
+          "max_abs": 3.320010932839068e-12,
+          "max_scaled": 1.8276196696201426e-12,
+          "worst_id": "query/9231cd9b79a2a03e63b57f623096e78e69f64194bc573f530132b26b72ef3f25",
+          "failures": 0
+        },
+        "proposal.cagr": {
+          "max_abs": 5.384026557919697e-13,
+          "max_scaled": 5.384026557919697e-13,
+          "worst_id": "commit/9231cd9b79a2a03e63b57f623096e78e69f64194bc573f530132b26b72ef3f25",
+          "failures": 0
+        },
+        "proposal.recent_growth": {
+          "max_abs": 4.180544799226027e-13,
+          "max_scaled": 4.180544799226027e-13,
+          "worst_id": "commit/9231cd9b79a2a03e63b57f623096e78e69f64194bc573f530132b26b72ef3f25",
+          "failures": 0
+        },
+        "proposal.maxdd": {
+          "max_abs": 7.982503547054876e-14,
+          "max_scaled": 7.982503547054876e-14,
+          "worst_id": "commit/d89a4b76f0fcafde59912c9b96591f1aaf0519eec91aa92db7c6ae9daee3bbeb",
+          "failures": 0
+        },
+        "proposal.utility": {
+          "max_abs": 1.2765510870593744e-11,
+          "max_scaled": 1.2765510870593744e-11,
+          "worst_id": "query/79516655e049d06efcff9cb02a8fc2100d3ee7b9aca1ce2b1d05a3ebf4f59006",
+          "failures": 0
+        },
+        "portfolio.weights[]": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.sharpe": {
+          "max_abs": 2.0188295479783847e-12,
+          "max_scaled": 9.693552844716598e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.ann_ret": {
+          "max_abs": 2.6229018956769323e-13,
+          "max_scaled": 2.6229018956769323e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.maxdd": {
+          "max_abs": 2.4313884239290928e-14,
+          "max_scaled": 2.4313884239290928e-14,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.cagr": {
+          "max_abs": 3.4772185131259903e-13,
+          "max_scaled": 3.4772185131259903e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.total_ret": {
+          "max_abs": 3.4727776210274897e-13,
+          "max_scaled": 3.4727776210274897e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.turnover": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.exposure": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.margin_bps": {
+          "max_abs": 1.7831780496635474e-10,
+          "max_scaled": 9.67417507071458e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.max_single_weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.concentration": {
+          "max_abs": 2.6684210396865637e-13,
+          "max_scaled": 2.6684210396865637e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].year": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].sharpe": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].attend": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].lg": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.n_days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        }
+      },
+      "numeric_failures": [],
+      "passed": true
+    },
+    "4096": {
+      "decisions": [],
+      "finite": [],
+      "numeric": {
+        "row.weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.sharpe": {
+          "max_abs": 1.8358354725300785e-07,
+          "max_scaled": 1.6980965113594242e-07,
+          "worst_id": "query/5b581ef0928fb14179a49ecceed38f563ce0c0c6b5a2653e214017e435a6966a",
+          "failures": 0
+        },
+        "row.metrics.ann_ret": {
+          "max_abs": 4.739273209986017e-13,
+          "max_scaled": 4.739273209986017e-13,
+          "worst_id": "query/2c8267a6437e0085ad04f2e084007c041f76c1af4a9d26b6fecdfc730801c1c6",
+          "failures": 0
+        },
+        "row.metrics.maxdd": {
+          "max_abs": 2.183808689437683e-13,
+          "max_scaled": 2.183808689437683e-13,
+          "worst_id": "query/c38644a2bf2bef7c8d951a33cb98402f4051b6324bc5a37a3bca45d764244756",
+          "failures": 0
+        },
+        "row.metrics.cagr": {
+          "max_abs": 4.810561671231284e-13,
+          "max_scaled": 4.810561671231284e-13,
+          "worst_id": "query/e3804ba0299c84676461a384403256c7fe19e5a52d047e8f4639221268ee6aee",
+          "failures": 0
+        },
+        "row.metrics.total_ret": {
+          "max_abs": 4.938272013532696e-13,
+          "max_scaled": 4.938272013532696e-13,
+          "worst_id": "query/e3804ba0299c84676461a384403256c7fe19e5a52d047e8f4639221268ee6aee",
+          "failures": 0
+        },
+        "row.metrics.turnover": {
+          "max_abs": 2.4702462297909733e-15,
+          "max_scaled": 2.4702462297909733e-15,
+          "worst_id": "query/6f113abfc52b44b7cfa0c170271423025d20c44bed395d2dbc237fabb0b70dd5",
+          "failures": 0
+        },
+        "row.metrics.exposure": {
+          "max_abs": 2.4424906541753444e-15,
+          "max_scaled": 2.4424906541753444e-15,
+          "worst_id": "query/7c2d661508711827b59a73eb3e05041a3d00140f3cee53775e703437f79aef3f",
+          "failures": 0
+        },
+        "row.metrics.margin_bps": {
+          "max_abs": 1.0243014457955724e-05,
+          "max_scaled": 3.998879931632615e-07,
+          "worst_id": "query/4495ad4534f2449b770090979d2c9ce43d0501fe83076eb9d3639abc714f267c",
+          "failures": 0
+        },
+        "row.metrics.max_single_weight": {
+          "max_abs": 4.87890977618477e-18,
+          "max_scaled": 4.87890977618477e-18,
+          "worst_id": "query/0e0e0ef77547c32bdd463c59748037c8a7fec31ac47f8b96bd2ff57c2c11df02",
+          "failures": 0
+        },
+        "row.metrics.concentration": {
+          "max_abs": 2.3212252703075364e-05,
+          "max_scaled": 7.409835669773838e-07,
+          "worst_id": "query/344e4f020372ab7b5e99e4f32d9fba8fa6b3db8fc05fd7feec7803ccd27cd2b5",
+          "failures": 0
+        },
+        "row.metrics.yearly[].year": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].sharpe": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].attend": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.yearly[].lg": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "row.metrics.n_days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.checks[].delta": {
+          "max_abs": 3.963274153306884e-12,
+          "max_scaled": 3.963274153306884e-12,
+          "worst_id": "query/3c460990f2b6b527b1e201592043c8edab511398d0e72e663f87fea749616676",
+          "failures": 0
+        },
+        "proposal.checks[].required": {
+          "max_abs": 4.164135687336661e-13,
+          "max_scaled": 4.164135687336661e-13,
+          "worst_id": "commit/d0c9cd8a1780fdb6e41c75548d2be9d2b7c438562f0eb1bd9bd8a8348cfc9f23",
+          "failures": 0
+        },
+        "proposal.weight": {
+          "max_abs": 1.0985625603643356e-10,
+          "max_scaled": 1.0985625603643356e-10,
+          "worst_id": "commit/0d4da287451eb3f655e9b130506775b1ecee6f741bcf26c8d169902c7ad58aa5",
+          "failures": 0
+        },
+        "proposal.trials": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "query/c59c55293aea67305b52b873d67307e42f856debfc37fe88c2f8f019458bae86",
+          "failures": 0
+        },
+        "proposal.wsharpe": {
+          "max_abs": 4.022338018216942e-12,
+          "max_scaled": 2.256596450551346e-12,
+          "worst_id": "query/f0ff6c07b89dcad2a7077bb6d5c8ac800eabeacc30e196adcb7038a8a05d9a2e",
+          "failures": 0
+        },
+        "proposal.sharpe": {
+          "max_abs": 4.048317236993171e-12,
+          "max_scaled": 2.3367167876358167e-12,
+          "worst_id": "query/f0ff6c07b89dcad2a7077bb6d5c8ac800eabeacc30e196adcb7038a8a05d9a2e",
+          "failures": 0
+        },
+        "proposal.cagr": {
+          "max_abs": 6.119826867490019e-13,
+          "max_scaled": 6.119826867490019e-13,
+          "worst_id": "query/f0ff6c07b89dcad2a7077bb6d5c8ac800eabeacc30e196adcb7038a8a05d9a2e",
+          "failures": 0
+        },
+        "proposal.recent_growth": {
+          "max_abs": 4.942435349875041e-13,
+          "max_scaled": 4.942435349875041e-13,
+          "worst_id": "query/f0ff6c07b89dcad2a7077bb6d5c8ac800eabeacc30e196adcb7038a8a05d9a2e",
+          "failures": 0
+        },
+        "proposal.maxdd": {
+          "max_abs": 7.982503547054876e-14,
+          "max_scaled": 7.982503547054876e-14,
+          "worst_id": "commit/d89a4b76f0fcafde59912c9b96591f1aaf0519eec91aa92db7c6ae9daee3bbeb",
+          "failures": 0
+        },
+        "proposal.utility": {
+          "max_abs": 3.05575842407535e-11,
+          "max_scaled": 3.05575842407535e-11,
+          "worst_id": "query/3c460990f2b6b527b1e201592043c8edab511398d0e72e663f87fea749616676",
+          "failures": 0
+        },
+        "portfolio.weights[]": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.sharpe": {
+          "max_abs": 2.2088997297942115e-12,
+          "max_scaled": 9.023776048237169e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.ann_ret": {
+          "max_abs": 3.489430966396867e-13,
+          "max_scaled": 3.489430966396867e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.maxdd": {
+          "max_abs": 2.453592884421596e-14,
+          "max_scaled": 2.453592884421596e-14,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.cagr": {
+          "max_abs": 5.056510765655275e-13,
+          "max_scaled": 5.056510765655275e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.total_ret": {
+          "max_abs": 6.015188347419098e-13,
+          "max_scaled": 6.015188347419098e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.turnover": {
+          "max_abs": 1.3877787807814457e-17,
+          "max_scaled": 1.3877787807814457e-17,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.exposure": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.margin_bps": {
+          "max_abs": 1.468265509174671e-10,
+          "max_scaled": 9.387901517393277e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.max_single_weight": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.concentration": {
+          "max_abs": 2.4252821972936545e-13,
+          "max_scaled": 2.4252821972936545e-13,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].year": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].sharpe": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].attend": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.yearly[].lg": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        },
+        "portfolio.metrics.n_days": {
+          "max_abs": 0.0,
+          "max_scaled": 0.0,
+          "worst_id": "final_portfolio",
+          "failures": 0
+        }
+      },
+      "numeric_failures": [],
+      "passed": true
+    }
+  },
+  "operator_cases": {
+    "expected": 124,
+    "observed": 124,
+    "missing": [],
+    "unexpected": []
+  },
+  "private_baseline": {
+    "status": "skipped",
+    "tests": 1,
+    "passed": 0,
+    "failure": 0,
+    "error": 0,
+    "skipped": 1,
+    "reasons": [
+      "Private baseline audit requires --production-baseline and provisioned production artifacts"
+    ]
+  },
+  "precision_plans": {
+    "1": {
+      "cpu": {
+        "requested": "paired",
+        "effective": "native",
+        "reason": "validated_native_path",
+        "supported": [
+          "native"
+        ]
+      },
+      "cuda": {
+        "requested": "paired",
+        "effective": "paired",
+        "reason": "fixed_study_policy",
+        "supported": [
+          "mixed",
+          "paired"
+        ]
+      }
+    },
+    "64": {
+      "cpu": {
+        "requested": "paired",
+        "effective": "native",
+        "reason": "validated_native_path",
+        "supported": [
+          "native"
+        ]
+      },
+      "cuda": {
+        "requested": "paired",
+        "effective": "paired",
+        "reason": "fixed_study_policy",
+        "supported": [
+          "mixed",
+          "paired"
+        ]
+      }
+    },
+    "4096": {
+      "cpu": {
+        "requested": "paired",
+        "effective": "native",
+        "reason": "validated_native_path",
+        "supported": [
+          "native"
+        ]
+      },
+      "cuda": {
+        "requested": "paired",
+        "effective": "paired",
+        "reason": "fixed_study_policy",
+        "supported": [
+          "mixed",
+          "paired"
+        ]
+      }
+    }
+  },
+  "operator_tolerance": 1e-10,
+  "metric_atol": 1e-06,
+  "metric_rtol": 1e-06,
+  "weight_atol": 1e-07,
+  "precision_budget": {
+    "evaluated": false,
+    "maximum_ratio": 1.5,
+    "comparison": "same-device query plus ordered commit against single FP32",
+    "reason": "This CPU/CUDA suite has no single-FP32 execution control."
+  }
+}
