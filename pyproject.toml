@@ -2,7 +2,7 @@
 # Run from a source checkout; build Linux native extensions with the README commands.
 client = [
     "numpy>=2.0",
-    "jsonschema>=4",
+    "jsonschema>=4.26.0",
 ]
 runtime = [
     { include-group = "client" },
