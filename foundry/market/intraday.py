@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-SCHEMA = 'crypto-bars-v1'
+SCHEMA = 'market-bars-v2'
 OHLCV = ('open', 'high', 'low', 'close', 'volume')
 MARK = ('mark_open', 'mark_high', 'mark_low', 'mark_close')
 
@@ -53,10 +53,10 @@ def _table(directory: Path, artifacts: dict, name: str) -> pd.DataFrame:
 
     artifact = artifacts[name]
     if artifact['path'] != name + '.parquet':
-        raise ValueError(f'Crypto artifact path must be {name}.parquet')
+        raise ValueError(f'Bar artifact path must be {name}.parquet')
     payload = (directory / artifact['path']).read_bytes()
     if hashlib.sha256(payload).hexdigest() != artifact['sha256']:
-        raise ValueError(f'Crypto artifact SHA256 differs: {name}')
+        raise ValueError(f'Bar artifact SHA256 differs: {name}')
     return pd.read_parquet(BytesIO(payload))
 
 

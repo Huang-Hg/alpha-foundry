@@ -4,7 +4,7 @@
 
 当下一次决策依赖实际现金、持仓、挂单或已有成交时，使用策略程序。预计算决策仍可用公式和数组。以 `Execution(model="orders")` 打开会话后，三种表达共用实际账户评价、发现与组合重放。
 
-当前订单模型支持明确选择的 CPU/CUDA 上的加密现货与 USDT 线性逐仓永续。股票结算和公司行动订单能力尚未提供。模型基于完成的 Bar、声明的 OHLC 路径和成交量参与率，不模拟订单簿或 tick 级排队。
+订单模型支持明确选择的 CPU/CUDA 上的美股、A 股、加密现货与 USDT 线性永续。现金市场遵循编译后的结算、公司行动、可交易性和数量规则；永续账户支持逐仓与全仓保证金。模型基于完成的 Bar、声明的 OHLC 路径和成交量参与率，不模拟订单簿或 tick 级排队。
 
 ## 完整公开程序
 
@@ -144,7 +144,7 @@ finally:
 
 始终按 `context.batch_size` 分配状态。描述可包含多个原始变体，本次查询可能只运行一个、若干变体或多个权重试算。通过 `variant_indices` 选取对应的不可变参数。
 
-`on_event(event)` 在每个可执行决策调用，接收独立拥有的 `(H_visible,S)` 特征/资格窗口、int64 因果历史时间、实际账户，以及自身有符号 `owner_quantity` `(B,S)`。窗口的数组基底与元数据都不暴露未来观测。账户快照含总持仓、权益、现金、预留资金、保证金和活动订单。
+`on_event(event)` 在每个可执行决策调用，接收独立拥有的 `(H_visible,S)` 特征/资格窗口、int64 因果历史时间、实际账户，以及自身有符号 `owner_quantity` `(B,S)`。窗口的数组基底与元数据都不暴露未来观测。账户快照含总持仓、权益、现金、预留资金、保证金和活动订单。`available_cash` 扣除预留与未结算现金（全仓时反映可用抵押资金）；`sellable_quantity` 扣除现金市场未结算库存；活动卖单预留在接收或成交命令时另行校验。
 
 返回选定设备上的 `(B,K)` `OrderCommands`。action/owner/id/asset/side/type/expiry 使用有符号整数，数量/价格使用浮点，`reduce_only` 使用 bool；K 不超过命令容量。action 为零表示填充空槽。
 
@@ -153,6 +153,8 @@ finally:
 `on_feedback` 在每根基础 Bar 完成后调用并返回 `None`，可以流式保存审计，但不能发单。反馈包含实际成交、部分成交、撤单、拒绝和强平；共享账户中可能含其他成员活动，读取时按 owner 区分。普通成交数量无符号，成员强平数量为有符号贡献。全局强平行 owner 为 `-1`，带总费用；成员行按绝对贡献分配同一费用，不能把两种费用重复相加。
 
 运行从首个可执行研究决策开始，失败路径也只关闭一次。框架保留有界命令、订单、当前反馈和统计收益/权益，不累计完整成交历史。CUDA 回调要用 `context.stream` 为 PyTorch 等框架建立依赖；设备能力必须显式声明，不会把任意 Python 回调自动变成 CUDA 核。
+
+费用由成交的 maker/taker 费率与方向性市场费用相加。已经挂单等待的限价单按 maker，立即可成交的限价单、市价单和止损单按 taker；负 maker 费率表示返佣。美股现金卖出所得与 A 股新买库存遵循编译后的交易日结算规则；拆股和到期支付股息在执行开盘前生效。公司行动影响的订单会撤销，日订单在交易日边界过期。这些是 Bar 级规则，不重建交易所队列。
 
 ### 读取执行反馈
 
@@ -164,11 +166,14 @@ finally:
 | `status`、`reason`、`stage` | `(B,F)` 整数 | 对应 `OrderStatus`、`OrderReason`、`OrderStage` |
 | `sequence` | `(B,F)` 整数 | 账户内稳定递增的审计序号 |
 | `owner`、`id`、`asset` | `(B,F)` 整数 | 成员命名空间、订单 ID 与资产索引 |
+| `liquidity` | `(B,F)` 整数 | `LiquidityRole.NONE=0`、`MAKER=1`、`TAKER=2`；非成交审计行使用 NONE |
 | `time` | `(B,F)` int64 UTC 纳秒 | 模型事件时间，不是精确 tick 时间 |
 | `quantity`、`price`、`fee`、`remaining` | `(B,F)` 浮点 | 成交数量、报价币/资产价格、报价币费用与报告的订单剩余数量 |
 | `event_ns`、`available_ns` | 主机整数 UTC 纳秒 | 基础开盘与完成 Bar 的可用/收盘时间 |
 | `account.cash`、`.equity`、`.reserved_cash` | `(B,)` 浮点 | 实际收盘状态现金、总权益与预留 |
-| `account.quantity`、`.margin`、`.entry_price` | `(B,S)` 浮点 | 净数量、逐仓保证金与入场价 |
+| `account.available_cash` | `(B,)` 浮点 | 满足结算与预留约束后的可用资金 |
+| `account.sellable_quantity` | `(B,S)` 浮点 | 扣除未结算数量后的现金市场库存，尚未扣除活动卖单预留 |
+| `account.quantity`、`.margin`、`.entry_price` | `(B,S)` 浮点 | 净数量、逐仓抵押金额或全仓初始保证金要求，以及入场价 |
 | `account.orders` | 各列 `(B,Q)` | 独立活动订单快照，action 为零表示空槽 |
 
 下面在当前 Bar 内计算本成员指定资产的实际成交量，不把完整轨迹传回主机：
@@ -202,7 +207,7 @@ unscaled_close_quantity = abs(actual) / context.intent_coefficients
 
 仅正系数行会打开运行，分母为正。正库存发卖出，负库存发买入，再把 `(B,1)` 数量写入命令。直接返回实际数量会再次乘系数，从而只关闭部分仓位。
 
-各成员贡献之和等于账户净数量。现货卖出只能消费本成员库存。逐仓 `reduce_only` 必须同时减少本成员贡献和账户净敞口；关闭对冲成员可能扩大净敞口，不能自动当作 reduce-only。资金费、预留、费用和总账户强平仍按实际账户处理，成员归属不会创造独立共享现金余额。
+各成员贡献之和等于账户净数量。现金市场卖出只能消费本成员已结算且未预留的库存。永续账户的 `reduce_only` 必须同时减少本成员贡献和账户净敞口；关闭对冲成员可能扩大净敞口，不能自动当作 reduce-only。资金费、预留、费用和总账户强平仍按实际账户处理，成员归属不会创造独立共享现金余额。
 
 ## 发现、家族与重放
 
@@ -269,6 +274,6 @@ print(resumed.returns.shape, resumed.final_account.equity)
 
 checkpoint 绑定完整 `ResearchContext`、描述、计划及下一事件游标，包含账户余额、成员/订单状态、预留、ID 高水位、统计状态和声明的私有张量。重新打开时需要相同数据、研究区间、未变化的组合版本、程序工件/参数、设备类别/索引和精度计划。组合变化会产生 `ContextConflict`，刷新不能让旧 checkpoint 自动变新。程序、状态或格式不匹配也会明确拒绝。
 
-`foundry.export(checkpoint, path)` 原子写入版本化 NumPy 包；`load_program_checkpoint` 不打开计算即可校验元数据、数组形状/dtype 和 SHA-256。编码及解码载荷都限制 1 GiB，禁用对象数组和 pickle。只保存有界账户/私有状态与完成的统计值，不含行情面板、源码或完整事件历史。当前格式为 `program-checkpoint-v1`。
+`foundry.export(checkpoint, path)` 原子写入版本化 NumPy 包；`load_program_checkpoint` 不打开计算即可校验元数据、数组形状/dtype 和 SHA-256。编码及解码载荷都限制 1 GiB，禁用对象数组和 pickle。只保存有界账户/私有状态与完成的统计值，不含行情面板、源码或完整事件历史。当前格式为 `program-checkpoint-v2`。
 
-这是进程内独立审计接口，不会暂停共享 RPC worker，不保存组合权重试算，也不在 Bar 内指令/成交位置恢复。边界位于完整 Bar 反馈之后，恢复从下一事件开始，不重复投递旧反馈。每次部分执行/恢复仍创建并关闭自己的运行资源。
+这是进程内独立审计接口。远程 `Session.simulate` 尚不支持，包括已部署引用；远程可使用规划、注册与候选评价。此接口不会暂停共享 RPC worker，不保存组合权重试算，也不在 Bar 内指令/成交位置恢复。边界位于完整 Bar 反馈之后，恢复从下一事件开始，不重复投递旧反馈。每次部分执行/恢复仍创建并关闭自己的运行资源。

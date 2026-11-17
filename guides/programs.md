@@ -4,7 +4,7 @@
 
 Use a program when the next decision depends on actual cash, inventory, pending orders or previous fills. Formulas and arrays remain convenient for precomputed decisions. All three enter the same order-account evaluation, discovery and portfolio replay when the session opens with `Execution(model="orders")`.
 
-The current order model supports crypto spot and isolated USDT linear perpetuals on an explicitly selected CPU or CUDA backend. Equity settlement and corporate-action order support is not available. The model uses completed bars, a declared OHLC path and volume participation, rather than an order book or tick-level queue model.
+The order model supports US equities, A shares, crypto spot and USDT linear perpetuals on an explicitly selected CPU or CUDA backend. Cash markets apply their compiled settlement, corporate-action, tradability and quantity rules; perpetual accounts support isolated or cross margin. The model uses completed bars, a declared OHLC path and volume participation, rather than an order book or tick-level queue model.
 
 ## A complete public program
 
@@ -144,7 +144,7 @@ A local program instance can be registered/evaluated without a catalog. Retain o
 
 Always allocate run state using `context.batch_size`. A descriptor can declare many original variants while a query runs one variant, several variants, or many portfolio weight trials. Use `variant_indices` to select the original variant's immutable parameters.
 
-`on_event(event)` runs at each executable decision and receives copied, owned `(H_visible,S)` feature/eligibility windows, int64 causal history timestamps, the actual account and signed `owner_quantity` `(B,S)`. Neither window array bases nor metadata expose future observations. Account snapshots include aggregate positions, equity, cash, reservations, margin and active orders.
+`on_event(event)` runs at each executable decision and receives copied, owned `(H_visible,S)` feature/eligibility windows, int64 causal history timestamps, the actual account and signed `owner_quantity` `(B,S)`. Neither window array bases nor metadata expose future observations. Account snapshots include aggregate positions, equity, cash, reservations, margin and active orders. `available_cash` excludes reservations and unsettled cash (or reflects free collateral for cross margin); `sellable_quantity` excludes unsettled cash-market inventory; active sell-order reservations are checked again when accepting or filling commands.
 
 Return `OrderCommands` columns of shape `(B,K)` on the selected device. Signed integer columns identify action/owner/order/asset/side/type/expiry; quantities/prices are floating; `reduce_only` is boolean. `K` must fit the configured command bound. Action zero pads unused slots.
 
@@ -153,6 +153,8 @@ Commands become eligible at the next compiled base-bar open. Positive new IDs in
 `on_feedback` runs after each completed base bar and returns `None`. It can stream a user-owned audit but cannot submit orders. Feedback includes actual fills, partial fills, cancellations, rejections and liquidations. Identify owner namespaces when reading it; aggregate accounts can contain other members' activity. Fill quantities are unsigned, while owner-attributed liquidation quantities are signed contributions. Global liquidation rows use owner `-1` and include the global fee; owner rows attribute that same fee by absolute contribution. Do not sum both fee representations.
 
 Runs begin at the first executable research decision and close once, including failure cleanup. The framework retains bounded commands/orders/current feedback and measured return/equity arrays, not a complete fill-history log. CUDA callbacks must establish stream dependencies for PyTorch or other frameworks using `context.stream`; device support is declared explicitly, not inferred from arbitrary Python callbacks.
+
+Fees combine the fill's maker/taker rate with directional market charges. A limit order that has rested is maker; immediately executable limits, market orders and stops are taker. Negative maker rates represent rebates. US equity cash proceeds and A-share newly purchased inventory obey the compiled session settlement rules; splits and payable dividends apply before the execution open. Orders affected by corporate actions are cancelled, and day orders expire at the session boundary. These are Bar-level rules, not exchange queue reconstruction.
 
 ### Reading execution feedback
 
@@ -164,11 +166,14 @@ Feedback is a typed set of resident columns, not a Python list named `fills`. B 
 | `status`, `reason`, `stage` | `(B,F)` integers | Values of `OrderStatus`, `OrderReason`, `OrderStage` |
 | `sequence` | `(B,F)` integer | Stable increasing audit sequence within each account |
 | `owner`, `id`, `asset` | `(B,F)` integers | Member namespace, order ID and asset index |
+| `liquidity` | `(B,F)` integer | `LiquidityRole.NONE=0`, `MAKER=1`, `TAKER=2`; non-fill audit entries use NONE |
 | `time` | `(B,F)` int64 UTC ns | Event's model timestamp; not a precise tick time |
 | `quantity`, `price`, `fee`, `remaining` | `(B,F)` floating | Executed quantity, quote/asset price, quote fee and reported remaining order quantity |
 | `event_ns`, `available_ns` | Host integer UTC ns | Base-bar open and completed-bar availability/close |
 | `account.cash`, `.equity`, `.reserved_cash` | `(B,)` floating | Actual close-state cash, total equity and reserved funds |
-| `account.quantity`, `.margin`, `.entry_price` | `(B,S)` floating | Net quantities, isolated margin and entry price |
+| `account.available_cash` | `(B,)` floating | Funds available after settlement and reservation constraints |
+| `account.sellable_quantity` | `(B,S)` floating | Settled cash-market inventory before active sell-order reservations |
+| `account.quantity`, `.margin`, `.entry_price` | `(B,S)` floating | Net quantities, isolated collateral or cross initial-margin requirement, and entry price |
 | `account.orders` | Columns `(B,Q)` | Detached active-order snapshot; action zero is an empty slot |
 
 For example, this callback computes own-asset fill quantities for the current bar without transferring a trace to the host:
@@ -202,7 +207,7 @@ unscaled_close_quantity = abs(actual) / context.intent_coefficients
 
 Only positive-coefficient rows open a run, so this denominator is positive. Choose sell for positive inventory and buy for negative inventory, and put the resulting `(B,1)` quantities into command columns. Using the raw actual quantity would apply the coefficient twice and under-close the position.
 
-Owner contributions sum to net account quantity. Spot sells can consume only that owner's inventory. In isolated accounts, `reduce_only` must reduce both the owner's contribution and aggregate net exposure; closing a hedged owner's contribution can increase net exposure and therefore is not automatically a valid reduce-only order. Funding, reservations, fees and aggregate liquidation remain actual-account operations; owner attribution does not create separate shared cash balances.
+Owner contributions sum to net account quantity. Cash-market sells can consume only that owner's settled, unreserved inventory. In perpetual accounts, `reduce_only` must reduce both the owner's contribution and aggregate net exposure; closing a hedged owner's contribution can increase net exposure and therefore is not automatically a valid reduce-only order. Funding, reservations, fees and aggregate liquidation remain actual-account operations; owner attribution does not create separate shared cash balances.
 
 ## Discovery, families and replay
 
@@ -269,6 +274,6 @@ This boundary is valid for the preceding 5-minute dataset example; choose an act
 
 The checkpoint binds the complete `ResearchContext`, descriptor, plan and next-event cursor, including account balances, owner/order state, reservations, high-water IDs, statistics state and declared private tensors. Reopen with the same data, research interval, unchanged portfolio version, program artifact/parameters, device kind/index and precision plan. A portfolio change causes `ContextConflict`; refreshing cannot make an old checkpoint current. A different program, malformed state or incompatible format is rejected explicitly.
 
-`foundry.export(checkpoint, path)` writes an atomic versioned NumPy bundle; `load_program_checkpoint` verifies its metadata, array shapes/dtypes and SHA-256 integrity without opening compute. Both encoded and decoded payloads are bounded to 1 GiB, and object arrays/pickle are forbidden. Only owned bounded account/private state and completed measurements are saved, not market panels, source code or a full event log. The current format is `program-checkpoint-v1`.
+`foundry.export(checkpoint, path)` writes an atomic versioned NumPy bundle; `load_program_checkpoint` verifies its metadata, array shapes/dtypes and SHA-256 integrity without opening compute. Both encoded and decoded payloads are bounded to 1 GiB, and object arrays/pickle are forbidden. Only owned bounded account/private state and completed measurements are saved, not market panels, source code or a full event log. The current format is `program-checkpoint-v2`.
 
-This is an in-process standalone audit API. It does not pause the shared RPC worker, checkpoint a portfolio weight trial, or resume at an intrabar instruction/fill position. The pause boundary is after the completed bar's feedback; a resumed run begins with the next event and does not deliver prior feedback twice. Every partial/resumed invocation still opens and closes its own run resources.
+This is an in-process standalone audit API. Remote `Session.simulate` is unsupported, including deployed references; use remote planning, registration and candidate evaluation instead. It does not pause the shared RPC worker, checkpoint a portfolio weight trial, or resume at an intrabar instruction/fill position. The pause boundary is after the completed bar's feedback; a resumed run begins with the next event and does not deliver prior feedback twice. Every partial/resumed invocation still opens and closes its own run resources.

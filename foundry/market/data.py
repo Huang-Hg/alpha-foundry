@@ -12,6 +12,7 @@ from foundry.types import DataContract, MarketData, Study
 from foundry.market.pit import membership
 from foundry.market.perpetual import PerpetualData, load_perpetual
 from foundry.market.intraday import IntradayData, SCHEMA as INTRADAY_SCHEMA, load_intraday
+from foundry.market.equity_intraday import load_equity_intraday
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -71,6 +72,10 @@ def load_data(settings: Settings, study: Study) -> MarketData | PerpetualData | 
 
     cfg = settings.market
     directory = path(cfg.data_dir)
+    manifest_path = directory / 'manifest.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8')) if manifest_path.exists() else {}
+    if manifest.get('schema') == INTRADAY_SCHEMA and study.market in ('us_equity', 'a_share'):
+        return load_equity_intraday(directory, study, settings.clock)
     if study.market in ('crypto_spot', 'crypto_perpetual'):
         manifest = json.loads((directory / 'manifest.json').read_text(encoding='utf-8'))
         if manifest['schema'] == INTRADAY_SCHEMA:

@@ -63,11 +63,11 @@ with foundry.open(admission=foundry.Admission(weight_steps=4)) as session:
 | 设置 | 含义 |
 | --- | --- |
 | `Execution(model="targets")` | 默认四市场目标回测，接受公式和权益比例数组 |
-| `Execution(model="orders")` | 加密现货/USDT 逐仓 Bar 账户，公式、数组与程序共用实际执行 |
+| `Execution(model="orders")` | 四市场 Bar 账户，支持现金结算与 USDT 逐仓/全仓，公式、数组与程序共用实际执行 |
 | `Account(composition="shared")` | 一个实际账户，成员系数仅缩放一次意图 |
 | `Account(composition="independent")` | 仅订单模型；系数一次性分配各自初始现金 |
 
-美股和 A 股当前支持日线。crypto 可使用日线、支持的小时永续归档，或带发布时间的基础 Bar，并独立配置决策/统计频率。股票程序订单所需的结算和公司行动能力尚未提供。
+美股和 A 股目标仓位回测使用日线工件；股票订单账户还支持 `market-bars-v2` 常规交易时段内日内 Bar，并可独立配置决策/统计频率。crypto 可使用日线、支持的小时永续归档，或带发布时间的基础 Bar。股票程序订单使用编译后的按交易日结算、公司行动、数量与可交易性规则。程序可读取可用现金与可卖库存；永续账户支持逐仓或全仓保证金。
 
 显式 5 分钟 crypto 数据示例：
 
@@ -292,7 +292,7 @@ import foundry
 foundry.serve("var/runs/library.json", backend="cuda")
 ```
 
-在该主机用 `python -m foundry status` 查看端口。服务绑定 loopback；跨机器使用 `ssh -L LOCAL_PORT:127.0.0.1:REMOTE_PORT user@host` 转发。客户端检出匹配协议的代码，安装 Python 依赖后连接：
+在该主机用 `python -m foundry status` 查看端口。服务绑定 loopback；跨机器使用 `ssh -N -L LOCAL_PORT:127.0.0.1:REMOTE_PORT user@host` 转发。客户端检出匹配协议的代码，安装 `client` 依赖组（`python -m pip install --group client`）后连接：
 
 ```python
 import foundry
@@ -301,7 +301,7 @@ with foundry.connect(("127.0.0.1", 9000)) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-把 `9000` 换成隧道本地端口。原生 Windows 客户端无需 Linux 扩展或本地 CUDA。模型数组通过有界 NumPy 二进制包上传，编码/解码均限制 1 GiB；程序查询使用已部署 `ProgramReference`，见[部署示例](programs.zh-CN.md#远程部署)。
+把 `9000` 换成隧道本地端口。CLI 请求可通过 `python -m foundry attach 127.0.0.1 9000` 选择该端点，`detach` 仅清除选择。Foundry 不管理 SSH 凭证、隧道、部署或远程进程启动。需要渲染监控面板时，增加 `monitor` 依赖组。原生 Windows 客户端无需 Linux 扩展或本地 CUDA。模型数组通过有界 NumPy 二进制包上传，编码/解码均限制 1 GiB；程序查询使用已部署 `ProgramReference`，见[部署示例](programs.zh-CN.md#远程部署)。
 
 服务通过有界队列串行处理任务。断开客户端不会取消已接受命令，关闭客户端也不停止共享计算。上下文冲突要求显式刷新。旧组合、checkpoint、RPC 协议会明确拒绝；需要有意重跑，不猜测或自动迁移格式。
 

@@ -29,9 +29,9 @@ class CryptoSpot(Market[MarketData | IntradayData, ExecutionSpec]):
     categories = {'pricevolume': 'scale-free daily price/volume primitives',
                   'trend': 'distance to moving average, trailing return'}
 
-    def __init__(self, cost_rate: float, gross_limit: float = 1., clock: Clock = Clock(),
+    def __init__(self, maker_fee: float, taker_fee: float, gross_limit: float = 1., clock: Clock = Clock(),
                  execution: Execution = Execution()):
-        self.cost_rate = cost_rate
+        self.maker_fee, self.taker_fee = maker_fee, taker_fee
         self.allocation = Allocation(gross_limit, False)
         self.clock = clock
         self.execution = execution
@@ -52,9 +52,9 @@ class CryptoSpot(Market[MarketData | IntradayData, ExecutionSpec]):
         seen = np.maximum.accumulate(src['trading'], axis=0)
         open_, close = (np.where(seen, ffill(g[k]), np.nan) for k in ('open', 'close'))
         block = np.where(seen & ~src['trading'], 3, 0)
-        spec = cash_spec(open_, close, self.cost_rate * open_, block=block,
+        spec = cash_spec(open_, close, self.taker_fee * open_, block=block,
                          schedule=daily_schedule(dates, self.name, clock))
-        program_spec = crypto_bars(self.name, spec.schedule, clock.decision_ns, g, self.execution, self.cost_rate)
+        program_spec = crypto_bars(self.name, spec.schedule, clock.decision_ns, g, self.execution, self.maker_fee, self.taker_fee)
         return LoadedStudy(study, self, Panel(dates, symbols, fields, src, backend), spec,
                            window, data.contract, program_spec)
 
@@ -71,11 +71,11 @@ class CryptoSpot(Market[MarketData | IntradayData, ExecutionSpec]):
         seen = np.maximum.accumulate(trading, axis=0)
         open_, close = (np.where(seen, ffill(g[k]), np.nan) for k in ('open', 'close'))
         block = np.where(seen & ~trading, 3, 0)
-        spec = cash_spec(open_, close, self.cost_rate * open_, block=block, schedule=data.schedule)
+        spec = cash_spec(open_, close, self.taker_fee * open_, block=block, schedule=data.schedule)
         self.ppy = data.periods_per_year
         self.decision_clock = data.clock.provenance
         self.execution_clock = 'next_base_bar_open'
-        program_spec = crypto_bars(self.name, data.schedule, data.event_close_ns, g, self.execution, self.cost_rate)
+        program_spec = crypto_bars(self.name, data.schedule, data.event_close_ns, g, self.execution, self.maker_fee, self.taker_fee)
         return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec,
                            window, bars.contract, program_spec)
 

@@ -58,8 +58,8 @@ def plan(runtime: Runtime, program: StrategyProgram) -> ProgramPlan:
 
 def _plan(runtime: Runtime, descriptor: ProgramDescriptor) -> ProgramPlan:
     spec = runtime.loaded.program_spec
-    if spec is None or spec.market not in ('crypto_spot', 'crypto_perpetual'):
-        raise ValueError('Program orders require compiled crypto Bar execution; equity corporate actions and settlement are unavailable')
+    if spec is None:
+        raise ValueError('Program orders require compiled Bar execution')
     device = runtime.resources.placement
     if device.kind not in descriptor.devices:
         raise ValueError(f'Program declares devices {descriptor.devices}; open an explicitly supported backend for {device.kind}')
@@ -97,7 +97,7 @@ def _plan(runtime: Runtime, descriptor: ProgramDescriptor) -> ProgramPlan:
         execution.order_capacity, execution.command_capacity, state_bytes, window_bytes,
         execution.command_capacity + S + 4 * execution.order_capacity + 2 * (execution.order_capacity + S),
         ('market', 'limit', 'stop', 'cancel', 'amend'), LATENCY,
-        'Missing or nonpositive crypto OHLC quotes cannot execute orders; spot valuation carries the last valid close, with zero before first listing.',
+        'Missing or nonpositive OHLC quotes cannot execute orders; cash-market valuation carries the last valid close, with zero before first listing. Compiled market rules determine settlement and corporate actions.',
         identity, checkpointable=descriptor.checkpointable)
 
 
@@ -170,7 +170,7 @@ def simulate(runtime: Runtime, context: ResearchContext,
         if checkpoint is not None:
             if not isinstance(checkpoint, ProgramCheckpoint):
                 raise TypeError('checkpoint must be a ProgramCheckpoint')
-            if checkpoint.format != 'program-checkpoint-v1':
+            if checkpoint.format != 'program-checkpoint-v2':
                 raise ValueError('Unsupported program checkpoint format')
             if (not isinstance(checkpoint.context, ResearchContext)
                     or not isinstance(checkpoint.descriptor, ProgramDescriptor)

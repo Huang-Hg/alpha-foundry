@@ -74,7 +74,7 @@ A 股和日线现货 manifest 包含以下七个字符串字段：
 
 ## 显式 crypto 基础 Bar
 
-现货和 USDT 逐仓永续都接受 `schema="crypto-bars-v1"`。需要 `bars.parquet` 与 `manifest.json`，永续还需完整 `funding.parquet`。
+现货和 USDT 逐仓永续都接受 `schema="market-bars-v2"`。需要 `bars.parquet` 与 `manifest.json`，永续还需完整 `funding.parquet`。
 
 | 文件 | 必需字段 |
 | --- | --- |
@@ -118,7 +118,7 @@ def iso_ns(value):
 
 payload = (folder / "bars.parquet").read_bytes()
 manifest = {
-    "schema": "crypto-bars-v1", "market": "crypto_spot", "timezone": "UTC",
+    "schema": "market-bars-v2", "market": "crypto_spot", "timezone": "UTC",
     "interval": "5min", "history_start": iso_ns(bars.open_ns.min()),
     "end": iso_ns(bars.close_ns.max()), "symbols": sorted(bars.symbol.unique().tolist()),
     "source": "My archived feed and export version",
@@ -171,10 +171,35 @@ foundry.import_perpetual(
 )
 ```
 
-导入器保留来源 URL、校验和和必要周期变更证据，不生成 `crypto-bars-v1`。自己的更细频率导出应采用上面的显式格式。现有数据的资产顺序由 manifest 决定；导入参数 `symbols` 选择新采集范围。
+导入器保留来源 URL、校验和和必要周期变更证据，不生成 `market-bars-v2`。自己的更细频率导出应采用上面的显式格式。现有数据的资产顺序由 manifest 决定；导入参数 `symbols` 选择新采集范围。
 
 ## 数据、预测与 PIT
 
 行情 Bar、决策特征、执行报价和模型预测职责不同。日线收盘决策不能在当天更早的开盘成交。资格控制新的可交易横截面，报价仍用于已有持仓估值。模型观测/拟合截止点需要覆盖标签与预处理信息。`foundry.walk_forward` 提供因果前缀，但调用方仍对独立读取的数据及预训练模型来源负责。
 
 打开后，先检查 `session.grid`、`session.describe()["clock"]`、字段和来源，再注册预测。准确的 `(B,D,S)` 坐标与 `(B,D)` cutoff 见[数组注册](research.zh-CN.md#数组与模型输出)。数据契约记录已知与缺失的信息，不承诺样本外收益。
+
+## 股票日内现金账户
+
+`market-bars-v2` 支持 `us_equity` 与 `a_share`，必须使用 `Execution(model="orders")`；公式、数组和程序均走订单账户执行。旧日线复权工件仍单独用于日线目标持仓模型，不能提供股票订单执行。日内手续费以源规则表为准，不使用日线配置中的估算费率。
+
+manifest 必须声明 `calendar="XNYS"`（美股）或 `"XSHG"`（A 股）、`timezone="UTC"`、`prices="raw unadjusted OHLC"`，并保留上文的来源、发布、成员和校验和字段。OHLC 为原始未复权价格；`available_ns` 是真实发布时刻。交易日历负责午休、夏令时和提前收市；不含盘前盘后及集合竞价。基础间隔必须整除午休前交易时段，只有收盘基础 Bar 可不足完整间隔。数据起止及截止点必须覆盖完整交易日，研究起点应为交易日或统计桶边界。
+
+只在真实开市时生成基础事件。决策和统计桶每天重置，按实际交易时长累计，午休不计时：`1D` 每交易日一个桶，`1h` 为交易小时桶，收盘剩余不足一小时仍保留。桶可跨午休聚合两侧真实行情，不创建午休或隔夜虚拟 Bar。决策完成后第一个不早于决策时间的基础开盘才可执行。年化使用美股 252 / A 股 242 交易日乘以样本中每交易日平均统计桶数。
+
+另提供带校验和的 `rules.parquet`，对每个基础开盘与股票（包括缺失报价）恰好一行：
+
+| 字段 | 契约 |
+| --- | --- |
+| `symbol`, `open_ns`, `available_ns` | 股票、int64 UTC 纳秒开盘及不晚于该开盘的真实规则发布时间 |
+| `fee_buy`, `fee_sell` | 买卖方向附加名义费率，非负；包含适用税费 |
+| `maker_fee`, `taker_fee` | 明确的流动性角色费率，maker 可用负值表示返佣 |
+| `split_factor`, `cash_dividend` | 正数拆股数量乘数、该事件支付的每份拆股前股份现金；无事件为 `1`、`0` |
+| `quantity_step`, `fill_step`, `price_tick`, `min_quantity` | 非负申报数量步长、实际成交步长（通常 1 股）、价格步长与最小订单量；`0` 表示不限制；全量剩余零股卖出不受申报整手/最小量约束 |
+| `limit_up`, `limit_down` | 明确涨跌价格边界；`0` 表示不限制 |
+| `can_buy`, `can_sell`, `suspended` | 独立于成员与报价的源布尔交易许可及停牌标记 |
+| `inventory_t1`, `cash_t1`, `odd_lot_sell` | 布尔持仓 T+1、资金 T+1、剩余零股卖出许可 |
+
+A 股必须 `inventory_t1=True,cash_t1=False`，美股现金账户相反。结算在下一交易日第一个基础事件释放，自然跨越周末和节假日。A 股当日新买不可当日卖；美股卖出所得下一交易日才可再买。美股订单工件拒绝 2024-05-28 以前的交易日，不支持此前的 T+2 结算；切换日期见 [SEC 结算 FAQ](https://www.sec.gov/exams/educationhelpguidesfaqs/t1-faq)。手数、涨跌停等须显式提供，不从代码前缀猜历史板块规则；适用 100 股整手时应在源表明确 `quantity_step=100`。公司行动撤销该股未成交订单，收盘事件使当日订单到期。
+
+缺失报价不成交，只延续上次估值，并按显式拆股调整。股息按指定支付事件入账，来源必须披露权益简化。本模型不重建历史股息登记日权益、盘口排队、竞价分配、每笔最低佣金、融券/保证金账户、配股选择及交易所特定撤单限制。不能将缺失来源信息伪装成已验证历史规则。英文页含单行规则构造示例，示例费率仅说明结构，实际应使用当时有效数据。

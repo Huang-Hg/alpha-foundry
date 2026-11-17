@@ -31,7 +31,8 @@ template<class R> static void step_accounts(const o::Input& in,PyArrayObject** a
             (double*)PyArray_DATA(a[18])+b*in.owners*in.assets,
             (unsigned char*)PyArray_DATA(a[19])+b*in.owners*in.assets,
             (double*)PyArray_DATA(a[20])+b*o::ACTIVITY_VALUES,
-            (unsigned int*)PyArray_DATA(a[21])+b*foundry_order_digest::WORDS
+            (unsigned int*)PyArray_DATA(a[21])+b*foundry_order_digest::WORDS,
+            (double*)PyArray_DATA(a[22])+b*in.owners*in.assets
         };
         o::Account<R>{in,state}.run(capacity.data());
     }
@@ -40,19 +41,19 @@ template<class R> static void step_accounts(const o::Input& in,PyArrayObject** a
 static PyObject* py_step(PyObject*,PyObject* args) {
     PyObject* inputs;
     long long time;
-    int isolated,path,measured;
+    int margin_mode,path,measured;
     double leverage,gross,participation;
     const char* precision;
-    if(!PyArg_ParseTuple(args,"OLiiiddds",&inputs,&time,&isolated,&path,&measured,&leverage,&gross,&participation,&precision))return nullptr;
-    if(!PyTuple_Check(inputs)||PyTuple_GET_SIZE(inputs)!=22) {
-        PyErr_SetString(PyExc_ValueError,"Order step requires twenty-two packed arrays");return nullptr;
+    if(!PyArg_ParseTuple(args,"OLiiiddds",&inputs,&time,&margin_mode,&path,&measured,&leverage,&gross,&participation,&precision))return nullptr;
+    if(!PyTuple_Check(inputs)||PyTuple_GET_SIZE(inputs)!=23) {
+        PyErr_SetString(PyExc_ValueError,"Order step requires twenty-three packed arrays");return nullptr;
     }
-    PyArrayObject* a[22]={};
-    const int types[22]={NPY_DOUBLE,NPY_UINT8,NPY_DOUBLE,NPY_DOUBLE,NPY_INT64,NPY_INT64,
+    PyArrayObject* a[23]={};
+    const int types[23]={NPY_DOUBLE,NPY_UINT8,NPY_DOUBLE,NPY_DOUBLE,NPY_INT64,NPY_INT64,
         NPY_DOUBLE,NPY_INT64,NPY_DOUBLE,NPY_INT64,NPY_DOUBLE,NPY_INT64,NPY_DOUBLE,NPY_INT64,
-        NPY_DOUBLE,NPY_UINT8,NPY_INT64,NPY_DOUBLE,NPY_DOUBLE,NPY_UINT8,NPY_DOUBLE,NPY_UINT32};
-    const int dimensions[22]={2,2,3,2,2,3,3,3,3,3,3,1,3,2,3,3,1,2,3,3,2,2};
-    for(int i=0;i<22;++i) {
+        NPY_DOUBLE,NPY_UINT8,NPY_INT64,NPY_DOUBLE,NPY_DOUBLE,NPY_UINT8,NPY_DOUBLE,NPY_UINT32,NPY_DOUBLE};
+    const int dimensions[23]={2,2,3,2,2,3,3,3,3,3,3,1,3,2,3,3,1,2,3,3,2,2,3};
+    for(int i=0;i<23;++i) {
         PyObject* value=PyTuple_GET_ITEM(inputs,i);
         if(!PyArray_Check(value)) {PyErr_SetString(PyExc_TypeError,"Order step arrays must be NumPy arrays");return nullptr;}
         a[i]=(PyArrayObject*)value;
@@ -74,16 +75,16 @@ static PyObject* py_step(PyObject*,PyObject* args) {
         if(i==9||i==10)bad=bad||PyArray_DIM(a[i],1)!=F;
         if(i<11)bad=bad||PyArray_DIM(a[i],dimensions[i]-1)!=width[i];
     }
-    for(int i=12;i<22&&!bad;++i) {
+    for(int i=12;i<23&&!bad;++i) {
         if(i==16) {bad=PyArray_DIM(a[i],0)!=M;continue;}
         bad=PyArray_DIM(a[i],0)!=B;
-        if(i<=19)bad=bad||PyArray_DIM(a[i],1)!=M;
-        if(i==12||i==14||i==15||i==18||i==19)bad=bad||PyArray_DIM(a[i],2)!=S;
+        if(i<=19||i==22)bad=bad||PyArray_DIM(a[i],1)!=M;
+        if(i==12||i==14||i==15||i==18||i==19||i==22)bad=bad||PyArray_DIM(a[i],2)!=S;
         if(i==20)bad=bad||PyArray_DIM(a[i],1)!=o::ACTIVITY_VALUES;
         if(i==21)bad=bad||PyArray_DIM(a[i],1)!=foundry_order_digest::WORDS;
     }
     const bool paired=std::string(precision)=="paired",mixed=std::string(precision)=="mixed";
-    bad=bad||(!paired&&!mixed)||(isolated!=0&&isolated!=1)||(path!=0&&path!=1)||leverage<1||gross<=0||gross>leverage||participation<=0||participation>1;
+    bad=bad||(!paired&&!mixed)||(margin_mode<0||margin_mode>2)||(path!=0&&path!=1)||leverage<1||gross<=0||gross>leverage||participation<=0||participation>1;
     if(bad) {PyErr_SetString(PyExc_ValueError,"Order step packed shapes or execution parameters are invalid");return nullptr;}
     // The adapter validates public command values. This check protects direct
     // extension callers from indexing outside the native state buffers.
@@ -97,7 +98,7 @@ static PyObject* py_step(PyObject*,PyObject* args) {
         }
     }
     const o::Input in {(const double*)PyArray_DATA(a[0]),(const unsigned char*)PyArray_DATA(a[1]),
-                       S,Q,K,F,time,M,isolated,path,measured,leverage,gross,participation};
+                       S,Q,K,F,time,M,margin_mode,path,measured,leverage,gross,participation};
     Py_BEGIN_ALLOW_THREADS
     if(paired)step_accounts<HostPair>(in,a,B);else step_accounts<float>(in,a,B);
     Py_END_ALLOW_THREADS

@@ -1311,6 +1311,12 @@ class OrderType(IntEnum):
     STOP = 3
 
 
+class LiquidityRole(IntEnum):
+    NONE = 0
+    MAKER = 1
+    TAKER = 2
+
+
 class OrderStatus(IntEnum):
     NONE = 0
     ACCEPTED = 1
@@ -1333,6 +1339,8 @@ class OrderReason(IntEnum):
     REDUCE_ONLY = 7
     EXPIRED = 8
     LIQUIDATION = 9
+    UNSETTLED = 10
+    CORPORATE_ACTION = 11
 
 
 class OrderStage(IntEnum):
@@ -1393,7 +1401,10 @@ class OrderSnapshot:
 class AccountSnapshot:
     """Detached actual ledger: quote cash/equity (B,), asset quantities (B,S).
 
-    reserved_cash (B,) and isolated margin (B,S) use quote currency;
+    reserved_cash (B,) and margin (B,S) use quote currency; cross margin is
+    marked initial collateral, while isolated margin includes leg PnL.
+    available_cash deducts unsettled proceeds, collateral and active reserves.
+    sellable_quantity excludes T+1 locks but precedes active sell reservations.
     entry_price (B,S) uses quote currency per unit. Mutating a device snapshot
     cannot alter the execution ledger. CPU snapshots are also read-only.
     """
@@ -1404,6 +1415,8 @@ class AccountSnapshot:
     margin: FloatArray
     entry_price: FloatArray
     orders: OrderSnapshot
+    available_cash: FloatArray
+    sellable_quantity: FloatArray
 
 
 @dataclass(frozen=True)
@@ -1417,7 +1430,8 @@ class ExecutionFeedback:
     are signed owner contributions. A global liquidation row has owner=-1,
     unsigned aggregate quantity and the global fee; owner rows allocate that
     fee by absolute contribution. Do not sum global and owner fees twice.
-    Prices are quote/unit and fees are quote currency. Account
+    Prices are quote/unit and fees are quote currency; liquidity names each
+    fill role, with NONE for non-fill events. Maker rebates are negative fees. Account
     reflects all event stages, including its final close valuation.
     """
     account: AccountSnapshot
@@ -1436,6 +1450,7 @@ class ExecutionFeedback:
     remaining: FloatArray
     event_ns: int
     available_ns: int
+    liquidity: IntArray
 
 
 @dataclass(frozen=True)
@@ -1454,6 +1469,7 @@ class AccountCheckpoint:
     orders: HostArray
     order_values: HostArray
     owners: HostArray
+    owner_locked: HostArray
     highwater: HostArray
     targets: HostArray
     units: HostArray
@@ -1468,7 +1484,7 @@ class AccountCheckpoint:
     risk_flows: HostArray
     risk_counts: HostArray
     risk_previous: HostArray
-    format: str = 'order-account-v1'
+    format: str = 'order-account-v2'
 
 
 class AccountExecutionPort(Protocol):
@@ -1504,8 +1520,9 @@ class BarExecution:
     Fees, funding and margin rates are notional fractions. Volume and qty_step
     use asset units; zero step/tick explicitly declares continuous quantities
     or prices. event_close_ns (E,) declares when the complete Bar is visible.
-    Crypto cash and isolated USDT are supported; equity corporate actions and
-    settlement require their own compiled capabilities before program use.
+    Maker/taker fees describe liquidity roles; fee_buy/sell add directional
+    charges. Splits and payable dividends are explicit pre-open events.
+    Equity sessions unlock prior-day inventory/cash and expire day orders.
     """
     schedule: ExecutionSchedule
     event_close_ns: NDArray[np.int64]
@@ -1530,6 +1547,19 @@ class BarExecution:
     qty_step: HostArray
     price_tick: HostArray
     market: str
+    maker_fee: HostArray
+    taker_fee: HostArray
+    split_factor: HostArray
+    cash_dividend: HostArray
+    min_quantity: HostArray
+    limit_up: HostArray
+    limit_down: HostArray
+    session_start: HostArray
+    session_end: HostArray
+    inventory_t1: HostArray
+    cash_t1: HostArray
+    odd_lot_sell: HostArray
+    fill_step: HostArray
 
     def __post_init__(self) -> None:
         shape = np.asarray(self.trade_open).shape
@@ -1545,7 +1575,8 @@ class BarExecution:
         close = np.array(close, copy=True, order='C')
         close.flags.writeable = False
         object.__setattr__(self, 'event_close_ns', close)
-        boolean = {'buy_allowed', 'sell_allowed', 'quote_valid'}
+        boolean = {'buy_allowed', 'sell_allowed', 'quote_valid', 'session_start',
+                   'session_end', 'inventory_t1', 'cash_t1', 'odd_lot_sell'}
         for item in fields(self):
             if item.name in ('schedule', 'event_close_ns', 'market'):
                 continue
@@ -1562,6 +1593,7 @@ class BarExecution:
             object.__setattr__(self, item.name, owned)
         if (np.any(~np.isfinite(self.volume)) or np.any(self.volume < 0)
                 or np.any(~np.isfinite(self.qty_step)) or np.any(self.qty_step < 0)
+                or np.any(~np.isfinite(self.fill_step)) or np.any(self.fill_step < 0)
                 or np.any(~np.isfinite(self.price_tick)) or np.any(self.price_tick < 0)):
             raise ValueError('Bar volume and quantity/price steps must be finite and nonnegative')
         if np.any((self.buy_allowed | self.sell_allowed) & ~self.quote_valid):
@@ -1581,10 +1613,24 @@ class BarExecution:
                 known = np.maximum.accumulate(self.quote_valid, axis=0)
                 if np.any(known & (prices <= 0).any(0)):
                     raise ValueError('Valuation marks must stay positive after an asset first has a valid quote')
-        for name in ('fee_buy', 'fee_sell', 'maintenance_rate', 'liquidation_fee'):
+        for name in ('fee_buy', 'fee_sell', 'taker_fee', 'maintenance_rate', 'liquidation_fee'):
             value = getattr(self, name)
             if np.any(~np.isfinite(value)) or np.any((value < 0) | (value >= 1)):
                 raise ValueError('Bar fee and maintenance rates require finite fractions in [0,1)')
+        if np.any(~np.isfinite(self.maker_fee) | (self.maker_fee <= -1) | (self.maker_fee >= 1)):
+            raise ValueError('Maker rates require finite fractions in (-1,1), including rebates')
+        if np.any(~np.isfinite(self.split_factor) | (self.split_factor <= 0)):
+            raise ValueError('Split factors must be positive finite post/pre share ratios')
+        for name in ('cash_dividend', 'min_quantity', 'limit_up', 'limit_down'):
+            value = getattr(self, name)
+            if np.any(~np.isfinite(value) | (value < 0)):
+                raise ValueError(f'{name} must contain finite nonnegative values')
+        if np.any((self.limit_up > 0) & (self.limit_down > self.limit_up)):
+            raise ValueError('Price limits must be ordered; zero means no limit')
+        if np.any(self.cash_t1 != self.cash_t1[:, :1]):
+            raise ValueError('Cash settlement policy must be shared across an account')
+        if np.any(self.cash_t1 & (self.session_start != self.session_start[:, :1])):
+            raise ValueError('Cash settlement requires a common account session boundary')
         if (np.any(~np.isfinite(self.funding_rate))
                 or np.any(~np.isfinite(self.funding_mark)) or np.any(self.funding_mark < 0)
                 or np.any((self.funding_rate != 0)
@@ -1814,7 +1860,7 @@ class ProgramCheckpoint:
     plan: ProgramPlan
     account: AccountCheckpoint
     state: tuple[StateTensor, ...]
-    format: str = 'program-checkpoint-v1'
+    format: str = 'program-checkpoint-v2'
 
 
 @dataclass(frozen=True)

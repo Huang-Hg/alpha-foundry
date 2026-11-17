@@ -17,13 +17,15 @@ from foundry.types import (
 
 PANEL_FIELDS = ('trade_open', 'trade_high', 'trade_low', 'trade_close', 'volume',
     'mark_open', 'mark_high', 'mark_low', 'mark_close', 'fee_buy', 'fee_sell',
-    'funding_rate', 'funding_mark', 'maintenance_rate', 'liquidation_fee', 'qty_step', 'price_tick')
-RULE_FIELDS = ('buy_allowed', 'sell_allowed', 'quote_valid')
+    'funding_rate', 'funding_mark', 'maintenance_rate', 'liquidation_fee', 'qty_step', 'price_tick',
+    'maker_fee', 'taker_fee', 'split_factor', 'cash_dividend', 'min_quantity', 'limit_up', 'limit_down', 'fill_step')
+RULE_FIELDS = ('buy_allowed', 'sell_allowed', 'quote_valid', 'session_start', 'session_end',
+               'inventory_t1', 'cash_t1', 'odd_lot_sell')
 COMMAND_INTS = ('action', 'owner', 'id', 'asset', 'side', 'type', 'valid_until', 'reduce_only')
 COMMAND_VALUES = ('quantity', 'price', 'reservation_price')
 CHECKPOINT_BUFFERS = (
     ('assets', '_assets'), ('cash', '_cash'), ('meta', '_meta'), ('orders', '_oi'),
-    ('order_values', '_ov'), ('owners', '_owners'), ('highwater', '_highwater'),
+    ('order_values', '_ov'), ('owners', '_owners'), ('owner_locked', '_owner_locked'), ('highwater', '_highwater'),
     ('targets', '_targets'), ('units', '_units'), ('coefficients', '_coefficients'),
     ('pending_targets', '_pending_targets'), ('target_dirty', '_target_dirty'),
     ('activity', '_activity'), ('digest', '_digest'), ('returns', '_returns'),
@@ -75,10 +77,8 @@ class OrderRuntime:
                     start_event: int, owner_count: int, initial_cash: FloatArray | None) -> None:
         if not isinstance(spec, BarExecution):
             raise TypeError('Order execution requires a compiled BarExecution')
-        if spec.market not in ('crypto_spot', 'crypto_perpetual'):
-            raise ValueError('Equity program orders require compiled corporate-action and settlement capabilities')
-        if (spec.market == 'crypto_perpetual') != (account.margin == 'isolated'):
-            raise ValueError('Bar market and cash/isolated account model must agree')
+        if (spec.market == 'crypto_perpetual') != (account.margin != 'cash'):
+            raise ValueError('Bar market and cash/perpetual account model must agree')
         if type(batch) is not int or batch < 1:
             raise ValueError('Order account batch must be a positive integer')
         if precision not in ('paired', 'mixed'):
@@ -103,14 +103,15 @@ class OrderRuntime:
         self._origin_start_event = start_event
         self._panels, self._rules = prepared_data.panels, prepared_data.rules
         self._event_times = prepared_data.event_ns
-        self._assets = xp.zeros((batch, self.assets, 4), dtype=xp.float64)
+        self._assets = xp.zeros((batch, self.assets, 5), dtype=xp.float64)
         self._assets[:, :, 2] = self._panels[start_event, 5]
-        self._cash = xp.zeros((batch, 14), dtype=xp.float64)
+        self._cash = xp.zeros((batch, 15), dtype=xp.float64)
         self._cash[:, :3] = capital[:, None]
         self._meta = xp.zeros((batch, 5), dtype=xp.int64)
         self._meta[:, 3] = capital <= 0
         self._meta[:, 4] = -1
         self._owners = xp.zeros((batch, owner_count, self.assets), dtype=xp.float64)
+        self._owner_locked = xp.zeros_like(self._owners)
         self._highwater = xp.zeros((batch, owner_count), dtype=xp.int64)
         self._targets = xp.zeros_like(self._owners)
         self._updates = xp.zeros(self._owners.shape, dtype=xp.uint8)
@@ -122,11 +123,11 @@ class OrderRuntime:
         self._digest = xp.zeros((batch, 26), dtype=xp.uint32)
         self._digest[:, :8] = xp.asarray((0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19), dtype=xp.uint32)
-        self._oi = xp.zeros((batch, self.capacity, 9), dtype=xp.int64)
+        self._oi = xp.zeros((batch, self.capacity, 10), dtype=xp.int64)
         self._ov = xp.zeros((batch, self.capacity, 6), dtype=xp.float64)
         self._ci = xp.zeros((batch, self.command_capacity, 8), dtype=xp.int64)
         self._cv = xp.zeros((batch, self.command_capacity, 3), dtype=xp.float64)
-        self._ai = xp.zeros((batch, self.feedback_capacity, 8), dtype=xp.int64)
+        self._ai = xp.zeros((batch, self.feedback_capacity, 9), dtype=xp.int64)
         self._av = xp.zeros((batch, self.feedback_capacity, 4), dtype=xp.float64)
         self._count = xp.zeros(batch, dtype=xp.int64)
         shape = (batch, spec.schedule.measurement_count)
@@ -161,9 +162,14 @@ class OrderRuntime:
             self._detached(self._ov[:, :, 2]), self._detached(self._oi[:, :, 5]),
             self._detached(self._oi[:, :, 7].astype(xp.bool_)), self._detached(self._ov[:, :, 0]),
             self._detached(self._ov[:, :, 3]), self._detached(status))
+        margin = (xp.abs(self._assets[:, :, 0])*self._assets[:, :, 2]/self.account.leverage
+                  if self.account.margin == 'cross' else self._assets[:, :, 1])
+        available = (self._cash[:, 1]-margin.sum(axis=1) if self.account.margin == 'cross'
+                     else self._cash[:, 0]-self._cash[:, 14]) - self._cash[:, 3]
         return AccountSnapshot(self._detached(self._cash[:, 0]), self._detached(self._cash[:, 1]),
             self._detached(self._cash[:, 3]), self._detached(self._assets[:, :, 0]),
-            self._detached(self._assets[:, :, 1]), self._detached(self._assets[:, :, 3]), orders)
+            self._detached(margin), self._detached(self._assets[:, :, 3]), orders,
+            self._detached(available), self._detached(self._assets[:, :, 0]-self._assets[:, :, 4]))
 
     def _commands(self, commands: OrderCommands) -> None:
         if not isinstance(commands, OrderCommands):
@@ -230,9 +236,9 @@ class OrderRuntime:
         inputs = (self._panels[event], self._rules[event], self._assets, self._cash,
                   self._meta, self._oi, self._ov, self._ci, self._cv, self._ai, self._av, self._count,
                   self._owners, self._highwater, self._targets, self._updates, self._units, self._coefficients,
-                  self._pending_targets, self._target_dirty, self._activity, self._digest)
+                  self._pending_targets, self._target_dirty, self._activity, self._digest, self._owner_locked)
         self.native.step(inputs, int(self.spec.schedule.event_ns[event]),
-            int(self.account.margin == 'isolated'), int(self.execution.bar_path == 'open_high_low_close'),
+            ('cash', 'isolated', 'cross').index(self.account.margin), int(self.execution.bar_path == 'open_high_low_close'),
             int(measured), self.account.leverage, self.account.gross_limit, self.execution.participation, self.precision)
 
     def configure_targets(self, units: tuple[str, ...], coefficients: FloatArray) -> None:
@@ -293,7 +299,8 @@ class OrderRuntime:
         return ExecutionFeedback(self.snapshot(), self._detached(self._count),
             *[self._detached(self._ai[:, :, index]) for index in (1, 2, 3, 4, 5, 6, 7, 0)],
             *[self._detached(self._av[:, :, index]) for index in range(4)],
-            event_ns=int(self.spec.schedule.event_ns[event]), available_ns=int(self.spec.event_close_ns[event]))
+            event_ns=int(self.spec.schedule.event_ns[event]), available_ns=int(self.spec.event_close_ns[event]),
+            liquidity=self._detached(self._ai[:, :, 8]))
 
     def returns(self) -> FloatArray:
         self._ensure_open()
@@ -375,7 +382,7 @@ class OrderRuntime:
         self._ensure_open()
         if not isinstance(state, AccountCheckpoint):
             raise TypeError('Order account restore requires an AccountCheckpoint')
-        if state.format != 'order-account-v1':
+        if state.format != 'order-account-v2':
             raise ValueError('Unsupported order account checkpoint format')
         if state.snapshot != self._checkpoint_identity():
             raise ValueError('Order account checkpoint belongs to a different execution snapshot')
@@ -411,5 +418,5 @@ class OrderRuntime:
             for name in ('_panels', '_rules', '_event_times', '_assets', '_cash', '_meta', '_oi', '_ov',
                          '_ci', '_cv', '_ai', '_av', '_count', '_returns', '_equity', '_owners', '_highwater',
                          '_targets', '_updates', '_units', '_coefficients', '_pending_targets', '_target_dirty',
-                         '_activity', '_digest', '_active', '_risk_flows', '_risk_counts', '_risk_previous'):
+                         '_activity', '_digest', '_active', '_risk_flows', '_risk_counts', '_risk_previous', '_owner_locked'):
                 delattr(self, name)

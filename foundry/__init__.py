@@ -10,7 +10,7 @@ from foundry.search.proposer.gfn import GfnProposer
 from foundry.search.proposer.random import RandomProposer
 from foundry.study.program_registry import DeployedPrograms
 from foundry.types import Candidate, CandidateGrid, DataGrid, Fold, Formula, NO_INFORMATION, ResidentEvaluation
-from foundry.types import (AccountSnapshot, ExecutionFeedback, OrderAction, OrderCommands, OrderReason,
+from foundry.types import (AccountSnapshot, ExecutionFeedback, LiquidityRole, OrderAction, OrderCommands, OrderReason,
                            OrderSnapshot, OrderStage, OrderStatus, OrderType, ProgramContext,
                            ProgramDescriptor, ProgramEvent, ProgramPlan, ProgramRun, ProgramSimulation,
                            StrategyProgram, TensorState, ProgramArtifact, ProgramCatalog, ProgramReference, ProgramSource)
@@ -20,7 +20,7 @@ from foundry.types import ComputeDevice, LearningFeedback, ProposalBatch, Propos
 __all__ = ('Account', 'Clock', 'Execution', 'Sizing', 'NO_INFORMATION', 'ResidentEvaluation',
            'ComputeDevice', 'LearningFeedback', 'ProposalBatch', 'ProposalRequest', 'Proposer', 'TrainingResult',
            'AccountCheckpoint', 'CheckpointableRun', 'ProgramCheckpoint', 'StateTensor', 'load_program_checkpoint',
-           'AccountSnapshot', 'ExecutionFeedback', 'OrderAction', 'OrderCommands', 'OrderReason',
+           'AccountSnapshot', 'ExecutionFeedback', 'LiquidityRole', 'OrderAction', 'OrderCommands', 'OrderReason',
            'OrderSnapshot', 'OrderStage', 'OrderStatus', 'OrderType', 'ProgramContext',
            'ProgramDescriptor', 'ProgramEvent', 'ProgramPlan', 'ProgramRun', 'ProgramSimulation',
            'StrategyProgram', 'TensorState', 'DeployedPrograms', 'ProgramArtifact', 'ProgramCatalog', 'ProgramReference', 'ProgramSource',

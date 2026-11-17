@@ -63,11 +63,11 @@ Choose the execution model when opening the session:
 | Setting | Meaning |
 | --- | --- |
 | `Execution(model="targets")` | Default four-market target backtests; formulas and equity-fraction arrays |
-| `Execution(model="orders")` | Crypto spot/isolated USDT Bar accounts; formulas, arrays and programs share actual execution |
+| `Execution(model="orders")` | Four-market Bar accounts; cash settlement and isolated/cross USDT margin, with common actual execution for formulas, arrays and programs |
 | `Account(composition="shared")` | One actual account; member coefficients scale intents once |
 | `Account(composition="independent")` | Order model only; coefficients allocate initial cash to separate accounts once |
 
-US and A-share support is daily. Crypto can use daily data, the supported hourly perpetual archive, or publication-aware base bars with independent decision/statistics clocks. Equity order programs require settlement and corporate-action capabilities that are not currently available.
+US and A-share target backtests use daily artifacts. Equity order accounts also accept `market-bars-v2` regular-session intraday bars with independent decision/statistics clocks. Crypto can use daily data, the supported hourly perpetual archive, or publication-aware base bars. Equity order programs use compiled per-session settlement, corporate-action, quantity and tradability rules. Programs see available cash and sellable inventory; perpetual accounts support isolated or cross margin.
 
 For explicit 5-minute crypto data:
 
@@ -292,7 +292,7 @@ import foundry
 foundry.serve("var/runs/library.json", backend="cuda")
 ```
 
-Use `python -m foundry status` there to inspect the port. The service binds loopback; for another machine forward it with `ssh -L LOCAL_PORT:127.0.0.1:REMOTE_PORT user@host`, then connect from a checkout with the same client protocol and installed Python requirements:
+Use `python -m foundry status` there to inspect the port. The service binds loopback; for another machine forward it with `ssh -N -L LOCAL_PORT:127.0.0.1:REMOTE_PORT user@host`, then connect from a checkout with the same client protocol and the `client` dependency group installed (`python -m pip install --group client`):
 
 ```python
 import foundry
@@ -301,7 +301,7 @@ with foundry.connect(("127.0.0.1", 9000)) as session:
     report = session.evaluate("gt(ma_dist_20,0)")
 ```
 
-Replace `9000` with the local forwarded port. Native Windows clients need no Linux extensions or local CUDA. Model arrays upload as bounded NumPy binary bundles, with 1 GiB encoded/decoded limits. Program queries use explicitly deployed `ProgramReference` values; [deployment example](programs.md#remote-deployment).
+Replace `9000` with the local forwarded port. CLI requests can select it with `python -m foundry attach 127.0.0.1 9000`; `detach` clears only that selection. Foundry does not manage SSH credentials, tunnels, deployment or remote process startup. Add the `monitor` group when rendering a dashboard. Native Windows clients need no Linux extensions or local CUDA. Model arrays upload as bounded NumPy binary bundles, with 1 GiB encoded/decoded limits. Program queries use explicitly deployed `ProgramReference` values; [deployment example](programs.md#remote-deployment).
 
 The service serializes work through a bounded queue. Client disconnection does not cancel accepted commands, and closing a client does not stop shared compute. Context conflicts require explicit refresh. Old library/checkpoint/RPC protocols are rejected; rerun deliberately rather than guessing or migrating formats.
 

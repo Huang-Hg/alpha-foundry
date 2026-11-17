@@ -57,10 +57,10 @@ class OrderRuntime(HostOrderRuntime):
             (self._panels[event], self._rules[event], self._assets, self._cash,
              self._meta, self._oi, self._ov, self._ci, self._cv, self._ai, self._av, self._count,
              self._owners, self._highwater, self._targets, self._updates, self._units, self._coefficients,
-             self._pending_targets, self._target_dirty, self._activity, self._digest, self._scratch,
+             self._pending_targets, self._target_dirty, self._activity, self._digest, self._owner_locked, self._scratch,
              np.int64(self.batch), np.int64(self.assets), np.int64(self.capacity), np.int64(self.command_capacity),
              np.int64(self.feedback_capacity), np.int64(self.spec.schedule.event_ns[event]), np.int64(self.owner_count),
-             np.int32(self.account.margin == 'isolated'),
+             np.int32(('cash', 'isolated', 'cross').index(self.account.margin)),
              np.int32(self.execution.bar_path == 'open_high_low_close'),
              np.int32(measured),
              np.float64(self.account.leverage), np.float64(self.account.gross_limit), np.float64(self.execution.participation)))

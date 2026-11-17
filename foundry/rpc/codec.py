@@ -30,8 +30,8 @@ from foundry.types import (
 )
 
 
-PROGRAM_CHECKPOINT_FORMAT = 'program-checkpoint-v1'
-ACCOUNT_CHECKPOINT_FORMAT = 'order-account-v1'
+PROGRAM_CHECKPOINT_FORMAT = 'program-checkpoint-v2'
+ACCOUNT_CHECKPOINT_FORMAT = 'order-account-v2'
 ACCOUNT_CHECKPOINT_ARRAYS = tuple(item.name for item in fields(AccountCheckpoint)
                                 if item.name not in ('snapshot', 'cursor', 'format'))
 

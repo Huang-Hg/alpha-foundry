@@ -54,7 +54,7 @@ jobs:
           if failed:
               raise SystemExit('Published benchmark summaries report failure: ' + ', '.join(failed))
 
-          latest = Path('guides/benchmarks/program-transitions-l4-20261117')
+          latest = Path('guides/benchmarks/order-accounts-l4-20261117')
           summary = json.loads((latest / 'summary.json').read_text(encoding='utf-8'))
           source_map = summary.get('source', {})
           exact_match = bool(source_map) and all(
@@ -80,6 +80,6 @@ jobs:
           path: |
             guides/benchmarks/README.md
             guides/benchmarks/README.zh-CN.md
-            guides/benchmarks/program-transitions-l4-20261117/
+            guides/benchmarks/order-accounts-l4-20261117/
           if-no-files-found: error
           retention-days: 30

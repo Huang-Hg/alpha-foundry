@@ -399,11 +399,12 @@ class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
     categories = {'pricevolume': 'completed UTC daily trade-price/volume primitives',
                   'trend': 'daily trend; execution-only funding and mark risk stay outside features'}
 
-    def __init__(self, leverage: float, cost_rate: float, maintenance_rate: float, liquidation_fee: float,
+    def __init__(self, leverage: float, maker_fee: float, taker_fee: float, maintenance_rate: float, liquidation_fee: float,
                  gross_limit: float, clock: Clock = Clock(), execution: Execution = Execution()):
         self.leverage = leverage
         self.allocation = Allocation(gross_limit, True)
-        self.cost_rate, self.maintenance_rate, self.liquidation_fee = cost_rate, maintenance_rate, liquidation_fee
+        self.maker_fee, self.taker_fee = maker_fee, taker_fee
+        self.maintenance_rate, self.liquidation_fee = maintenance_rate, liquidation_fee
         self.clock = clock
         self.execution = execution
 
@@ -425,14 +426,14 @@ class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
         spec = PerpetualSpec(schedule, data.trade_open,
             data.mark_open, data.mark_high, data.mark_low, data.mark_close,
             data.funding_rate, data.funding_mark, np.full(shape, self.maintenance_rate),
-            np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee),
+            np.full(shape, self.taker_fee), np.full(shape, self.liquidation_fee),
             self.leverage, self.allocation.max_gross)
         panel = Panel(daily.dates, daily.assets, fields, src, backend)
         bars = {name: getattr(data, 'trade_' + name) for name in ('open', 'high', 'low', 'close')}
         bars.update({name: getattr(data, name) for name in
                      ('volume', 'mark_open', 'mark_high', 'mark_low', 'mark_close', 'funding_rate', 'funding_mark')})
         program_spec = crypto_bars(self.name, schedule, data.event_ns + HOUR_MS * 1_000_000,
-                                  bars, self.execution, self.cost_rate, self.maintenance_rate, self.liquidation_fee)
+                                  bars, self.execution, self.maker_fee, self.taker_fee, self.maintenance_rate, self.liquidation_fee)
         return LoadedStudy(study, self, panel, spec, window, daily.contract, program_spec)
 
     def _intraday(self, data: IntradayData, backend: Backend, study: Study) -> LoadedStudy[CryptoPerpetual, Panel, PerpetualSpec]:
@@ -447,13 +448,13 @@ class CryptoPerpetual(Market[PerpetualData | IntradayData, PerpetualSpec]):
         shape = g['open'].shape
         spec = PerpetualSpec(data.schedule, g['open'], g['mark_open'], g['mark_high'], g['mark_low'],
             g['mark_close'], g['funding_rate'], g['funding_mark'], np.full(shape, self.maintenance_rate),
-            np.full(shape, self.cost_rate), np.full(shape, self.liquidation_fee), self.leverage,
+            np.full(shape, self.taker_fee), np.full(shape, self.liquidation_fee), self.leverage,
             self.allocation.max_gross)
         self.ppy = data.periods_per_year
         self.decision_clock = data.clock.provenance
         self.execution_clock = 'next_base_bar_open_then_exact_funding_and_mark_risk'
         program_spec = crypto_bars(self.name, data.schedule, data.event_close_ns, g,
-                                  self.execution, self.cost_rate, self.maintenance_rate, self.liquidation_fee)
+                                  self.execution, self.maker_fee, self.taker_fee, self.maintenance_rate, self.liquidation_fee)
         return LoadedStudy(study, self, Panel(bars.dates, bars.assets, fields, src, backend), spec,
                            window, bars.contract, program_spec)
 

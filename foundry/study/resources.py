@@ -96,13 +96,13 @@ def load_study(settings: Settings, study: Study, backend: Backend) -> StudyData:
     """Read one artifact snapshot, then compile its market rules without IO."""
     cfg = settings.market
     if isinstance(cfg, AShareConfig):
-        market = AShare(cfg.commission, cfg.transfer_fee, cfg.stamp_tax_sell, settings.account.gross_limit)
+        market = AShare(cfg.commission, cfg.transfer_fee, cfg.stamp_tax_sell, settings.account.gross_limit, settings.clock, settings.execution)
     elif isinstance(cfg, UsEquityConfig):
-        market = UsEquity(cfg.cost_rate, cfg.daily_borrow, settings.account.gross_limit)
+        market = UsEquity(cfg.cost_rate, cfg.daily_borrow, settings.account.gross_limit, settings.clock, settings.execution)
     elif isinstance(cfg, CryptoSpotConfig):
-        market = CryptoSpot(cfg.cost_rate, settings.account.gross_limit, settings.clock, settings.execution)
+        market = CryptoSpot(cfg.maker_fee, cfg.taker_fee, settings.account.gross_limit, settings.clock, settings.execution)
     else:
-        market = CryptoPerpetual(settings.account.leverage, cfg.cost_rate, cfg.maintenance_rate,
+        market = CryptoPerpetual(settings.account.leverage, cfg.maker_fee, cfg.taker_fee, cfg.maintenance_rate,
                                  cfg.liquidation_fee, settings.account.gross_limit, settings.clock, settings.execution)
     return market.compile(load_data(settings, study), backend, study)
 
@@ -410,7 +410,7 @@ def open_runtime(settings: Settings, study: Study) -> Runtime:
             loaded = load_study(settings, study, backend)
             cleanup.callback(loaded.panel.release)
             if settings.execution.model == 'orders' and loaded.program_spec is None:
-                raise ValueError('The orders model requires compiled crypto Bar execution; equity settlement and corporate actions are unavailable')
+                raise ValueError('The orders model requires a market-bars-v2 artifact with explicit execution rules')
             program_data, program_backend, program_native = None, None, None
             if loaded.program_spec is not None:
                 program_data = orders.prepare_data(loaded.program_spec, backend.xp)

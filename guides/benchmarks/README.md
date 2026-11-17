@@ -4,6 +4,8 @@
 
 The [L4 consecutive admissions and reallocation report](program-transitions-l4-20261117/README.md) measures the end-to-end workflow when portfolio state changes, separating consecutive admissions from explicit two-member historical reallocation fixtures.
 
+The [L4 order-account acceptance](order-accounts-l4-20261117/README.md) covers maker/taker fees, cross margin and equity intraday orders: 125 checks and one bounded account-replay timing.
+
 | Historical measurement | Scope |
 | --- | --- |
 | [Review reuse](program-commit-l4-20261117/README.md) | All candidates rejected: 256 programs, query + commit `42.301 → 20.851 s`; does not extrapolate to consecutive admissions |

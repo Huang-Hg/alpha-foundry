@@ -55,15 +55,15 @@ class Sizing:
 @dataclass(frozen=True)
 class Account:
     """Collateral leverage and allowed gross notional/equity are separate limits."""
-    margin: Literal['cash', 'isolated'] = 'cash'
+    margin: Literal['cash', 'isolated', 'cross'] = 'cash'
     leverage: float = 1.
     gross_limit: float = 1.
     initial_cash: float = 1.
     composition: Literal['shared', 'independent'] = 'shared'
 
     def __post_init__(self) -> None:
-        if self.margin not in ('cash', 'isolated'):
-            raise ValueError('Account margin must be cash or isolated')
+        if self.margin not in ('cash', 'isolated', 'cross'):
+            raise ValueError('Account margin must be cash, isolated or cross')
         if not (math.isfinite(self.leverage) and self.leverage >= 1
                 and math.isfinite(self.gross_limit) and 0 < self.gross_limit <= self.leverage):
             raise ValueError('Account requires finite leverage >= 1 and 0 < gross_limit <= leverage')
@@ -132,7 +132,12 @@ class CryptoSpotConfig:
     data_dir: str = './data/crypto_spot_daily'
     start: str = '2024-01-01'
     end: str = '2025-12-31'
-    cost_rate: float = 0.001
+    maker_fee: float = 0.001
+    taker_fee: float = 0.001
+
+    def __post_init__(self) -> None:
+        if not (-1 < self.maker_fee < 1 and 0 <= self.taker_fee < 1):
+            raise ValueError('Maker fee must lie in (-1,1) and taker fee in [0,1)')
 
 
 @dataclass(frozen=True)
@@ -143,15 +148,16 @@ class CryptoPerpetualConfig:
     start: str = '2025-07-01'
     end: str = '2025-12-31'
     symbols: str = 'BTCUSDT ETHUSDT SOLUSDT'
-    cost_rate: float = 0.0004
+    maker_fee: float = 0.0004
+    taker_fee: float = 0.0004
     maintenance_rate: float = 0.005
     liquidation_fee: float = 0.0005
 
     def __post_init__(self):
-        if not (0 <= self.cost_rate < 1
+        if not (-1 < self.maker_fee < 1 and 0 <= self.taker_fee < 1
                 and 0 < self.maintenance_rate < 1
                 and 0 <= self.liquidation_fee < self.maintenance_rate):
-            raise ValueError('Invalid isolated-perpetual margin or fee parameters')
+            raise ValueError('Invalid perpetual margin or fee parameters')
 
 
 @dataclass(frozen=True)
@@ -313,6 +319,8 @@ class Parameters(TypedDict, total=False):
     start: str
     end: str
     cost_rate: float
+    maker_fee: float
+    taker_fee: float
     daily_borrow: float
     commission: float
     stamp_tax_sell: float
@@ -362,18 +370,18 @@ def configure(**parameters: Unpack[Parameters]) -> Settings:
     selected = factories[name](**parameters)
     account = groups['account']
     execution = groups['execution']
-    if execution.model == 'orders' and name not in ('crypto_spot', 'crypto_perpetual'):
-        raise ValueError('The orders model requires crypto Bar execution; equity settlement and corporate actions are unavailable')
     if account.composition == 'independent' and execution.model != 'orders':
         raise ValueError('Independent capital accounts require Execution(model="orders")')
-    if name in ('us_equity', 'a_share') and groups['clock'] != Clock():
-        raise ValueError('Equity data and execution plans currently require daily decision and statistics clocks')
-    if (name == 'crypto_perpetual') != (account.margin == 'isolated'):
-        raise ValueError('Isolated accounts require crypto_perpetual; other markets require cash accounts')
+    if name in ('us_equity', 'a_share') and groups['clock'] != Clock() and execution.model != 'orders':
+        raise ValueError('Intraday equity execution requires the orders model')
+    if (name == 'crypto_perpetual') != (account.margin != 'cash'):
+        raise ValueError('Perpetuals require isolated or cross margin; other markets require cash accounts')
+    if account.margin == 'cross' and execution.model != 'orders':
+        raise ValueError('Cross margin requires Execution(model="orders")')
     if isinstance(selected, CryptoPerpetualConfig) and not (
-            selected.cost_rate < 1 / account.leverage
+            max(selected.taker_fee, selected.maker_fee) < 1 / account.leverage
             and selected.maintenance_rate < 1 / account.leverage):
-        raise ValueError('Perpetual trading and maintenance rates must be below isolated collateral fraction')
+        raise ValueError('Perpetual trading and maintenance rates must be below the initial margin fraction')
     return replace(settings, market=selected, backend=backend, **groups)
 
 
