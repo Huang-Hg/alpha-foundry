@@ -1,4 +1,4 @@
-/* foundry/backtest/src/kernel.cpp — daily execution kernel; see kernel.hpp for semantics.
+/* Scheduled cash execution kernel; see kernel.hpp for semantics.
  *
  * Optional inputs expand into template bools by presence: unused generalisations vanish at compile time, leaving the
  * base instantiation's symmetric execution loops identical. That is required for bitwise agreement —
@@ -20,6 +20,7 @@ static void run(const double* w,
                 const double* open_ff0, const double* close_ff0,
                 const double* cost_buy, const double* cost_sell,
                 const uint8_t* live, const uint8_t* block, const double* carry,
+                const int64_t* decision, const int64_t* measurement,
                 int64_t T, int64_t S, double* rr_out) {
     std::vector<double> wt(S), shares(S, 0.0);
     std::vector<uint8_t> tradable(BLOCK ? S : 0);
@@ -34,11 +35,11 @@ static void run(const double* w,
         const double*  sl    = cost_buy   + day * S;
         const uint8_t* ul    = live       + day * S;
 
-        /* --- Effective weights for today: shift-1 -> normalize -> open adjustment -> normalize --- */
-        if (day == 0) {
+        /* --- Scheduled target: normalize -> open adjustment -> normalize --- */
+        if (decision[day] < 0) {
             for (int64_t a = 0; a < S; a++) wt[a] = 0.0;
         } else {
-            const double* wrow = w + (day - 1) * S;
+            const double* wrow = w + decision[day] * S;
             double s1 = 0.0;
             for (int64_t a = 0; a < S; a++) {
                 double x = wrow[a];
@@ -120,7 +121,7 @@ static void run(const double* w,
             }
         }
 
-        if (w_operable < PRICE_EPS) {
+        if (decision[day] < 0 || w_operable < PRICE_EPS) {
             eq_after = eq_before;
         } else {
             double step_slip = 0.0;
@@ -149,10 +150,12 @@ static void run(const double* w,
         }
         const double eq_tonight = eq_after + mtm2;
 
-        double rr = eq_tonight / prev_tonight - 1.0;
-        if (!std::isfinite(rr)) rr = 0.0;
-        rr_out[day] = rr;
-        prev_tonight = eq_tonight;
+        if (day + 1 == T || measurement[day + 1] != measurement[day]) {
+            double rr = eq_tonight / prev_tonight - 1.0;
+            if (!std::isfinite(rr)) rr = 0.0;
+            rr_out[measurement[day]] = rr;
+            prev_tonight = eq_tonight;
+        }
 
         for (int64_t a = 0; a < S; a++)
             if (!ul[a]) shares[a] = 0.0;                       // zero untradable shares (after tonight's mark)
@@ -164,6 +167,7 @@ void simulate(const double* w,
               const double* open_ff0, const double* close_ff0,
               const double* cost_buy, const double* cost_sell,
               const uint8_t* live, const uint8_t* block, const double* carry,
+              const int64_t* decision, const int64_t* measurement,
               int64_t T, int64_t S, double* rr_out) {
     using Run = decltype(&run<false, false, false>);
     static constexpr Run variants[8] = {
@@ -172,7 +176,7 @@ void simulate(const double* w,
     };
     const int k = (cost_sell != nullptr) | (block != nullptr) << 1 | (carry != nullptr) << 2;
     variants[k](w, open_raw, prev_close, open_ff0, close_ff0, cost_buy, cost_sell, live, block, carry,
-                T, S, rr_out);
+                decision, measurement, T, S, rr_out);
 }
 
 }  // namespace bt
