@@ -1,25 +1,20 @@
-"""Portfolio state and pure successor construction after admission."""
-from foundry.portfolio import admission
+"""Immutable portfolio state and pure membership successor construction."""
+from dataclasses import dataclass
+
 from foundry.portfolio.library import Library
 from foundry.portfolio.reference import Reference
+from foundry.types import EvaluationRow, Verdict
 
 
+@dataclass(frozen=True)
 class Portfolio:
-    def __init__(self, engine, library: Library, null_shift=False):
-        assert engine.study == library.study
-        self.engine, self.library, self.null_shift = engine, library, null_shift
-        self.reference = Reference.build(engine, library.members, null_shift)
-        self.reference.version = library.version
+    library: Library
+    reference: Reference
 
     @property
-    def version(self):
+    def version(self) -> str:
         return self.library.version
 
-    def admit(self, rows):
-        return admission.admit(self.engine, rows, self.reference)
-
-    def accepted(self, row, verdict):
-        proposal = verdict.proposal
-        assert verdict.passed and verdict.source == row.source
-        assert proposal.reference_version == self.version
-        return Portfolio(self.engine, self.library.add(row.source, proposal.weight), self.null_shift)
+    def accepted(self, row: EvaluationRow, verdict: Verdict) -> Library:
+        """Construct membership after admission; evaluation belongs to the caller."""
+        return self.library.add(row.source, verdict.proposal.weight)

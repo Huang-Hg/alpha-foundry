@@ -1,24 +1,13 @@
-"""Configuration: one INI file (config/config.ini), one dataclass per section.
-
-`ini(section, key, default)` declares a field. Only load_config reads the INI,
-at explicit application startup; domain and compute objects receive its values.
-"""
+"""Public parameter values and market presets; no configuration files or implicit IO."""
 from __future__ import annotations
 
-import configparser
 import math
-from dataclasses import dataclass, field, fields
+import re
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TypeVar
+from typing import Literal, TypedDict, Unpack
 
 ROOT = Path(__file__).resolve().parents[1]
-
-T = TypeVar('T')
-
-
-def ini(section: str, key: str, default: T) -> T:
-    return field(default=default, metadata=dict(section=section, key=key))
-
 
 def path(value: str) -> Path:
     """A configured path, relative to the repository root unless absolute."""
@@ -26,134 +15,239 @@ def path(value: str) -> Path:
     return p if p.is_absolute() else ROOT / p
 
 
-@dataclass(frozen=True)
-class MarketConfig:
-    name: str = ini('market', 'name', 'us_equity')
+def frequency_nanoseconds(value: str) -> int:
+    """Resolve a fixed UTC duration; calendar months are not fixed durations."""
+    match = re.fullmatch(r'([1-9][0-9]*)(s|min|h|D)', value) if isinstance(value, str) else None
+    if match is None:
+        raise ValueError('Clock frequencies require a positive integer followed by s, min, h or D')
+    result = int(match[1]) * {'s': 1, 'min': 60, 'h': 3600, 'D': 86400}[match[2]] * 1000000000
+    if result > 9223372036854775807:
+        raise ValueError('Clock frequency exceeds the UTC nanosecond range')
+    return result
 
 
 @dataclass(frozen=True)
-class ExecutionConfig:
-    backend: str = ini('execution', 'backend', 'cuda')
+class Clock:
+    """Independent fixed decision and valuation periods on the market clock."""
+    decision: str = '1D'
+    statistics: str = '1D'
+
+    def __post_init__(self) -> None:
+        frequency_nanoseconds(self.decision)
+        frequency_nanoseconds(self.statistics)
+
+
+@dataclass(frozen=True)
+class Sizing:
+    """Score mapping; independent targets use scale without asset-count dilution."""
+    rule: Literal['equal_slots', 'independent'] = 'equal_slots'
+    scale: float = 1.
+
+    def __post_init__(self) -> None:
+        if self.rule not in ('equal_slots', 'independent'):
+            raise ValueError('Sizing rule must be equal_slots or independent')
+        if not math.isfinite(self.scale) or self.scale <= 0:
+            raise ValueError('Sizing scale must be positive and finite')
+        if self.rule == 'equal_slots' and self.scale != 1.:
+            raise ValueError('equal_slots requires scale=1; choose independent for explicit scaling')
+
+
+@dataclass(frozen=True)
+class Account:
+    """Collateral leverage and allowed gross notional/equity are separate limits."""
+    margin: Literal['cash', 'isolated', 'cross'] = 'cash'
+    leverage: float = 1.
+    gross_limit: float = 1.
+    initial_cash: float = 1.
+    composition: Literal['shared', 'independent'] = 'shared'
+
+    def __post_init__(self) -> None:
+        if self.margin not in ('cash', 'isolated', 'cross'):
+            raise ValueError('Account margin must be cash, isolated or cross')
+        if not (math.isfinite(self.leverage) and self.leverage >= 1
+                and math.isfinite(self.gross_limit) and 0 < self.gross_limit <= self.leverage):
+            raise ValueError('Account requires finite leverage >= 1 and 0 < gross_limit <= leverage')
+        if self.margin == 'cash' and self.leverage != 1:
+            raise ValueError('Cash accounts require leverage=1')
+        if not math.isfinite(self.initial_cash) or self.initial_cash <= 0:
+            raise ValueError('Initial quote cash must be positive and finite')
+        if self.composition not in ('shared', 'independent'):
+            raise ValueError('Account composition must be shared or independent')
+
+
+@dataclass(frozen=True)
+class Execution:
+    """Bar fill rule; next_open means the next base bar after the decision."""
+    fill: Literal['next_open'] = 'next_open'
+    model: Literal['targets', 'orders'] = 'targets'
+    precision: Literal['paired', 'mixed'] = 'paired'
+    bar_path: Literal['open_low_high_close', 'open_high_low_close'] = 'open_low_high_close'
+    participation: float = 1.
+    order_capacity: int = 32
+    command_capacity: int = 32
+    quantity_step: float = 0.
+    price_tick: float = 0.
+
+    def __post_init__(self) -> None:
+        if self.fill != 'next_open':
+            raise ValueError('The target execution plan supports only next_open fills')
+        if self.model not in ('targets', 'orders'):
+            raise ValueError('Execution model must be targets or orders')
+        if self.precision not in ('paired', 'mixed'):
+            raise ValueError('Execution precision must be paired or mixed')
+        if self.bar_path not in ('open_low_high_close', 'open_high_low_close'):
+            raise ValueError('Unknown deterministic Bar path')
+        if not math.isfinite(self.participation) or not 0 < self.participation <= 1:
+            raise ValueError('Volume participation must lie in (0,1]')
+        if any(type(value) is not int or value < 1 for value in (self.order_capacity, self.command_capacity)):
+            raise ValueError('Order and command capacities must be positive integers')
+        if any(not math.isfinite(value) or value < 0 for value in (self.quantity_step, self.price_tick)):
+            raise ValueError('Quantity and price steps must be finite and nonnegative; zero means continuous')
 
 
 @dataclass(frozen=True)
 class UsEquityConfig:
-    data_dir: str = ini('us_equity', 'data_dir', './data/us_equity_daily')
-    start: str = ini('us_equity', 'start', '2025-07-01')
-    end: str = ini('us_equity', 'end', '2026-06-30')
-    cost_rate: float = ini('us_equity', 'cost_rate', 0.0005)
-    daily_borrow: float = ini('us_equity', 'daily_borrow', 0.0)
+    name: Literal['us_equity'] = field(default='us_equity', init=False)
+    data_dir: str = './data/us_equity_daily'
+    start: str = '2025-07-01'
+    end: str = '2026-06-30'
+    cost_rate: float = 0.0005
+    daily_borrow: float = 0.0
 
 
 @dataclass(frozen=True)
 class AShareConfig:
-    data_dir: str = ini('a_share', 'data_dir', './data/a_share_pit')
-    start: str = ini('a_share', 'start', '2024-03-01')
-    end: str = ini('a_share', 'end', '2026-06-30')
-    commission: float = ini('a_share', 'commission', 0.00025)
-    stamp_tax_sell: float = ini('a_share', 'stamp_tax_sell', 0.0005)
-    transfer_fee: float = ini('a_share', 'transfer_fee', 0.00001)
+    name: Literal['a_share'] = field(default='a_share', init=False)
+    data_dir: str = './data/a_share_pit'
+    start: str = '2024-03-01'
+    end: str = '2026-06-30'
+    commission: float = 0.00025
+    stamp_tax_sell: float = 0.0005
+    transfer_fee: float = 1e-05
 
 
 @dataclass(frozen=True)
 class CryptoSpotConfig:
-    data_dir: str = ini('crypto_spot', 'data_dir', './data/crypto_spot_daily')
-    start: str = ini('crypto_spot', 'start', '2024-01-01')
-    end: str = ini('crypto_spot', 'end', '2025-12-31')
-    cost_rate: float = ini('crypto_spot', 'cost_rate', 0.001)
+    name: Literal['crypto_spot'] = field(default='crypto_spot', init=False)
+    data_dir: str = './data/crypto_spot_daily'
+    start: str = '2024-01-01'
+    end: str = '2025-12-31'
+    maker_fee: float = 0.001
+    taker_fee: float = 0.001
+
+    def __post_init__(self) -> None:
+        if not (-1 < self.maker_fee < 1 and 0 <= self.taker_fee < 1):
+            raise ValueError('Maker fee must lie in (-1,1) and taker fee in [0,1)')
 
 
 @dataclass(frozen=True)
 class CryptoPerpetualConfig:
-    data_dir: str = ini('crypto_perpetual', 'data_dir', './data/crypto_perpetual')
-    history_start: str = ini('crypto_perpetual', 'history_start', '2025-01-01')
-    start: str = ini('crypto_perpetual', 'start', '2025-07-01')
-    end: str = ini('crypto_perpetual', 'end', '2025-12-31')
-    symbols: str = ini('crypto_perpetual', 'symbols', 'BTCUSDT ETHUSDT SOLUSDT')
-    leverage: float = ini('crypto_perpetual', 'leverage', 5.)
-    cost_rate: float = ini('crypto_perpetual', 'cost_rate', .0004)
-    maintenance_rate: float = ini('crypto_perpetual', 'maintenance_rate', .005)
-    liquidation_fee: float = ini('crypto_perpetual', 'liquidation_fee', .0005)
+    name: Literal['crypto_perpetual'] = field(default='crypto_perpetual', init=False)
+    data_dir: str = './data/crypto_perpetual'
+    history_start: str = '2025-01-01'
+    start: str = '2025-07-01'
+    end: str = '2025-12-31'
+    symbols: str = 'BTCUSDT ETHUSDT SOLUSDT'
+    maker_fee: float = 0.0004
+    taker_fee: float = 0.0004
+    maintenance_rate: float = 0.005
+    liquidation_fee: float = 0.0005
 
     def __post_init__(self):
-        if not (math.isfinite(self.leverage) and self.leverage >= 1
-                and 0 <= self.cost_rate < 1 / self.leverage
-                and 0 < self.maintenance_rate < 1 / self.leverage
+        if not (-1 < self.maker_fee < 1 and 0 <= self.taker_fee < 1
+                and 0 < self.maintenance_rate < 1
                 and 0 <= self.liquidation_fee < self.maintenance_rate):
-            raise ValueError('Invalid isolated-perpetual margin or fee parameters')
+            raise ValueError('Invalid perpetual margin or fee parameters')
 
 
 @dataclass(frozen=True)
 class ExprConfig:
-    max_cost: int = ini('expr', 'max_cost', 25)
+    max_cost: int = 25
+
+
+@dataclass(frozen=True)
+class CpuConfig:
+    workers: int = 8
+    candidate_batch: int = 32
+    measurement_cache_mib: int = 32
+
+    def __post_init__(self):
+        if any(type(x) is not int or x < 1 for x in (self.workers, self.candidate_batch)):
+            raise ValueError('CPU workers and candidate_batch must be positive integers')
+        if type(self.measurement_cache_mib) is not int or self.measurement_cache_mib < 0:
+            raise ValueError('CPU measurement_cache_mib must be a nonnegative integer')
 
 
 @dataclass(frozen=True)
 class CudaConfig:
-    streams: int = ini('cuda', 'streams', 8)
-    candidate_batch: int = ini('cuda', 'candidate_batch', 256)
-    trial_batch: int = ini('cuda', 'trial_batch', 16384)
-    precision: str = ini('cuda', 'precision', 'paired')
-    return_atol: float = ini('cuda', 'return_atol', 1e-6)
-    perpetual_host_cells: int = ini('cuda', 'perpetual_host_cells', 100000)
+    streams: int = 8
+    candidate_batch: int = 256
+    trial_batch: int = 16384
+    return_atol: float = 1e-06
+    perpetual_host_cells: int = 100000
+    measurement_cache_mib: int = 32
 
     def __post_init__(self):
         if self.streams <= 0 or self.candidate_batch <= 0 or self.trial_batch <= 0:
-            raise ValueError('[cuda] stream count and batch sizes must be positive')
-        if self.precision not in ('mixed', 'paired'):
-            raise ValueError('[cuda] precision must be mixed or paired')
+            raise ValueError('CUDA parameters stream count and batch sizes must be positive')
         if not (math.isfinite(self.return_atol) and self.return_atol > 0):
-            raise ValueError('[cuda] return error budget must be positive')
+            raise ValueError('CUDA parameters return error budget must be positive')
         if self.perpetual_host_cells < 0:
-            raise ValueError('[cuda] perpetual_host_cells must be nonnegative')
+            raise ValueError('CUDA parameters perpetual_host_cells must be nonnegative')
+        if type(self.measurement_cache_mib) is not int or self.measurement_cache_mib < 0:
+            raise ValueError('CUDA parameters measurement_cache_mib must be a nonnegative integer')
 
 
 @dataclass(frozen=True)
 class PortfolioConfig:
-    artifact_dir: str = ini('portfolio', 'artifact_dir', './data/candidates')
-    weight_sum_atol: float = ini('portfolio', 'weight_sum_atol', 1e-7)
-    metric_atol: float = ini('portfolio', 'metric_atol', 1e-10)
-    min_sharpe_gain: float = ini('portfolio', 'min_sharpe_gain', 0.01)
-    weight_steps: int = ini('portfolio', 'weight_steps', 20)
-    recent_halflife_days: int = ini('portfolio', 'recent_halflife_days', 1095)
-    max_members: int = ini('portfolio', 'max_members', 40)
-    sharpe_scale: float = ini('portfolio', 'sharpe_scale', 0.1)
-    growth_scale: float = ini('portfolio', 'growth_scale', 0.02)
-    violation_scale_wsharpe: float = ini('portfolio', 'violation_scale_wsharpe', 0.1)
-    violation_scale_sharpe: float = ini('portfolio', 'violation_scale_sharpe', 0.1)
-    violation_scale_cagr: float = ini('portfolio', 'violation_scale_cagr', 0.02)
-    violation_scale_growth: float = ini('portfolio', 'violation_scale_growth', 0.02)
+    artifact_dir: str = './var/candidates'
+    weight_sum_atol: float = 1e-07
+    metric_atol: float = 1e-10
+    min_sharpe_gain: float = 0.01
+    weight_steps: int = 20
+    recent_halflife_days: int = 1095
+    max_members: int = 40
+    sharpe_scale: float = 0.1
+    growth_scale: float = 0.02
+
 
     def __post_init__(self):
         if not all(math.isfinite(x) and x > 0 for x in (
-                self.metric_atol, self.weight_sum_atol, self.sharpe_scale, self.growth_scale, self.violation_scale_wsharpe, self.violation_scale_sharpe,
-                self.violation_scale_cagr, self.violation_scale_growth)):
-            raise ValueError('[portfolio] utility and violation scales must be positive and finite')
+                self.metric_atol, self.weight_sum_atol, self.sharpe_scale, self.growth_scale)):
+            raise ValueError('Admission parameters utility scales must be positive and finite')
 
 
 @dataclass(frozen=True)
 class SearchConfig:
-    mode: str = ini('search', 'mode', 'gfn')
-    seed_portfolio: str = ini('search', 'seed_portfolio', 'equal')
-    objective: str = ini('search', 'objective', 'portfolio')
-    null_shift: bool = ini('search', 'null_shift', False)
-    accept: bool = ini('search', 'accept', False)
-    seed: int = ini('search', 'seed', 25)
-    epochs: int = ini('search', 'epochs', 20)
-    batch_size: int = ini('search', 'batch_size', 128)
-    probes: int = ini('search', 'probes', 2)
-    max_tokens: int = ini('search', 'max_tokens', 13)
-    max_ts_depth: int = ini('search', 'max_ts_depth', 2)
-    train_steps: int = ini('search', 'train_steps', 4)
-    learning_rate: float = ini('search', 'learning_rate', .002)
-    opd_strength: float = ini('search', 'opd_strength', .1)
-    rho_max: float = ini('search', 'rho_max', .9)
-    archive_size: int = ini('search', 'archive_size', 32)
-    reweight_iterations: int = ini('search', 'reweight_iterations', 3)
-    reweight_batch: int = ini('search', 'reweight_batch', 32)
-    reweight_every: int = ini('search', 'reweight_every', 5)
+    violation_scale_wsharpe: float = 0.081
+    violation_scale_sharpe: float = 0.063
+    violation_scale_cagr: float = 0.079
+    violation_scale_growth: float = 0.024
+    mode: str = 'gfn'
+    seed_portfolio: str = 'equal'
+    objective: str = 'portfolio'
+    noise_control: bool = False
+    accept: bool = False
+    seed: int = 25
+    epochs: int = 5
+    batch_size: int = 128
+    probes: int = 2
+    max_tokens: int = 13
+    max_ts_depth: int = 2
+    train_steps: int = 4
+    learning_rate: float = 0.002
+    opd_strength: float = 0.1
+    rho_max: float = 0.9
+    archive_size: int = 32
+    reweight_iterations: int = 3
+    reweight_batch: int = 32
+    reweight_every: int = 5
 
     def __post_init__(self):
+        if not all(math.isfinite(x) and x > 0 for x in (
+                self.violation_scale_wsharpe, self.violation_scale_sharpe,
+                self.violation_scale_cagr, self.violation_scale_growth)):
+            raise ValueError('Search violation scales must be positive and finite')
         if not (self.mode in ('gfn','random') and self.seed_portfolio in ('current','equal')
                 and self.objective in ('portfolio','single')
                 and 1 <= self.batch_size <= 8192 and 0 <= self.probes <= self.batch_size
@@ -162,24 +256,24 @@ class SearchConfig:
                 and 0 <= self.reweight_iterations <= 100 and 2 <= self.reweight_batch <= 8192 and self.reweight_every > 0
                 and self.seed >= 0 and 0 < self.learning_rate <= .1
                 and 0 <= self.opd_strength <= 10 and 0 < self.rho_max <= 1):
-            raise ValueError('Invalid [search] configuration')
+            raise ValueError('Invalid Search parameters configuration')
 
 
 @dataclass(frozen=True)
 class SingleConfig:
-    calibration_sample: int = ini('single', 'calibration_sample', 8192)
-    anchor_correlation: float = ini('single', 'anchor_correlation', .7)
-    anchor_sharpe: float = ini('single', 'anchor_sharpe', 1.5)
-    recent_years: int = ini('single', 'recent_years', 2)
-    recent_year_sharpe: float = ini('single', 'recent_year_sharpe', 1.)
-    weight_sharpe: float = ini('single', 'weight_sharpe', .6)
-    weight_drawdown: float = ini('single', 'weight_drawdown', .2)
-    weight_return: float = ini('single', 'weight_return', .2)
-    sharpe_scale: float = ini('single', 'sharpe_scale', 2.)
-    drawdown_full: float = ini('single', 'drawdown_full', .6)
-    return_scale: float = ini('single', 'return_scale', 1.)
-    violation_scale_sharpe: float = ini('single', 'violation_scale_sharpe', 1.)
-    violation_scale_year: float = ini('single', 'violation_scale_year', 1.)
+    calibration_sample: int = 8192
+    anchor_correlation: float = 0.7
+    anchor_sharpe: float = 1.5
+    recent_years: int = 2
+    recent_year_sharpe: float = 1.0
+    weight_sharpe: float = 0.6
+    weight_drawdown: float = 0.2
+    weight_return: float = 0.2
+    sharpe_scale: float = 2.0
+    drawdown_full: float = 0.6
+    return_scale: float = 1.0
+    violation_scale_sharpe: float = 1.3
+    violation_scale_year: float = 3.35
 
     def __post_init__(self):
         weights = (self.weight_sharpe, self.weight_drawdown, self.weight_return)
@@ -188,48 +282,111 @@ class SingleConfig:
                 and abs(sum(weights) - 1) < 1e-9 and self.weight_sharpe >= max(weights)
                 and min(self.sharpe_scale, self.drawdown_full, self.return_scale,
                         self.violation_scale_sharpe, self.violation_scale_year) > 0):
-            raise ValueError('Invalid [single] configuration')
+            raise ValueError('Invalid Single-strategy parameters configuration')
 
 
 @dataclass(frozen=True)
 class MonitorConfig:
-    frame_seconds: float = ini('monitor', 'frame_seconds', .1)
-    push_seconds: float = ini('monitor', 'push_seconds', 2.)
+    frame_seconds: float = 0.1
+    push_seconds: float = 2.0
+
+
+MarketConfig = UsEquityConfig | AShareConfig | CryptoSpotConfig | CryptoPerpetualConfig
 
 
 @dataclass(frozen=True)
 class Settings:
-    market: MarketConfig
-    execution: ExecutionConfig
-    a_share: AShareConfig
-    us_equity: UsEquityConfig
-    crypto_spot: CryptoSpotConfig
-    crypto_perpetual: CryptoPerpetualConfig
-    expr: ExprConfig
+    market: MarketConfig = field(default_factory=UsEquityConfig)
+    backend: Literal['cpu', 'cuda', 'portable'] = 'cuda'
+    clock: Clock = field(default_factory=Clock)
+    sizing: Sizing = field(default_factory=Sizing)
+    account: Account = field(default_factory=Account)
+    execution: Execution = field(default_factory=Execution)
+    expr: ExprConfig = field(default_factory=ExprConfig)
+    cuda: CudaConfig = field(default_factory=CudaConfig)
+    cpu: CpuConfig = field(default_factory=CpuConfig)
+    portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
+    search: SearchConfig = field(default_factory=SearchConfig)
+    single: SingleConfig = field(default_factory=SingleConfig)
+    monitor: MonitorConfig = field(default_factory=MonitorConfig)
+
+
+class Parameters(TypedDict, total=False):
+    """Keyword parameters shared by public sessions, miners and service startup."""
+    market: Literal['us_equity', 'a_share', 'crypto_spot', 'crypto_perpetual']
+    backend: Literal['cpu', 'cuda', 'portable']
+    data_dir: str
+    start: str
+    end: str
+    cost_rate: float
+    maker_fee: float
+    taker_fee: float
+    daily_borrow: float
+    commission: float
+    stamp_tax_sell: float
+    transfer_fee: float
+    history_start: str
+    symbols: str
+    maintenance_rate: float
+    liquidation_fee: float
+    clock: Clock
+    sizing: Sizing
+    account: Account
+    execution: Execution
     cuda: CudaConfig
-    portfolio: PortfolioConfig
+    cpu: CpuConfig
+    admission: PortfolioConfig
+    operators: ExprConfig
     search: SearchConfig
     single: SingleConfig
     monitor: MonitorConfig
 
 
-def load_config() -> Settings:
-    """Read the one configuration file once, returning an immutable snapshot."""
-    parser = configparser.ConfigParser(inline_comment_prefixes=(';', '#'))
-    with (ROOT / 'config' / 'config.ini').open(encoding='utf-8') as source:
-        parser.read_file(source)
-    types = dict(market=MarketConfig, execution=ExecutionConfig, a_share=AShareConfig,
-                 us_equity=UsEquityConfig, crypto_spot=CryptoSpotConfig, crypto_perpetual=CryptoPerpetualConfig,
-                 expr=ExprConfig, cuda=CudaConfig,
-                 portfolio=PortfolioConfig, search=SearchConfig, single=SingleConfig,
-                 monitor=MonitorConfig)
-    sections = {}
-    for name, kind in types.items():
-        values = {}
-        for definition in fields(kind):
-            section, key = definition.metadata['section'], definition.metadata['key']
-            value_type = type(definition.default)
-            values[definition.name] = (parser.getboolean(section, key) if value_type is bool
-                                       else value_type(parser[section][key]))
-        sections[name] = kind(**values)
-    return Settings(**sections)
+PARAMETER_GROUPS = dict(clock=('clock', Clock), sizing=('sizing', Sizing), account=('account', Account),
+                        execution=('execution', Execution),
+                        cuda=('cuda', CudaConfig), cpu=('cpu', CpuConfig), admission=('portfolio', PortfolioConfig),
+                        operators=('expr', ExprConfig), search=('search', SearchConfig),
+                        single=('single', SingleConfig), monitor=('monitor', MonitorConfig))
+
+
+def configure(**parameters: Unpack[Parameters]) -> Settings:
+    """Resolve one explicit parameter set against the selected market's defaults."""
+    settings = Settings()
+    name = parameters.pop('market', settings.market.name)
+    factories = {'us_equity': UsEquityConfig, 'a_share': AShareConfig,
+                 'crypto_spot': CryptoSpotConfig, 'crypto_perpetual': CryptoPerpetualConfig}
+    if name not in factories:
+        raise ValueError(f'Unknown market: {name}')
+    backend = parameters.pop('backend', settings.backend)
+    if backend not in ('cpu', 'cuda', 'portable'):
+        raise ValueError(f'Unknown execution backend: {backend}')
+    account = Account('isolated', 5., 5.) if name == 'crypto_perpetual' else Account()
+    settings = replace(settings, account=account)
+    groups = {field_name: parameters.pop(public_name, getattr(settings, field_name))
+              for public_name, (field_name, _) in PARAMETER_GROUPS.items()}
+    for public_name, (field_name, kind) in PARAMETER_GROUPS.items():
+        if not isinstance(groups[field_name], kind):
+            raise TypeError(f'{public_name} requires {kind.__name__}')
+    selected = factories[name](**parameters)
+    account = groups['account']
+    execution = groups['execution']
+    if account.composition == 'independent' and execution.model != 'orders':
+        raise ValueError('Independent capital accounts require Execution(model="orders")')
+    if name in ('us_equity', 'a_share') and groups['clock'] != Clock() and execution.model != 'orders':
+        raise ValueError('Intraday equity execution requires the orders model')
+    if (name == 'crypto_perpetual') != (account.margin != 'cash'):
+        raise ValueError('Perpetuals require isolated or cross margin; other markets require cash accounts')
+    if account.margin == 'cross' and execution.model != 'orders':
+        raise ValueError('Cross margin requires Execution(model="orders")')
+    if isinstance(selected, CryptoPerpetualConfig) and not (
+            max(selected.taker_fee, selected.maker_fee) < 1 / account.leverage
+            and selected.maintenance_rate < 1 / account.leverage):
+        raise ValueError('Perpetual trading and maintenance rates must be below the initial margin fraction')
+    return replace(settings, market=selected, backend=backend, **groups)
+
+
+
+def parameters_from_json(record: dict) -> dict:
+    """Decode nested public parameter groups at a JSON request boundary."""
+    return {name: PARAMETER_GROUPS[name][1](**value) if name in PARAMETER_GROUPS else value
+            for name, value in record.items()}

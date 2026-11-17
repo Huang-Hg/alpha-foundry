@@ -1,5 +1,5 @@
 /* Native CPU recurrence for the explicit isolated-perpetual model.
- * Inputs have passed the data boundary. Stages: gap, funding, daily rebalance,
+ * Inputs have passed the data boundary. Stages: gap, funding, scheduled target,
  * adverse-mark touch, close. No cash-market normalization or financing rules. */
 #pragma once
 #include "perpetual_output.hpp"
@@ -8,11 +8,11 @@ namespace bt {
 
 struct PerpetualInput {
     const long long* times;
-    const long long* day;
-    const unsigned char* rebalance;
+    const long long* measurement;
+    const long long* decision;
     const double *trade, *open, *high, *low, *close;
     const double *funding, *funding_mark, *maintenance, *fee, *liquidation_fee;
-    long long events, days, assets;
+    long long events, decisions, measurements, assets;
     double leverage;
 };
 
@@ -40,7 +40,7 @@ inline void perp_liquidate(const PerpetualInput& in, PerpetualOutput& out,
                                  long long event, long long asset, unsigned char stage,
                                  double price, double equity, double* q, double* bucket,
                                  double& cash) {
-    const long long k = event * in.assets + asset, day = in.day[event];
+    const long long k = event * in.assets + asset, day = in.measurement[event];
     const double nominal_fee = in.liquidation_fee[k] * perp_abs(q[asset]) * price;
     const double available = perp_max(equity, 0.0);
     const double paid_fee = perp_min(available, nominal_fee);
@@ -65,7 +65,7 @@ inline void run_perpetual(const PerpetualInput& in, const double* weights,
         q[a] = 0.0; bucket[a] = 0.0; lastmark[a] = in.open[a];
     }
     for (long long event = 0; event < in.events; ++event) {
-        const long long offset = event * S, day = in.day[event];
+        const long long offset = event * S, day = in.measurement[event];
         const double* mark = in.open + offset;
         if (!bankrupt) {
             for (long long a = 0; a < S; ++a)
@@ -86,8 +86,8 @@ inline void run_perpetual(const PerpetualInput& in, const double* weights,
             }
             double equity = perp_equity(cash, bucket, S);
             if (equity <= 0.0) bankrupt = true;
-            if (!bankrupt && in.rebalance[event] && day > 0) {
-                const double* w = weights + (day - 1) * S;
+            if (!bankrupt && in.decision[event] >= 0) {
+                const double* w = weights + in.decision[event] * S;
                 double A = equity, C = 0.0, fees_zero = 0.0;
                 for (long long a = 0; a < S; ++a) {
                     const long long k = offset + a;
@@ -153,7 +153,7 @@ inline void run_perpetual(const PerpetualInput& in, const double* weights,
                 for (long long a = 0; a < S; ++a) { q[a] = 0.0; bucket[a] = 0.0; }
             }
         }
-        if (event + 1 == in.events || in.day[event + 1] != day) {
+        if (event + 1 == in.events || in.measurement[event + 1] != day) {
             const double nav = bankrupt ? 0.0 : perp_equity(cash, bucket, S);
             out.returns[day] = previous_nav > 0.0 ? nav / previous_nav - 1.0 : 0.0;
             previous_nav = nav;

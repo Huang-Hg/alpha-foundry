@@ -1,0 +1,21 @@
+[dependency-groups]
+# Run from a source checkout; build Linux native extensions with the README commands.
+client = [
+    "numpy>=2.0",
+    "jsonschema>=4",
+]
+runtime = [
+    { include-group = "client" },
+    "pandas>=2.0",
+    "exchange_calendars>=4.11,<5",
+    "pyarrow>=17",
+]
+monitor = ["rich>=13"]
+# Policy models are optional; select a CUDA-enabled Torch wheel for GPU mining.
+mining = [
+    { include-group = "runtime" },
+    "torch>=2.6,<3",
+]
+# Select exactly one CuPy group matching the compute host's CUDA major.
+cuda12 = ["cupy-cuda12x"]
+cuda13 = ["cupy-cuda13x"]

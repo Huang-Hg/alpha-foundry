@@ -1,15 +1,16 @@
 """What a search objective puts on the dashboard: funnel stages, verdicts, candidate columns, footnotes.
 
-The run writes its objective into the status (`python -m foundry mine --objective`). Components ask the
+The typed mining status names its objective. Components ask the
 objective object and never look at objective-specific report fields themselves, so a new objective
 is one subclass registered in OBJECTIVES - no component or layout code changes.
 """
 from __future__ import annotations
 
-from typing import Callable, NamedTuple
+from collections.abc import Callable
+from typing import NamedTuple
 
-from .cells import ACCENT, GREEN, INK2, INK3, INK4, AMBER, RED, Seg, num, tone
-from .schema import CandidateReport, SearchStatus
+from .cells import ACCENT, AMBER, GREEN, INK2, INK3, INK4, RED, Seg, num, tone
+from .schema import CandidateReport, SearchStatus, reading
 
 
 class Stage(NamedTuple):
@@ -34,7 +35,7 @@ def value(key, spec):
 
 def delta(key, spec, scale=1, suffix=''):
     def cell(report, st, bg):
-        moved = (report.get('delta') or {}).get(key)
+        moved = next((check['delta'] for check in report.get('delta', []) if check['name'] == key), None)
         return [Seg(num(None if moved is None else moved*scale, spec, suffix), tone(moved), bg)]
     return cell
 
@@ -65,31 +66,31 @@ class Objective:
     def diagnosis(self, st: SearchStatus):
         """(bottleneck stage key, tag, colour, message) - why the search has or has not produced."""
         if st.get('phase') == 'failed':
-            return None, '失败', RED, st.get('error') or '运行失败，请查看任务日志'
-        if not st.get('unique_evaluations'):
-            return None, '等待', INK3, st.get('error') or '等待首批评价数据'
-        # A counter the run does not report (a status older than the stage) is no evidence of a bottleneck.
+            return None, '失败', RED, '运行失败，请查看任务日志'
+        if not reading(st, 'counters.unique_evaluations'):
+            return None, '等待', INK3, '等待首批评价数据'
+        # A phase that has not evaluated a stage has no counter for it yet.
         stages = [stage for stage in self.stages(st)
-                  if (stage.blocked or stage.key == 'unique_evaluations') and st.get(stage.key) is not None]
+                  if (stage.blocked or stage.key == 'counters.unique_evaluations') and reading(st, stage.key) is not None]
         for above, stage in zip(stages, stages[1:]):
-            if not st[stage.key]:
-                return stage.key, '瓶颈', AMBER, f'{stage.label} — ' + stage.blocked.format(n=st.get(above.key, 0))
-        return None, '产出', GREEN, f"已接纳 {st.get('accepted', 0):,} 个构件 · {st.get(stages[-1].key, 0):,} 个候选通过全部检查"
+            if not reading(st, stage.key):
+                return stage.key, '瓶颈', AMBER, f'{stage.label} — ' + stage.blocked.format(n=reading(st, above.key))
+        return None, '产出', GREEN, f"已接纳 {st.get('accepted', 0):,} 个构件 · {reading(st, stages[-1].key):,} 个候选通过全部检查"
 
 
 class Portfolio(Objective):
     """Reward = what the candidate adds to the portfolio when it is tried in it."""
-    key, label, passed_label, gate_key = 'portfolio', '组合目标', 'G2 通过', 'g2'
+    key, label, passed_label, gate_key = 'portfolio', '组合目标', 'G2 通过', 'counters.g2'
     caption = '最新在前 · Δ 为候选试配后的组合变化'
     columns = (Column('ρ', 7, value('rho', '.3f')), Column('权重', 6, value('weight', '.0%'), 104),
                Column('Δ Sharpe', 10, delta('sharpe', '+.4f'), 84), Column('Δ CAGR', 11, delta('cagr', '+.2f', 100, ' pp')),
                Column('相似度', 7, value('novelty', '.2f'), 104))
 
     def stages(self, st):
-        return (Stage('候选请求', 'requested', INK4), Stage('去重评价', 'unique_evaluations', ACCENT),
-                Stage('G1 结构·因果', 'g1', ACCENT, '{n:,} 个候选尚无一通过'),
-                Stage('G2 组合收益', 'g2', ACCENT, '{n:,} 个有效候选尚无一能改善组合'),
-                Stage('可接纳', 'low_corr', GREEN, '{n:,} 个候选改善组合，但都与现有成员重复'))
+        return (Stage('候选请求', 'counters.requested', INK4), Stage('去重评价', 'counters.unique_evaluations', ACCENT),
+                Stage('G1 结构·因果', 'counters.g1', ACCENT, '{n:,} 个候选尚无一通过'),
+                Stage('G2 组合收益', 'counters.g2', ACCENT, '{n:,} 个有效候选尚无一能改善组合'),
+                Stage('可接纳', 'counters.low_corr', GREEN, '{n:,} 个候选改善组合，但都与现有成员重复'))
 
     def rejected(self, report):
         if not report.get('g2'):
@@ -97,8 +98,8 @@ class Portfolio(Objective):
         return ('行为重复', INK3) if report.get('duplicate') else ('相关未过', AMBER)
 
     def footnotes(self, st):
-        return [(label, num(st.get(key))) for label, key in
-                (('行为重复', 'behavior_duplicates'), ('探针评价', 'probe_evaluations'))]
+        return [(label, num(reading(st, 'counters.' + key))) for label, key in
+                (('行为重复', 'behavior_duplicates'), ('辅助评价', 'auxiliary_evaluations'))]
 
 
 def sharpe_cell(report, st, bg):
@@ -116,7 +117,7 @@ def years_cell(report, st, bg):
 class Single(Objective):
     """Reward = the candidate's own book. Gates: G1 sound causal book, G2 appraisal ratio against the portfolio
     >= kappa (the (correlation, Sharpe) gate), G3 every recent calendar year as well."""
-    key, label, passed_label, gate_key = 'single', '单 alpha 目标', 'G3 通过', 'g3'
+    key, label, passed_label, gate_key = 'single', '单 alpha 目标', 'G3 通过', 'counters.g3'
     caption = '最新在前 · 指标为候选单独回测 · G2 门槛随它与组合的相关性升降'
     columns = (Column('Sharpe', 7, sharpe_cell), Column('G2 门槛', 8, value('required_sharpe', '.2f')),
                Column('ρ 成员', 7, value('rho_members', '+.2f'), 84), Column('ρ 组合', 7, value('rho_portfolio', '+.2f'), 104),
@@ -129,30 +130,34 @@ class Single(Objective):
         kappa, years, floor = (gate.get(k) for k in ('required_appraisal', 'recent_years', 'recent_year_sharpe'))
         appraisal = 'G2 门已关' if gate and kappa is None else 'G2 Sharpe(ρ)'
         recent = 'G3 近年 SR' if floor is None else f'G3 近{years}年 SR>{floor:g}'
-        return (Stage('去重评价', 'unique_evaluations', ACCENT),
-                Stage('G1 结构·因果', 'g1', ACCENT, '{n:,} 个候选尚无一通过'),
-                Stage(appraisal, 'g2', ACCENT, '{n:,} 个有效候选的 Sharpe 都低于各自相关性对应的门槛'),
-                Stage(recent, 'g3', ACCENT, '{n:,} 个候选过了 G2，但近年没有做到每年 Sharpe 达标'),
-                Stage('可接纳', 'low_corr', GREEN, '{n:,} 个候选过了 G3，但都与现有成员重复'))
+        return (Stage('去重评价', 'counters.unique_evaluations', ACCENT),
+                Stage('G1 结构·因果', 'counters.g1', ACCENT, '{n:,} 个候选尚无一通过'),
+                Stage(appraisal, 'counters.g2', ACCENT, '{n:,} 个有效候选的 Sharpe 都低于各自相关性对应的门槛'),
+                Stage(recent, 'counters.g3', ACCENT, '{n:,} 个候选过了 G2，但近年没有做到每年 Sharpe 达标'),
+                Stage('可接纳', 'counters.low_corr', GREEN, '{n:,} 个候选过了 G3，但未通过硬准入或行为去重'))
 
     def rejected(self, report):
         if not report.get('g2'):
             return 'G2 未过', AMBER
         if not report.get('g3'):
             return 'G3 未过', AMBER
+        if not report['decision']['passed']:
+            return '硬准入未过', AMBER
         return ('行为重复', INK3) if report.get('duplicate') else ('相关未过', AMBER)
 
     def footnotes(self, st):
         gate = st.get('gate') or {}
         anchor = [('锚', f"ρ {gate['anchor_correlation']:g} ↔ Sharpe {gate['anchor_sharpe']:g}")] if 'anchor_sharpe' in gate else []
         return anchor + [('κ', num(gate.get('required_appraisal'), '.3f')), ('先验均值', num(gate.get('prior_mean'), '+.3f')),
-                         ('收缩', num(gate.get('shrinkage'), '.3f')), ('行为重复', num(st.get('behavior_duplicates'))),
-                         ('探针评价', num(st.get('probe_evaluations')))]
+                         ('收缩', num(gate.get('shrinkage'), '.3f')), ('行为重复', num(reading(st, 'counters.behavior_duplicates'))),
+                         ('辅助评价', num(reading(st, 'counters.auxiliary_evaluations')))]
 
 
 OBJECTIVES = {objective.key: objective for objective in (Portfolio(), Single())}
 
 
 def of(st: SearchStatus) -> Objective:
-    """Runs that predate the objective field all optimised the portfolio."""
-    return OBJECTIVES[st.get('objective', 'portfolio')]
+    """Waiting has no producer record; an active record names its objective."""
+    if set(st).issubset({'_source_mtime', '_source_name'}):
+        return OBJECTIVES['portfolio']
+    return OBJECTIVES[st['objective']]
