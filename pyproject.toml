@@ -10,7 +10,7 @@ runtime = [
     "exchange_calendars>=4.11,<5",
     "pyarrow>=17",
 ]
-monitor = ["rich>=13"]
+monitor = ["rich>=15.0.0"]
 # Policy models are optional; select a CUDA-enabled Torch wheel for GPU mining.
 mining = [
     { include-group = "runtime" },
