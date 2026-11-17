@@ -6,7 +6,6 @@
   serve | status | stop | attach [HOST] | detach | mirror HOST REMOTE LOCAL
   mine OUTPUT                       run the configured mining program
   import-perpetual OUTPUT            import verified public USD-M archives
-  benchmark OUTPUT                  validate and compare native engine performance
   calibrate RUN | monitor | preview
 
 Start or attach the service explicitly. request never starts a local GPU process.
@@ -117,13 +116,6 @@ def cmd_import_perpetual(a):
                           artifacts=manifest['artifacts']), indent=2))
 
 
-def cmd_benchmark(a):
-    from foundry.api import benchmark
-    print(benchmark(a.output, suite=a.suite, sizes=a.sizes, assets=a.assets,
-                    spectre_python=a.spectre_python, qualification=a.qualification, reference=a.reference,
-                    backends=a.backends, **a.parameters))
-
-
 def main():
     p = argparse.ArgumentParser(prog='python -m foundry', description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--parameters', default='{}', help='JSON object of public research parameters; see schema')
@@ -149,15 +141,6 @@ def main():
     s.add_argument('output')
     s = sub.add_parser('import-perpetual')
     s.add_argument('output')
-    s = sub.add_parser('benchmark')
-    s.add_argument('output')
-    s.add_argument('--suite', choices=('foundry', 'frameworks', 'discovery', 'nonformula', 'timed', 'programs'), default='foundry')
-    s.add_argument('--reference', help='Saved same-workload programs benchmark directory')
-    s.add_argument('--sizes', type=int, nargs='+')
-    s.add_argument('--backends', nargs='+', choices=('cpu', 'cuda'), default=['cpu', 'cuda'])
-    s.add_argument('--assets', type=int, default=8)
-    s.add_argument('--spectre-python', help='isolated interpreter containing the pinned Spectre revision')
-    s.add_argument('--qualification', type=Path, help='timed precision qualification evidence from the completed smoke')
     s = sub.add_parser('calibrate')
     s.add_argument('run')
     s = sub.add_parser('monitor')
@@ -171,7 +154,7 @@ def main():
     from foundry.rpc.schema import describe
     parameters = json.loads(a.parameters)
     validate(parameters, describe()['parameters'])
-    if parameters and a.command not in {'fields', 'ops', 'serve', 'mine', 'import-perpetual', 'benchmark', 'calibrate', 'monitor', 'mirror'}:
+    if parameters and a.command not in {'fields', 'ops', 'serve', 'mine', 'import-perpetual', 'calibrate', 'monitor', 'mirror'}:
         raise ValueError('parameters apply at compute/job startup, not when connecting to an existing service')
     a.parameters = parameters_from_json(parameters)
     globals()['cmd_' + a.command.replace('-', '_')](a)

@@ -45,6 +45,6 @@ OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m foundry \
   benchmark var/runs/cpu-parallel-new --backends cpu --sizes 64 4096
 ```
 
-[Flow timings](flows.csv) · [Semantic comparisons](comparisons.json) · [Summary](summary.json) · [Source](source.tar.gz) · [Raw CPU reports and logs](cpu-details.tar.gz) · [Checksums](SHA256SUMS)
+[Flow timings](flows.csv) · Semantic comparisons (local artifact) · [Summary](summary.json) · Source (local archive) · Raw CPU reports and logs (local artifact) · Checksums (local artifact)
 
 [1 worker](workers-1/report.md) · [8 workers](workers-8/report.md) · [GPU evidence](../compact-multigpu-20261116/README.md)

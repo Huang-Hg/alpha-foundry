@@ -34,8 +34,8 @@ Foundry 在这里的优势是紧凑的原生账户循环与批量数值路径。
 
 ## 证据
 
-[comparison.json](comparison.json) 保存逐账户指标、错配计数、费用残差、版本和分段耗时；[plan.json](plan.json) 固定数据与源码摘要；[source.tar.gz](source.tar.gz) 保留实测源码原始字节，早于随后进行的架构审查修复。[contracts.xml](contracts.xml) 保存之前通过的 48 项契约检查及子用例；[SHA256SUMS](SHA256SUMS) 校验公开工件。完整原生数组与环境日志保留在本地 `var/runs/framework-evidence.tar.gz`。
+comparison.json（本地工件） 保存逐账户指标、错配计数、费用残差、版本和分段耗时；plan.json（本地工件） 固定数据与源码摘要；source.tar.gz (local archive) 保留实测源码原始字节，早于随后进行的架构审查修复。contracts.xml（本地工件） 保存之前通过的 48 项契约检查及子用例；SHA256SUMS（本地工件） 校验公开工件。完整原生数组与环境日志保留在本地 `var/runs/framework-evidence.tar.gz`。
 
 此前一轮因计时器包含依赖版本枚举而作废，这里没有混入其速度数据。每个公开条件预热一次、有效测量一次；全部测试与基准均在 Colab 执行。
 
-随后进行的架构审查修复通过了 [90 项 smoke](review-smoke.xml) 与 [303 项非性能回归](review-regression.xml)、7117 个子用例；私有基线检查按约定跳过 1 项。251 个未选择项属于 Foundry 独立性能测量，本次审查修复未重跑。[review-source.json](review-source.json) 标识这份后续验收源码，不替代本次 benchmark 的实测源码包。150 个部署文件的本地/云端原始字节一致性通过；证据取回后已释放 Colab。
+随后进行的架构审查修复通过了 90 项 smoke（本地工件） 与 303 项非性能回归（本地工件）、7117 个子用例；私有基线检查按约定跳过 1 项。251 个未选择项属于 Foundry 独立性能测量，本次审查修复未重跑。review-source.json（本地工件） 标识这份后续验收源码，不替代本次 benchmark 的实测源码包。150 个部署文件的本地/云端原始字节一致性通过；证据取回后已释放 Colab。

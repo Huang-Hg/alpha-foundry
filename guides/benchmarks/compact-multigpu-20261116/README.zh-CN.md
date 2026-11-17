@@ -1,6 +1,6 @@
 # 小缓存与多 GPU 实测
 
-[English](README.md) · [中文](README.zh-CN.md) · [Operators](operators.csv) · [Flows](flows.csv) · [Comparisons](comparisons.json) · [Source](source.tar.gz) · [Raw reports](details.tar.gz)
+[English](README.md) · [中文](README.zh-CN.md) · [Operators](operators.csv) · [Flows](flows.csv) · Comparisons（本地工件） · Source (local archive) · Raw reports（本地工件）
 
 同一份 269 日 × 500 资产美股数据、同一组 4096 条公式，**PRO 6000 的评价＋有序提交最快：2.7855 秒**。所有设备使用 32 MiB 测量缓存，候选持仓按批次重新生成。
 

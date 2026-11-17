@@ -1,6 +1,6 @@
 # Fixed Colab CPU reference: A100 and L4
 
-[English](README.md) · [中文](README.zh-CN.md) · [All operators](operators.csv) · [Stages](flows.csv) · [Errors](comparisons.json) · [CPU metadata](cpu.json) · [Thread pools](threadpools.json)
+[English](README.md) · [中文](README.zh-CN.md) · [All operators](operators.csv) · [Stages](flows.csv) · Errors (local artifact) · CPU metadata (local artifact) · Thread pools (local artifact)
 
 The fixed reference is a dedicated **Colab CPU high-RAM runtime: Intel Xeon 2.20GHz, eight vCPUs (four cores, two threads/core)**. CPU affinity is 0–7 with no cgroup quota; both OpenMP and OpenBLAS loaded eight-thread pools. No GPU-attached host CPU supplies the denominator.
 
@@ -52,4 +52,4 @@ bash build.sh
 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE python -m foundry --parameters '{"market":"us_equity"}' benchmark var/runs/cpu-reference --backends cpu --sizes 64 256 1024 4096
 ```
 
-[Measured CPU metadata](measured/benchmark.json) · [Smoke](smoke/junit.xml) · [Checks](measured/junit.xml) · [CPU raw reports](cpu-details.tar.gz) · [Measured source](source.tar.gz) · [Exact cloud job](cloud-job.py) · [GPU evidence](../compact-multigpu-20261116/README.md)
+Measured CPU metadata (local artifact) · Smoke (local artifact) · Checks (local artifact) · CPU raw reports (local artifact) · Measured source (local archive) · Exact cloud job (local artifact) · [GPU evidence](../compact-multigpu-20261116/README.md)

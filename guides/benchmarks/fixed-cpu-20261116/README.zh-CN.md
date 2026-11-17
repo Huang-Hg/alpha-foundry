@@ -1,6 +1,6 @@
 # 固定 Colab CPU 基线：A100 与 L4
 
-[English](README.md) · [中文](README.zh-CN.md) · [All operators](operators.csv) · [Stages](flows.csv) · [Errors](comparisons.json) · [CPU metadata](cpu.json) · [Thread pools](threadpools.json)
+[English](README.md) · [中文](README.zh-CN.md) · [All operators](operators.csv) · [Stages](flows.csv) · Errors（本地工件） · CPU metadata（本地工件） · Thread pools（本地工件）
 
 CPU 基准固定为独立 **Colab CPU 类型高内存运行时，Intel Xeon 2.20GHz，8 vCPU（4 核、2 线程/核）**。CPU affinity 为 0–7，cgroup 未限流；OpenMP 和 OpenBLAS 均实际加载 8 线程。此处不使用任何 GPU 附带的主机 CPU 作为分母。
 
@@ -52,4 +52,4 @@ bash build.sh
 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 OMP_DYNAMIC=FALSE python -m foundry --parameters '{"market":"us_equity"}' benchmark var/runs/cpu-reference --backends cpu --sizes 64 256 1024 4096
 ```
 
-[Measured CPU metadata](measured/benchmark.json) · [Smoke](smoke/junit.xml) · [Checks](measured/junit.xml) · [CPU raw reports](cpu-details.tar.gz) · [Measured source](source.tar.gz) · [Exact cloud job](cloud-job.py) · [GPU evidence](../compact-multigpu-20261116/README.md)
+Measured CPU metadata（本地工件） · Smoke（本地工件） · Checks（本地工件） · CPU raw reports（本地工件） · Measured source (local archive) · Exact cloud job（本地工件） · [GPU evidence](../compact-multigpu-20261116/README.md)

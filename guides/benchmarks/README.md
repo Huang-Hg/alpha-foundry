@@ -1,57 +1,17 @@
-# Foundry benchmarks
+# Foundry performance and correctness
 
-[简体中文](README.zh-CN.md) · [2026-11-15 PRO 6000 report](arch-v2-pro6000-20261115/report.md) · [Pre-refactor public API report](current/report.md) · [Earlier operator experiments](archive/pro6000-operator66/operator66.md)
+[简体中文](README.zh-CN.md)
 
-The [program commit L4 report](program-commit-l4-20261117/README.md) measures removal of repeated same-context replay: 256 stateful programs improve from 42.301 s to 20.851 s for query plus ordered commit, with identical returns, metrics and decisions. These stress candidates all reject; acceptance still replays against the updated portfolio. Use `--suite programs --reference BEFORE` for matched comparisons.
+The [L4 admission and reallocation report](program-transitions-l4-20261117/README.md) measures the complete workflow when portfolio state changes and distinguishes actual consecutive admissions from explicit two-member historical fixtures.
 
-The earlier [timed-strategy L4 report](timed-l4-20261116/README.md) covers 4096 array candidates, 256 stateful programs and an independent Agent integration. Query plus ordered commit took 3.718 s and 41.886 s respectively; full-scale paired CPU/CUDA correctness matched within tolerance with no decision differences. Mixed FP32 controls failed qualification and remain visible. Use `--suite timed` for this workflow, including separate smoke qualification and full-scale evidence.
-
-The [resident GPU sampling report](gfn-resident-l4-20261116/README.md) measures device-side states, legality and draws, trace reuse and a persistent optimizer: the 4096-proposal loop falls from 7.889 to 6.168 s; preparation plus session lifecycle falls from 8.921 to 8.586 s. Numerical errors, increased peak memory and candidate-trajectory differences are disclosed. The [PyTorch migration report](gfn-torch-l4-20261116/README.md) remains the previous baseline.
-
-The current suite answers three questions: **How long does a real research call take? How much numerical error does CUDA introduce? Does it admit the same candidates as CPU?**
-
-Use the [fixed Colab CPU baseline](parallel-cpu-20261116/README.md) for A100/L4 comparisons. The comparison fixes one CPU-only runtime and measures 1/8 workers actually executing candidates and trials. The earlier fixed-cpu report only enabled inner native thread pools and remains historical.
-
-The [compact-cache GPU comparison](compact-multigpu-20261116/README.md) replaces the earlier full-book cache with a 32 MiB return/report budget, bounds member storage independently of candidate count, and compares GPU latency, memory and decisions on identical inputs.
-
-The [2026-11-16 TMA and measurement-reuse report](history-pro6000-20261116/README.md) measures faster `ts_slope` and `ts_av_diff`, bounded query-to-commit reuse, and unchanged 4096-formula decisions. It includes the memory tradeoff and actual Blackwell bulk-copy instruction evidence.
-
-The [CUDA operator optimization](ops-pro6000-20261115/README.md) compares before/after measurements on the same PRO 6000. Recurrence, backfill and shift operators improve while the 4096-formula reports, weights and decisions remain identical. The report also identifies cases where CUDA still trails CPU.
-
-The [native framework comparison](frameworks-pro6000-20261115/README.md) separately compares Foundry with Spectre, vectorbt Numba/Rust and Freqtrade on identical daily spot inputs and trading rules. The shared entry is `python -m foundry benchmark OUTPUT --suite frameworks`; see the [setup and method](../framework-benchmark.md). This restricted comparison measures execution, not portfolio admission.
-
-The [architecture-refactor run](arch-v2-pro6000-20261115/README.md) measured source `fa2acfd` on RTX PRO 6000 Blackwell Server (97887 MiB). Public regression results were 512 passed, 1 skipped and 7061 passed subtests in 247.05 s; the 7574 JUnit entries include subtests. All 124 window cases across 66 operators passed. The 4096-formula complete case took 2.879063 s on CUDA versus 93.723696 s on CPU (32.55×); 28 candidates were admitted on both, with zero decision mismatches or numerical tolerance exceedances. The private production audit failed separately on an unchanged legacy artifact, not on a newly recorded baseline.
-
-Run the shared entry on the assigned runtime:
-
-```bash
-python -m pip install --upgrade "pip>=25.1"
-python -m pip install --group benchmark
-bash build.sh
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 python -m foundry benchmark var/runs/benchmark-new --backends cpu
-```
-
-Dependency groups live in [pyproject.toml](../../pyproject.toml). Add `--group cuda12` or `--group cuda13` to the install command for the selected GPU runtime. Historical reports and captured job files retain the commands used by their recorded source revision; use the current installation commands above for a new run.
-
-This example uses the eight-vCPU CPU runtime. Match `cpu.workers` to actual CPU affinity and quota; keep inner OpenMP and BLAS teams at one. `--backends cpu` needs neither CuPy nor a GPU and runs benchmark contracts plus measurements. Use `--backends cuda` on the assigned GPU with matching CuPy installed. CPU speed comparisons use the fixed CPU-only runtime; GPU-host CPU correctness replays are not performance baselines. Numerical runs happen on the selected cloud instance; GitHub Actions only displays and archives saved evidence.
-
-The runner uses [pytest](https://docs.pytest.org/en/stable/how-to/unittest.html), [pytest-benchmark](https://pytest-benchmark.readthedocs.io/en/latest/pedantic.html) and pytest-html. Existing regression checks live in `validation/`; the old `tests/` and `scripts/` directories are removed.
-
-| Measurement | What is compared |
+| Historical measurement | Scope |
 | --- | --- |
-| Public research API | 1, 64 and 4096 formulas; open, evaluate, commit and close |
-| Operators | All 66 operators on the same real inputs; rolling windows 2, 20 and 120 |
-| Correctness | Exact admission/reason/constraint decisions; per-metric errors and weight tolerances |
-| Regression | PIT, A-share rules, spot, perpetual funding/liquidation, resources and RPC parity |
+| [Review reuse](program-commit-l4-20261117/README.md) | All rejected: 256 programs, query/commit 42.301 → 20.851 s; not a consecutive-admission claim |
+| [Temporal strategies](timed-l4-20261116/README.md) | 4096 arrays, 256 programs and preserved failed precision controls |
+| [Fixed CPU](parallel-cpu-20261116/README.md) | Fixed Colab CPU, parallel candidate and weight trials |
+| [External frameworks](frameworks-pro6000-20261115/README.md) | Spectre, vectorbt and Freqtrade under a shared trading contract |
+| [66 operators](ops-pro6000-20261115/README.md) | Per-operator timing/error and complete formula workflows |
 
-The default formula/operator suite uses one warm-up and one measured round per condition. Warm-up uses a fresh portfolio; measured rounds never reuse its query cache or mutated portfolio. The timed-strategy suite instead measures each complete lifecycle once, including initialization, without an extra warm-up. Both CPU and CUDA use host wall time, with explicit CUDA synchronization. Small timings are observations, not statistical rankings.
+Tests and drivers stay local. Execution, timing and test reports use pytest, pytest-benchmark and pytest-html. Install `--group benchmark` plus the CuPy group matching the compute host, then use the root README build commands.
 
-The output directory contains bilingual Markdown summaries, detailed CSVs, the standard pytest-benchmark JSON, JUnit XML, a standalone HTML check report, raw formula reports, source/data/corpus identities and the run log. A failing correctness check or incomplete benchmark fails the command while preserving its report.
-
-For custom data or fees, pass the same public parameters as `foundry.open`; the CPU and CUDA runs share them. Select benchmark devices with `backends=("cpu",)` or CLI `--backends cpu`, not the research `backend` parameter. The default is both backends. The fixed corpus must be valid for that dataset's vocabulary. `foundry.benchmark(output, backends=("cpu",), sizes=(1, 64), market="us_equity", data_dir="...")` can limit candidate counts. Timing thresholds from another GPU, dataset or implementation are not inherited. Benchmark schema v2 records selected backends and validation scope; standalone measurements make no cross-device correctness or speedup claim by themselves.
-
-The new public bundle contains reports, detailed CSVs, pytest evidence, run metadata and the measured source archive; full raw per-formula evidence is retained locally. CUDA account arithmetic used paired FP32. No same-device single-FP32 control was measured, so this run does not requalify the separate 1.5× precision budget.
-
-The `current/` directory is an unchanged pre-refactor archive, despite its historical name. Its [complete evidence archive](current/evidence.tar.gz) contains that earlier run's raw per-formula reports and setup logs. Source-file hashes identify its measured working tree; pytest commit metadata names its base checkout. The still older operator experiments used an internal API and experimental precision paths. Neither archive is blended into the architecture-refactor results.
-
-The historical [measured source archive](current/source.tar.gz) preserves that earlier source and corpus, including original line endings. Its published text reports use LF for reproducible GitHub checksum verification. Its renderer has a separate hash because wording was improved after measurement without rerunning timings.
+GitHub Actions verifies and displays saved results without numerical execution. New reports record hardware, scale, precision, complete workflow time, errors and decisions. Full raw artifacts and archives containing test/job source stay local. Historical command lines belong to their recorded revisions; the removed `foundry benchmark` is not a current public API.

@@ -6,7 +6,7 @@
 
 市场：`us_equity`；面板：**269 × 500（日期 × 资产，含预热历史）**；研究区间：2025-07-01 至 2026-06-30；CPU OpenMP 线程数：2。
 
-[JSON](summary.json) · [pytest JSON](benchmark.json) · [HTML](checks.html) · [JUnit](junit.xml) · [CSV](operators.csv)
+[JSON](summary.json) · pytest JSON（本地工件） · HTML（本地工件） · JUnit（本地工件） · [CSV](operators.csv)
 
 ## 完整调用：加载 → 评价 → 接纳 → 组合快照 → 释放
 

@@ -12,7 +12,7 @@
  *   - Comparison/selection ops (max/min/log/sqrt/inv/sign): NaN comparisons evaluate to false and would swallow NaN
  *     into 0 or the wrong branch, so explicit isnan checks are required.
  *   - div/pow_const: explicit branches for special values (b == 0, base == 0); IEEE propagates NaN elsewhere.
- *   - build.sh must retain -fno-finite-math-only; otherwise GCC >= 14 optimises away isnan/isfinite.
+ *   - Native build flags must retain -fno-finite-math-only; otherwise GCC >= 14 optimises away isnan/isfinite.
  *   - 2D strided addressing (ldx/ldo row strides): elementwise expressions are independent of ld; ld == S is C-contiguous.
  */
 

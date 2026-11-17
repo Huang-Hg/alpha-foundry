@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) · [Detailed evidence](summary.json) · [Stage timings](stages.csv)
 
-The [source manifest](source-manifest.json), [validated source](source.tar.gz), [original JUnit files](junit.tar.gz), daily comparisons and CPU audit summaries are available alongside this report. GitHub checks their [checksums](SHA256SUMS) and the exact [post-validation metadata changes](source-review.json), then verifies the recorded acceptance without running numerical code. The dependency consolidation preserves numerical constraints; the compute source is unchanged from R5.
+The source manifest (local artifact), validated source (local archive), original JUnit files (local artifact), daily comparisons and CPU audit summaries are available alongside this report. GitHub checks their checksums (local artifact) and the exact post-validation metadata changes (local artifact), then verifies the recorded acceptance without running numerical code. The dependency consolidation preserves numerical constraints; the compute source is unchanged from R5.
 
 **The paired FP32 workflow passed; the mixed FP32 control did not qualify.** One NVIDIA L4 (23034 MiB), eight synthetic crypto assets, two days of 5-minute bars, 192 decisions at 15-minute intervals, 576 execution events and 48 hourly measurements. Each condition ran once, without extra warmups or repeated seeds.
 

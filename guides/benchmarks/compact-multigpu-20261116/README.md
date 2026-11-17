@@ -1,6 +1,6 @@
 # Compact caches and measured GPU comparisons
 
-[English](README.md) · [中文](README.zh-CN.md) · [Operators](operators.csv) · [Flows](flows.csv) · [Comparisons](comparisons.json) · [Source](source.tar.gz) · [Raw reports](details.tar.gz)
+[English](README.md) · [中文](README.zh-CN.md) · [Operators](operators.csv) · [Flows](flows.csv) · Comparisons (local artifact) · Source (local archive) · Raw reports (local artifact)
 
 On identical US-equity data (269 days × 500 assets) and 4096 formulas, **PRO 6000 recorded the fastest evaluate + ordered commit: 2.7855 s**. Every device used a 32 MiB measurement cache and regenerated candidate books in bounded batches.
 

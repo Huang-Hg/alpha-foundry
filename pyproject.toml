@@ -1,5 +1,5 @@
 [dependency-groups]
-# Run from a source checkout; build Linux native extensions with bash build.sh.
+# Run from a source checkout; build Linux native extensions with the README commands.
 runtime = [
     "numpy>=2.0",
     "pandas>=2.0",
@@ -54,7 +54,7 @@ spectre = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["validation"]
+testpaths = ["tests"]
 python_files = ["test_*.py", "bench_*.py"]
 python_functions = ["test_*", "bench_*"]
 pythonpath = ["."]

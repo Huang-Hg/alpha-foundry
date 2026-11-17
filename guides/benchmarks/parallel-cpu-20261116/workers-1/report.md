@@ -6,7 +6,7 @@ This records an independent baseline, not cross-device errors, speedups or full 
 
 OpenMP threads: 1; OpenBLAS threads: 1.
 
-[Metadata](benchmark.json) · [Summary](summary.json) · [Operators](operators.csv) · [Flows](flows.csv) · [Checks](checks.html)
+Metadata (local artifact) · [Summary](summary.json) · [Operators](operators.csv) · [Flows](flows.csv) · Checks (local artifact)
 
 | Candidates | Evaluate / s | Commit / s | Sum / s | Lifecycle / s | Valid / accepted |
 | ---: | ---: | ---: | ---: | ---: | ---: |

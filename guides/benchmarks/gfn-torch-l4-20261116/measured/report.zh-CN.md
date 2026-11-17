@@ -22,4 +22,4 @@ GPU sampled peak: 4340.0 MiB. Policy changed: True.
 
 这是同一历史研究窗口中的在线策略学习与准入，不是监督模型样本外 walk-forward 收益证明。此入口执行实际 mine 流程；独立 judge_family 稳健性审查不自动计入。
 
-[Summary](summary.json) · [Plan](plan.json) · [Epoch reports](../raw.tar.gz)
+[Summary](summary.json) · Plan（本地工件） · Epoch reports（本地工件）

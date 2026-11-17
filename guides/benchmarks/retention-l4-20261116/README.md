@@ -43,4 +43,4 @@ python -m foundry --parameters '{"market":"us_equity","search":{"epochs":4,"batc
   benchmark var/runs/retention --suite nonformula --backends cuda
 ```
 
-[Timing and exact parity](parity.json) · [Measured plan](measured/plan.json) · [Previous plan](previous/plan.json) · [Contracts](contracts.xml) · [Source audit](source-audit.json) · [Measured source](source.tar.gz) · [Full trajectories and logs](raw.tar.gz)
+Timing and exact parity (local artifact) · Measured plan (local artifact) · Previous plan (local artifact) · Contracts (local artifact) · Source audit (local artifact) · Measured source (local archive) · Full trajectories and logs (local artifact)

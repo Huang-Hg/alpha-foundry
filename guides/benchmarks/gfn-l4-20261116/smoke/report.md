@@ -22,4 +22,4 @@ GPU sampled peak: 864.0 MiB. Policy changed: True.
 
 This is online policy learning and admission on one historical research window, not supervised out-of-sample walk-forward evidence. It executes the actual mine workflow; separate judge_family robustness review is not automatically included.
 
-[Summary](summary.json) · [Plan](plan.json) · [Epoch reports](../raw.tar.gz)
+[Summary](summary.json) · Plan (local artifact) · Epoch reports (local artifact)

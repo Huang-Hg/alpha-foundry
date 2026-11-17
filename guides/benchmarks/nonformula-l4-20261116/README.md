@@ -55,4 +55,4 @@ python -m foundry --parameters '{"search":{"epochs":4,"batch_size":64},"cuda":{"
   benchmark var/runs/nonformula-new --suite nonformula --backends cuda
 ```
 
-[Analysis](analysis.json) · [Epochs](epochs.csv) · [Summary](measured/summary.json) · [Plan](measured/plan.json) · [Submission checks](submission.json) · [Family](measured/factor/family.json) · [Source audit](source-audit.json) · [Source](source.tar.gz) · [Raw reports](raw.tar.gz) · [Checks](contracts.xml)
+Analysis (local artifact) · [Epochs](epochs.csv) · [Summary](measured/summary.json) · Plan (local artifact) · Submission checks (local artifact) · Family (local artifact) · Source audit (local artifact) · Source (local archive) · Raw reports (local artifact) · Checks (local artifact)

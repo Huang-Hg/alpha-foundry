@@ -6,7 +6,7 @@ This report compares CPU and CUDA latency, numerical error and admission decisio
 
 Market: `us_equity`; panel: **269 × 500 (dates × assets, including warm-up history)**; study: 2025-07-01 through 2026-06-30; CPU OpenMP threads: 2.
 
-[JSON](summary.json) · [pytest JSON](benchmark.json) · [HTML](checks.html) · [JUnit](junit.xml) · [CSV](operators.csv)
+[JSON](summary.json) · pytest JSON (local artifact) · HTML (local artifact) · JUnit (local artifact) · [CSV](operators.csv)
 
 ## Complete call: open → evaluate → commit → close
 

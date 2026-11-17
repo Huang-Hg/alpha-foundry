@@ -28,6 +28,12 @@ jobs:
           python-version: '3.13'
           cache: pip
           cache-dependency-path: pyproject.toml
+      - name: Keep local tooling out of publication
+        run: |
+          if [ -n "$(git ls-files test tests scripts validation build.sh)" ]; then
+            echo "Local tests, helper scripts and build.sh must not be tracked."
+            exit 1
+          fi
       - name: Install static tooling
         run: |
           python -m pip install --upgrade 'pip>=25.1'

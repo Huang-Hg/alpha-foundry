@@ -33,6 +33,6 @@ python -m foundry benchmark BEFORE --suite programs --sizes 16 256 --backends cu
 python -m foundry benchmark AFTER --suite programs --sizes 16 256 --backends cuda --reference BEFORE
 ```
 
-This run split 16 and 256 into consecutive commands so the small comparison gated the large one, without repeated measurements. The baseline restores the two study files from `d96fe84`; the harness and all other files are shared.
+This run split 16 and 256 into consecutive commands so the small comparison gated the large one, without repeated measurements. The baseline restores the two study files from `cc0f2b4`; the harness and all other files are shared.
 
-[Full results](summary.json) · [Every stage](stages.csv) · [Original cloud evidence](raw.tar.gz) · [Source manifest](deployment.json) · [Measured source](source.tar.gz) · [Baseline delta](baseline-delta.tar.gz) · [Static report binding review](source-review.json)
+[Full results](summary.json) · [Every stage](stages.csv) · Original cloud evidence (local archive) · Source manifest (local artifact) · Measured source (local archive) · Baseline delta (local archive) · Static report binding review (local artifact)

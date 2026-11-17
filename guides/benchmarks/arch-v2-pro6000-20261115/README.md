@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) · [Performance and errors](report.md) · [Stage timings](flows.csv) · [All operator conditions](operators.csv)
 
-Measured on 2026-11-15 with an NVIDIA RTX PRO 6000 Blackwell Server Edition. The source bytes were checked against local commit `fa2acfd`; the [source archive](source.tar.gz) preserves those exact bytes and the formula corpus. The benchmark's Git metadata names the remote base checkout, not the overlaid measured source. Use its `foundry.source_sha256` manifest to identify the actual implementation.
+Measured on 2026-11-15 with an NVIDIA RTX PRO 6000 Blackwell Server Edition. The source bytes were checked against local commit `fa2acfd`; the source archive (local archive) preserves those exact bytes and the formula corpus. The benchmark's Git metadata names the remote base checkout, not the overlaid measured source. Use its `foundry.source_sha256` manifest to identify the actual implementation.
 
 The public suite passed: **512 tests and 7,061 subtests**, with one explicit private-baseline skip. All 66 operators covered their 124 declared window conditions. The 4,096-formula workload produced 4,058 valid candidates and 28 admissions on both CPU and CUDA, with zero decision differences or tolerance violations, including final portfolio state. Its complete public call took 93.724 seconds on CPU and 2.879 seconds on CUDA, a 32.55× observed speedup.
 

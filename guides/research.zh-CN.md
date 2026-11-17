@@ -315,4 +315,4 @@ with foundry.connect(("127.0.0.1", 9000)) as session:
 
 CUDA 批量适合有规模的重复研究。通过 `CUDA(candidate_batch=..., trial_batch=..., measurement_cache_mib=...)` 或 `CPU(workers=..., candidate_batch=...)` 控制资源。目标永续路径可按 `perpetual_host_cells` 在执行前规划小批次 CPU；订单路径始终使用明确选择的设备。CUDA 程序须通过 `context.stream` 建立框架流依赖，并让声明的私有状态驻留设备；不支持的设备明确失败。
 
-数值计划在评价前固定，不根据结果提高精度重算。[基准报告](benchmarks/README.zh-CN.md)记录硬件、规模、准备/JIT、驻留工作、完整流程、误差与决策。可用 `foundry.benchmark(output, ...)` 或 `python -m foundry benchmark OUTPUT` 测量自己的范围。历史公式耗时不代表订单程序吞吐。
+数值计划在评价前固定，不根据结果提高精度重算。[基准报告](benchmarks/README.zh-CN.md)记录硬件、规模、准备/JIT、驻留工作、完整流程、误差与决策。自行测量时，用 pytest、pytest-benchmark 调用公开 Session API；测试和辅助脚本留在本地，不随 Foundry 发布。历史公式耗时不代表订单程序吞吐。

@@ -33,6 +33,6 @@ python -m foundry benchmark BEFORE --suite programs --sizes 16 256 --backends cu
 python -m foundry benchmark AFTER --suite programs --sizes 16 256 --backends cuda --reference BEFORE
 ```
 
-本次将 16 和 256 拆成连续命令，以便先验收小规模再运行大规模；没有重复测量。基线恢复 `d96fe84` 的两个 study 文件，基准驱动与其他文件共用当前版本。
+本次将 16 和 256 拆成连续命令，以便先验收小规模再运行大规模；没有重复测量。基线恢复 `cc0f2b4` 的两个 study 文件，基准驱动与其他文件共用当前版本。
 
-[Full results](summary.json) · [Every stage](stages.csv) · [Original cloud evidence](raw.tar.gz) · [Source manifest](deployment.json) · [Measured source](source.tar.gz) · [Baseline delta](baseline-delta.tar.gz) · [Static report binding review](source-review.json)
+[Full results](summary.json) · [Every stage](stages.csv) · Original cloud evidence (local archive) · Source manifest（本地工件） · Measured source (local archive) · Baseline delta (local archive) · Static report binding review（本地工件）

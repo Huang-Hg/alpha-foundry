@@ -80,9 +80,42 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade "pip>=25.1"
 python -m pip install --group runtime
-bash build.sh
 python -m foundry --help
 ```
+
+<details>
+<summary>Build native extensions (Linux / WSL2 / Colab)</summary>
+
+Run from the repository root with the Linux Python used for computation. GCC is required; CuPy prepares CUDA kernels when a session is explicitly opened. Native Windows remote clients need no compilation.
+
+<!-- native-build:start -->
+```bash
+python - <<'PY'
+import subprocess
+import sysconfig
+import numpy
+
+suffix = sysconfig.get_config_var("EXT_SUFFIX")
+common = ["g++", "-std=c++17", "-fPIC", "-shared", "-Wall", "-Wextra",
+          "-Wno-unused-parameter", "-Wno-missing-field-initializers",
+          "-I" + sysconfig.get_paths()["include"], "-I" + numpy.get_include(), "-Ifoundry/include"]
+targets = [
+    ("ops/_ops", "ops", ["-O3", "-march=native", "-fno-fast-math", "-ffp-contract=off", "-fno-strict-aliasing", "-fopenmp"],
+     ["ops_ts.cpp", "ops_xs.cpp", "ops_inject_ts.cpp", "module.cpp"]),
+    ("backtest/_bt", "backtest", ["-O3", "-march=native", "-ffast-math", "-fno-finite-math-only", "-fno-strict-aliasing", "-fopenmp"],
+     ["kernel.cpp", "perpetual.cpp", "module.cpp"]),
+    ("backtest/_weights", "backtest", ["-O3"], ["weights.cpp"]),
+    ("backtest/_orders", "backtest", ["-O3", "-fno-fast-math", "-ffp-contract=off", "-fopenmp"], ["orders_module.cpp"]),
+]
+for name, module, flags, sources in targets:
+    directory = "foundry/" + module + "/src/"
+    subprocess.run(common + flags + ["-I" + directory] + [directory + source for source in sources]
+                   + ["-o", "foundry/" + name + suffix, "-lgomp", "-lm"], check=True)
+PY
+```
+<!-- native-build:end -->
+
+</details>
 
 All dependencies are declared once in [pyproject.toml](pyproject.toml), using [pip dependency groups](https://pip.pypa.io/en/stable/user_guide/#dependency-groups) (pip 25.1+). Select only the capabilities you need:
 

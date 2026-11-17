@@ -23,54 +23,36 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.13'
-      - name: Verify saved evidence
-        working-directory: guides/benchmarks/parallel-cpu-20261116
-        run: sha256sum -c SHA256SUMS
-      - name: Verify discovery evidence
-        working-directory: guides/benchmarks/api-boundary-l4-20261116
-        run: sha256sum -c SHA256SUMS
-      - name: Verify non-formula evidence
-        working-directory: guides/benchmarks/nonformula-l4-20261116
-        run: sha256sum -c SHA256SUMS
-      - name: Verify registration evidence
-        working-directory: guides/benchmarks/registration-l4-20261116
-        run: sha256sum -c SHA256SUMS
-      - name: Verify resident lease evidence
-        working-directory: guides/benchmarks/lease-l4-20261116
-        run: sha256sum -c SHA256SUMS
-      - name: Verify retention evidence
-        working-directory: guides/benchmarks/retention-l4-20261116
-        run: sha256sum -c SHA256SUMS
-      - name: Verify selected data snapshots
-        run: sha256sum -c data/SHA256SUMS
-      - name: Verify current architecture acceptance and source binding
-        run: python validation/benchmarks/evidence.py
-      - name: Publish the cloud measurement summary
+      - name: Verify selected data
+        run: sha256sum --quiet -c data/SHA256SUMS
+      - name: Publish measured summary
         env:
           REPORT_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
         shell: python
         run: |
+          import hashlib
+          import json
           import os
           from pathlib import Path
           import re
 
-          report_path = Path('guides/benchmarks/program-commit-l4-20261117/README.md')
+          folder = Path('guides/benchmarks/program-transitions-l4-20261117')
+          summary = json.loads((folder / 'summary.json').read_text())
+          if not summary['passed']:
+              raise SystemExit('Cloud acceptance did not pass')
+          for name, expected in summary['source'].items():
+              if hashlib.sha256(Path(name).read_bytes()).hexdigest() != expected:
+                  raise SystemExit('Measured source differs: ' + name)
           base = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/blob/"
-                  f"{os.environ['REPORT_REVISION']}/{report_path.parent.as_posix()}/")
-          report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + base + match[1] + ')', report_path.read_text())
+                  f"{os.environ['REPORT_REVISION']}/{folder.as_posix()}/")
+          report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + base + match[1] + ')',
+                          (folder / 'README.md').read_text())
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
-              output.write('This job checks saved cloud evidence and exact reviewed source hashes. It does not execute numerical tests.\n\n')
+              output.write('Saved cloud results and source checksums; this job does not run numerical tests.\n\n')
               output.write(report)
-      - name: Preserve current acceptance evidence
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: benchmark-evidence-${{ github.event.pull_request.head.sha || github.sha }}
-          path: |
-            guides/benchmarks/program-commit-l4-20261117/
-            guides/benchmarks/timed-l4-20261116/
+          name: measured-transitions-${{ github.event.pull_request.head.sha || github.sha }}
+          path: guides/benchmarks/program-transitions-l4-20261117/
           if-no-files-found: error
           retention-days: 30
-          compression-level: 0

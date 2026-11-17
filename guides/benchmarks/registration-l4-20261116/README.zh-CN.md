@@ -42,6 +42,6 @@ python -m foundry --parameters '{"search":{"epochs":4,"batch_size":64},"cuda":{"
   benchmark var/runs/registration-new --suite nonformula --backends cuda
 ```
 
-[Parity and timing](parity.json) · [Current plan](measured/plan.json) · [Previous plan](previous/plan.json) · [Submission](submission.json) · [Checks](contracts.xml) · [Source audit](source-audit.json) · [Source](source.tar.gz) · [Raw logs](raw.tar.gz)
+Parity and timing（本地工件） · Current plan（本地工件） · Previous plan（本地工件） · Submission（本地工件） · Checks（本地工件） · Source audit（本地工件） · Source (local archive) · Raw logs（本地工件）
 
 [CuPy pinned asynchronous copy contract](https://docs.cupy.dev/en/v13.4.0/reference/generated/cupy.ndarray.html)

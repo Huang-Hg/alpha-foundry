@@ -1,6 +1,6 @@
 # CUDA 慢算子优化
 
-[English](README.md) · [中文](README.zh-CN.md) · [Before](baseline/report.md) · [After](optimized/report.md) · [Before/after decisions](before-after.json) · [Measured source](source.tar.gz)
+[English](README.md) · [中文](README.zh-CN.md) · [Before](baseline/report.md) · [After](optimized/report.md) · Before/after decisions（本地工件） · Measured source (local archive)
 
 同一台 Colab PRO 6000、同一份美股输入（269 日 × 500 资产），比较修改前后的 66 个算子、124 个窗口用例。4096 条公式的评价＋有序提交由 **2.8047 秒降至 2.7699 秒**。
 

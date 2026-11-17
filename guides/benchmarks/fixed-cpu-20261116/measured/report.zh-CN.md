@@ -6,7 +6,7 @@
 
 OpenMP threads: 8; OpenBLAS threads: 8.
 
-[Metadata](benchmark.json) · [Summary](summary.json) · [Operators](operators.csv) · [Flows](flows.csv) · [Checks](checks.html)
+Metadata（本地工件） · [Summary](summary.json) · [Operators](operators.csv) · [Flows](flows.csv) · Checks（本地工件）
 
 | Candidates | Evaluate / s | Commit / s | Sum / s | Lifecycle / s | Valid / accepted |
 | ---: | ---: | ---: | ---: | ---: | ---: |

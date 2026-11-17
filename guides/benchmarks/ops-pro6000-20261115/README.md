@@ -1,6 +1,6 @@
 # Optimizing CUDA operators that lag CPU
 
-[English](README.md) · [中文](README.zh-CN.md) · [Before](baseline/report.md) · [After](optimized/report.md) · [Before/after decisions](before-after.json) · [Measured source](source.tar.gz)
+[English](README.md) · [中文](README.zh-CN.md) · [Before](baseline/report.md) · [After](optimized/report.md) · Before/after decisions (local artifact) · Measured source (local archive)
 
 On the same Colab PRO 6000 and US-equity inputs (269 days x 500 assets), this run compares all 66 operators and 124 window cases before and after the change. Evaluate plus ordered commit for 4096 formulas changed from **2.8047 s to 2.7699 s**.
 

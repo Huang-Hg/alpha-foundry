@@ -1,6 +1,6 @@
 # 历史记录：PRO 6000 内部接口基准
 
-[当前公开接口基准](../../README.zh-CN.md) · [原始汇总](operator66-results.json) · [算子 CSV](operator66.csv) · [全部输入条件](operator66-cases.csv) · [公式语料](operator66-formulas.json)
+[当前公开接口基准](../../README.zh-CN.md) · 原始汇总 (local artifact) · [算子 CSV](operator66.csv) · [全部输入条件](operator66-cases.csv) · 公式语料 (local artifact)
 
 这是一份旧版本记录：在同一台 Colab RTX PRO 6000 上，用 **500 只美股、269 个交易日、4096 条公式**比较 CPU 与 CUDA。它使用内部 Research 接口，不代表当前公开 API 的总调用耗时。
 

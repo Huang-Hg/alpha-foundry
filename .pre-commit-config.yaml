@@ -15,7 +15,7 @@ repos:
     hooks:
       - id: ruff-check
         args: [--select, 'E9,F821,F822', --no-cache]
-        files: ^(foundry|validation)/
+        files: ^foundry/
   - repo: https://github.com/rhysd/actionlint
     rev: 914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
     hooks:

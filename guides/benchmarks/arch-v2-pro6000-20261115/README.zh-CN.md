@@ -2,7 +2,7 @@
 
 [English](README.md) · [性能与误差报告](report.zh-CN.md) · [分阶段耗时](flows.csv) · [全部算子条件](operators.csv)
 
-于 2026-11-15 在 NVIDIA RTX PRO 6000 Blackwell Server Edition 上测量。已核对实测源码与本地提交 `fa2acfd` 一致；[源码归档](source.tar.gz) 保留了原始文件字节和公式集合。基准 JSON 的 Git 元数据指向远端基础检出版本，而非覆盖后的实测源码；请用其中的 `foundry.source_sha256` 清单识别实际实现。
+于 2026-11-15 在 NVIDIA RTX PRO 6000 Blackwell Server Edition 上测量。已核对实测源码与本地提交 `fa2acfd` 一致；源码归档 (local archive) 保留了原始文件字节和公式集合。基准 JSON 的 Git 元数据指向远端基础检出版本，而非覆盖后的实测源码；请用其中的 `foundry.source_sha256` 清单识别实际实现。
 
 公开套件通过：**512 项测试、7,061 个子检查**，明确跳过一项私有生产基线检查。66 个算子的 124 个窗口条件全部覆盖。4096 条公式在 CPU/CUDA 上均有 4058 条有效、28 条接纳；包括最终组合在内，决策差异和数值超限均为零。完整公开调用耗时为 CPU 93.724 秒、CUDA 2.879 秒，本次观测加速比为 32.55×。
 

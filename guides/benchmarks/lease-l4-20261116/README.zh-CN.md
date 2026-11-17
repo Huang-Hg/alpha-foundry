@@ -50,4 +50,4 @@ python -m foundry --parameters '{"market":"us_equity","search":{"epochs":4,"batc
   benchmark var/runs/resident-inputs --suite nonformula --backends cuda
 ```
 
-[Parity and timing](parity.json) · [Measured plan](measured/plan.json) · [Previous plan](previous/plan.json) · [Checks](contracts.xml) · [Targeted repair](contracts-repair.xml) · [Source audit](source-audit.json) · [Measured source](source.tar.gz) · [Raw evidence](raw.tar.gz)
+Parity and timing（本地工件） · Measured plan（本地工件） · Previous plan（本地工件） · Checks（本地工件） · Targeted repair（本地工件） · Source audit（本地工件） · Measured source (local archive) · Raw evidence（本地工件）

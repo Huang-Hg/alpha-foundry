@@ -43,4 +43,4 @@ python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512},"cuda":{
   benchmark var/runs/discovery-new --suite discovery --backends cuda
 ```
 
-[Comparison](comparison.json) · [Parity](parity.json) · [Epochs](epochs.csv) · [Summary](measured/summary.json) · [Plan](measured/plan.json) · [Source audit](source-audit.json) · [Source](source.tar.gz) · [Raw reports](raw.tar.gz) · [Checks](contracts.xml) · [Checksums](SHA256SUMS)
+Comparison (local artifact) · Parity (local artifact) · [Epochs](epochs.csv) · [Summary](measured/summary.json) · Plan (local artifact) · Source audit (local artifact) · Source (local archive) · Raw reports (local artifact) · Checks (local artifact) · Checksums (local artifact)

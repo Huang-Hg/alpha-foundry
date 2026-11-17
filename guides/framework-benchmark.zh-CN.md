@@ -70,25 +70,9 @@ python -m pip --python /content/framework-main/bin/python install --group framew
 python -m uv venv --python 3.14.10 /content/framework-spectre
 python -m pip --python /content/framework-spectre/bin/python install --group spectre
 source /content/framework-main/bin/activate
-bash build.sh
+# Build the native extensions using the README commands.
 ```
 
 [主环境](../pyproject.toml) 固定 vectorbt/vectorbt-rust 1.2.1 和 Freqtrade 2026.10。[Spectre 环境](../pyproject.toml) 固定上游提交 `c059665ba33b3d98f523ee55fdecf5105af146f6`。已验证的 Linux Torch 运行时报告 `2.15.0+cu132`，发行包元数据报告 `2.15.0`。PyPI 上名为 `spectre` 的包与该项目无关，必须使用固定 Git URL，不绕过上游依赖要求。
 
-先在全新输出目录运行小规模 smoke：
-
-```bash
-python -m foundry benchmark var/runs/framework-smoke --suite frameworks \
-  --sizes 1 --assets 1 --spectre-python /content/framework-spectre/bin/python
-```
-
-smoke 验收后再运行既定网格：
-
-```bash
-python -m foundry benchmark var/runs/framework-comparison --suite frameworks \
-  --sizes 1 16 64 --assets 8 --spectre-python /content/framework-spectre/bin/python
-```
-
-不要传 `market`、`backend` 等研究参数：该套件拥有公开的共同交易契约，并比较已配置的实现。输出目录必须尚不存在；worker 失败时保留日志和未完成工件，部分完成不能当作完整比较。
-
-Python 入口为 `foundry.benchmark(output, suite="frameworks", sizes=(1,16,64), assets=8, spectre_python=...)`。结果包含计划、共同用例、各实现日志和数组、版本/计时元数据、`comparison.json` 与双语报告。每份结果应绑定实测源码和依赖记录，不把历史测量混入新运行。
+测试驱动保留本地，不随仓库发布。用 pytest／pytest-benchmark 调度相同数据与交易契约，先跑小规模 smoke，再执行声明的网格；保留每个实现的版本、原始数组、耗时、误差和决策结果。

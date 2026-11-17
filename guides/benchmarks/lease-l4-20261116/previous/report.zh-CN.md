@@ -9,4 +9,4 @@
 
 报告包括输出注册、主机摘要/落盘、GPU 评价、驻留奖励、学习、有序提交和重配。MLP 预测拟合严格使用历史前缀；超参/因子选择使用同一研究窗口的反馈，因此这些收益不是独立样本外证据。
 
-[Detailed stages and checks](summary.json) · [Run plan](plan.json)
+[Detailed stages and checks](summary.json) · Run plan（本地工件）

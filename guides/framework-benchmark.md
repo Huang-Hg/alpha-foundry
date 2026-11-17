@@ -70,25 +70,9 @@ python -m pip --python /content/framework-main/bin/python install --group framew
 python -m uv venv --python 3.14.10 /content/framework-spectre
 python -m pip --python /content/framework-spectre/bin/python install --group spectre
 source /content/framework-main/bin/activate
-bash build.sh
+# Build the native extensions using the README commands.
 ```
 
 The [main environment](../pyproject.toml) pins vectorbt/vectorbt-rust 1.2.1 and Freqtrade 2026.10. The [Spectre environment](../pyproject.toml) pins upstream commit `c059665ba33b3d98f523ee55fdecf5105af146f6`. Its verified Linux Torch installation reports `2.15.0+cu132`; package metadata reports `2.15.0`. The PyPI package named `spectre` is unrelated: use the pinned Git URL. Dependencies are installed without bypassing the upstream requirements.
 
-Start with a small smoke on a fresh output directory:
-
-```bash
-python -m foundry benchmark var/runs/framework-smoke --suite frameworks \
-  --sizes 1 --assets 1 --spectre-python /content/framework-spectre/bin/python
-```
-
-After smoke acceptance, run the declared grid:
-
-```bash
-python -m foundry benchmark var/runs/framework-comparison --suite frameworks \
-  --sizes 1 16 64 --assets 8 --spectre-python /content/framework-spectre/bin/python
-```
-
-Do not pass research parameters such as `market` or `backend`: this suite owns its published common contract and compares the configured implementations. Output directories must be new. Logs and incomplete artifacts remain available if a worker fails; a partial run is not a finished comparison.
-
-The Python entry is `foundry.benchmark(output, suite="frameworks", sizes=(1,16,64), assets=8, spectre_python=...)`. Results include a plan, common cases, per-implementation logs and arrays, version/timing metadata, `comparison.json` and bilingual reports. Keep each result attached to its measured source revision and dependency record; do not blend historical results into a new run.
+Comparison drivers stay local and are not distributed. Use pytest/pytest-benchmark with the same data and trading contract, first a small smoke and then the declared grid. Preserve implementation versions, raw arrays, timing, errors and decisions.

@@ -40,4 +40,4 @@ python -m foundry --parameters '{"search":{"epochs":8,"batch_size":512}}' \
   benchmark var/runs/discovery-new --suite discovery --backends cuda
 ```
 
-[Comparison and errors](comparison.json) · [Epochs](epochs.csv) · [Summary](measured/summary.json) · [Plan](measured/plan.json) · [Source audit](source-audit.json) · [Source](source.tar.gz) · [Raw reports](raw.tar.gz) · [Checks](contracts.xml) · [Checksums](SHA256SUMS)
+Comparison and errors（本地工件） · [Epochs](epochs.csv) · [Summary](measured/summary.json) · Plan（本地工件） · Source audit（本地工件） · Source (local archive) · Raw reports（本地工件） · Checks（本地工件） · Checksums（本地工件）
