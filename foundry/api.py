@@ -116,8 +116,17 @@ def import_perpetual(output: str | Path, **parameters: Unpack[Parameters]):
 
 
 def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8, backends=('cpu', 'cuda'),
-              spectre_python=None, qualification: str | Path | None = None, **parameters: Unpack[Parameters]):
+              spectre_python=None, qualification: str | Path | None = None,
+              reference: str | Path | None = None, **parameters: Unpack[Parameters]):
     """Run the selected native benchmark suite and generate its report bundle."""
+    if suite == 'programs':
+        from validation.benchmarks.programs import run
+        if tuple(backends) != ('cuda',) or spectre_python is not None or qualification is not None:
+            raise ValueError('programs requires backends=("cuda",) and uses reference for saved comparisons')
+        return run(output, sizes=(16,) if sizes is None else tuple(sizes), assets=assets,
+                   reference=reference, **parameters)
+    if reference is not None:
+        raise ValueError('reference applies only to the programs benchmark suite')
     if suite == 'timed':
         from validation.benchmarks.timed import run
         if tuple(backends) != ('cuda',) or spectre_python is not None:
@@ -147,7 +156,7 @@ def benchmark(output: str | Path, *, suite='foundry', sizes=None, assets=8, back
         return run(output, sizes=(1, 16, 64) if sizes is None else tuple(sizes), assets=assets,
                    spectre_python=sys.executable if spectre_python is None else spectre_python)
     if suite != 'foundry':
-        raise ValueError('benchmark suite must be foundry, frameworks, discovery, nonformula or timed')
+        raise ValueError('benchmark suite must be foundry, frameworks, discovery, nonformula, timed or programs')
     if assets != 8 or spectre_python is not None:
         raise ValueError('assets and spectre_python apply only to the frameworks suite')
     from validation.benchmarks.run import run

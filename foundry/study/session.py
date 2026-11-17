@@ -38,6 +38,7 @@ from foundry.types import ResidentEvaluation
 from foundry.study import programs
 from foundry.study.program_registry import ProgramRegistry
 from foundry.study.replay_evaluation import ReplayEvaluation
+from foundry.study.cache import ReviewedBatch
 
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ class Ledger:
                          if registry is None else registry)
         self.replay = ReplayEvaluation(runtime, arrays, self.programs)
         self.orders = runtime.settings.execution.model == 'orders'
+        self.reviewed = ReviewedBatch(min(pipeline.candidate_batch, pipeline.cache.reports.capacity_bytes // 4096))
         library = store.read(pipeline.study)
         if not self.orders:
             for part in pipeline.batches(tuple(member.source for member in library.members)):
@@ -176,6 +178,7 @@ class Ledger:
             if not self.orders:
                 pipeline.register_arrays(lease.sources, lease.batch.values, owned=True)
             candidates = tuple(Candidate(identity, source) for identity, source in zip(batch.ids, lease.sources))
+            self.reviewed.clear()
             return RegisteredBatch(self.context, candidates, token)
 
     def register_program(self, program: StrategyProgram | ProgramReference, context_id: str) -> RegisteredBatch:
@@ -187,15 +190,18 @@ class Ledger:
             cleanup.callback(self.programs.release, token)
             programs.plan(self.runtime, self.programs.read(candidates[0].source))
             cleanup.pop_all()
+        self.reviewed.clear()
         return RegisteredBatch(self.context, candidates, token)
 
     def release_batch(self, token: str) -> None:
         with self.pipeline.resources.scope():
             if self.programs.owns(token):
                 self.programs.release(token)
+                self.reviewed.clear()
                 return
             sources = self.pipeline.inputs.release(token)
             self.pipeline.cache.arrays.drop(sources)
+            self.reviewed.clear()
 
     def retain(self, candidates: tuple[Candidate, ...], context_id: str) -> RegisteredBatch:
         """Persist only explicitly selected live sources; query paths never write."""
@@ -249,8 +255,11 @@ class Ledger:
         for lo in range(0, len(sources), self.pipeline.candidate_batch):
             part = sources[lo:lo + self.pipeline.candidate_batch]
             measured = self._evaluate_sources(part, report=report, delayed=delayed)
+            admitted = self._admit(measured, self.portfolio)
+            if self.orders and report and not delayed:
+                self.reviewed.put(self.context.id, measured, admitted)
             rows.extend(measured)
-            verdicts.extend(self._admit(measured, self.portfolio))
+            verdicts.extend(admitted)
         return DeviceBatch(tuple(rows), tuple(verdicts))
 
     def _evaluate_sources(self, sources, *, report=True, delayed=False):
@@ -282,14 +291,29 @@ class Ledger:
         for lo in range(0, len(candidates), self.pipeline.candidate_batch):
             part = candidates[lo:lo + self.pipeline.candidate_batch]
             sources = tuple(c.source for c in part)
-            rows = self._evaluate_sources(sources, report=True)
+            reviewed = self.reviewed.read(before.id, sources) if self.orders and working.version == original.version else {}
+            if reviewed:
+                self.programs.read_many(tuple(source for source in reviewed if isinstance(source, ProgramSource)))
+            missing = tuple(source for source in sources if source not in reviewed)
+            measured = iter(self._evaluate_sources(missing, report=True)) if missing else iter(())
+            rows = [replace(reviewed[source].row) if source in reviewed else next(measured) for source in sources]
+            materialized = {i for i, source in enumerate(sources) if source not in reviewed}
             at = 0
             while at < len(part):
                 # Same version: read-only trial batches can run together. After
                 # the first acceptance the suffix must be judged on its successor.
                 first = at
                 stop = min(len(part), at + lookahead)
-                verdicts = self._admit(rows[at:stop], working)
+                # Only server-owned reports from this exact context can replace
+                # trials. A successor portfolio forces fresh suffix admission.
+                pending = [i for i in range(at, stop) if working.version != original.version or sources[i] not in reviewed]
+                needed = [i for i in pending if i not in materialized]
+                if needed:
+                    for i, row in zip(needed, self._evaluate_sources(tuple(sources[i] for i in needed), report=True)):
+                        rows[i] = row
+                    materialized.update(needed)
+                admitted = dict(zip(pending, self._admit([rows[i] for i in pending], working))) if pending else {}
+                verdicts = tuple(admitted[i] if i in admitted else reviewed[sources[i]].verdict for i in range(at, stop))
                 for row, verdict, candidate in zip(rows[at:stop], verdicts, part[at:stop]):
                     at += 1
                     report = replace(row, tree=None, book=None, returns=None, maxdd=None)
@@ -313,6 +337,7 @@ class Ledger:
         if working.version != original.version:
             self.store.commit(original.library, working.library)
             self.portfolio = working
+            self.reviewed.clear()
         return CommitResult(before, self.context, tuple(results))
 
     def portfolio_report(self, context_id):
@@ -438,6 +463,7 @@ class Ledger:
                 return WeightCommit(before, before, False, float(trial.utility[0]))
             self.store.commit(original.library, working.library)
             self.portfolio = working
+            self.reviewed.clear()
             return WeightCommit(before, self.context, True, float(trial.utility[0]))
 
 
@@ -460,6 +486,7 @@ class LocalBackend:
             previous = self.research
             replacement = Ledger(self.runtime, previous.store, previous.arrays, previous.programs)
             previous.portfolio = replacement.portfolio
+            previous.reviewed.clear()
         return self.research.context
 
     def grid(self):
@@ -531,6 +558,7 @@ class LocalBackend:
         return ResidentPort(self.research)
 
     def close(self):
+        self.research.reviewed.clear()
         self.research.programs.close()
         self.runtime.close()
 

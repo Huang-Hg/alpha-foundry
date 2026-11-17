@@ -6,7 +6,7 @@ from collections.abc import Hashable, Sequence
 from dataclasses import dataclass, replace
 from typing import Generic, TypeVar
 
-from foundry.types import ArraySource, EvaluationRow, FloatArray, Source
+from foundry.types import ArraySource, EvaluationRow, FloatArray, Source, Verdict
 
 Key = TypeVar('Key', bound=Hashable)
 Value = TypeVar('Value')
@@ -142,6 +142,54 @@ class MeasurementCache:
 
     def clear(self) -> None:
         self._groups.clear()
+        self._rows.clear()
+
+
+@dataclass(frozen=True)
+class ReviewedCandidate:
+    """Detached host reports only; no returns, books, trees or live accounts."""
+
+    row: EvaluationRow
+    verdict: Verdict
+
+    def copy(self) -> ReviewedCandidate:
+        proposal = self.verdict.proposal
+        return ReviewedCandidate(replace(self.row), replace(self.verdict,
+            proposal=None if proposal is None else replace(proposal)))
+
+
+class ReviewedBatch:
+    """Keep at most the last full reported batch under one research context.
+
+    Capacity is bounded by the active candidate batch and the existing report
+    budget. Entries own host metadata only, never candidate or account arrays.
+    Copies isolate mutable public rows/proposals from trusted admission results.
+    """
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.context = ''
+        self._rows: dict[Source, ReviewedCandidate] = {}
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def put(self, context: str, rows: Sequence[EvaluationRow], verdicts: Sequence[Verdict]) -> None:
+        self.clear()
+        if len(rows) > self.capacity:
+            return
+        self.context = context
+        self._rows = {row.source: ReviewedCandidate(
+            replace(row, tree=None, book=None, returns=None, maxdd=None), verdict).copy()
+            for row, verdict in zip(rows, verdicts)}
+
+    def read(self, context: str, sources: Sequence[Source]) -> dict[Source, ReviewedCandidate]:
+        if context != self.context:
+            return {}
+        return {source: self._rows[source].copy() for source in sources if source in self._rows}
+
+    def clear(self) -> None:
+        self.context = ''
         self._rows.clear()
 
 

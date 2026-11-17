@@ -2,7 +2,9 @@
 
 [简体中文](README.zh-CN.md) · [2026-11-15 PRO 6000 report](arch-v2-pro6000-20261115/report.md) · [Pre-refactor public API report](current/report.md) · [Earlier operator experiments](archive/pro6000-operator66/operator66.md)
 
-The [timed-strategy L4 report](timed-l4-20261116/README.md) covers 4096 array candidates, 256 stateful programs and an independent Agent integration. Query plus ordered commit took 3.718 s and 41.886 s respectively; full-scale paired CPU/CUDA correctness matched within tolerance with no decision differences. Mixed FP32 controls failed qualification and remain visible. Use `--suite timed` for this workflow, including separate smoke qualification and full-scale evidence.
+The [program commit L4 report](program-commit-l4-20261117/README.md) measures removal of repeated same-context replay: 256 stateful programs improve from 42.301 s to 20.851 s for query plus ordered commit, with identical returns, metrics and decisions. These stress candidates all reject; acceptance still replays against the updated portfolio. Use `--suite programs --reference BEFORE` for matched comparisons.
+
+The earlier [timed-strategy L4 report](timed-l4-20261116/README.md) covers 4096 array candidates, 256 stateful programs and an independent Agent integration. Query plus ordered commit took 3.718 s and 41.886 s respectively; full-scale paired CPU/CUDA correctness matched within tolerance with no decision differences. Mixed FP32 controls failed qualification and remain visible. Use `--suite timed` for this workflow, including separate smoke qualification and full-scale evidence.
 
 The [resident GPU sampling report](gfn-resident-l4-20261116/README.md) measures device-side states, legality and draws, trace reuse and a persistent optimizer: the 4096-proposal loop falls from 7.889 to 6.168 s; preparation plus session lifecycle falls from 8.921 to 8.586 s. Numerical errors, increased peak memory and candidate-trajectory differences are disclosed. The [PyTorch migration report](gfn-torch-l4-20261116/README.md) remains the previous baseline.
 

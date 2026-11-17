@@ -57,7 +57,7 @@ jobs:
           from pathlib import Path
           import re
 
-          report_path = Path('guides/benchmarks/timed-l4-20261116/README.md')
+          report_path = Path('guides/benchmarks/program-commit-l4-20261117/README.md')
           base = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/blob/"
                   f"{os.environ['REPORT_REVISION']}/{report_path.parent.as_posix()}/")
           report = re.sub(r'\]\(([^:/)#]+)\)', lambda match: '](' + base + match[1] + ')', report_path.read_text())
@@ -68,7 +68,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: benchmark-evidence-${{ github.event.pull_request.head.sha || github.sha }}
-          path: guides/benchmarks/timed-l4-20261116/
+          path: |
+            guides/benchmarks/program-commit-l4-20261117/
+            guides/benchmarks/timed-l4-20261116/
           if-no-files-found: error
           retention-days: 30
           compression-level: 0

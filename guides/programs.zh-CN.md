@@ -206,7 +206,9 @@ unscaled_close_quantity = abs(actual) / context.intent_coefficients
 
 ## 发现、家族与重放
 
-`registered.candidates` 可直接进入 `Discovery`、`ExternalProposer` 和 `CandidateGrid`，保留原始变体身份。程序、公式与数组共用硬准入。订单模型下，变化的权重与有序准入总是创建新状态并重放实际执行，不把先前持仓路径当作账户不变时的静态结果复用。
+`registered.candidates` 可直接进入 `Discovery`、`ExternalProposer` 和 `CandidateGrid`，保留原始变体身份。程序、公式与数组共用硬准入。订单模型下，权重变化或前面的候选入选后，必须创建新状态并重放实际执行，不把先前持仓路径当作账户不变时的静态结果复用。
+
+紧接着调用 `commit(report)` 时，如果研究上下文没有变化，会话可以复用自己最近生成的评价与准入报告，不信任调用方传入的指标或结论。最多保留一个候选批次的主机端报告，不保存收益数组、持仓或活动账户；一旦某个候选入选，后续候选重新对照更新后的组合判定。刷新、注册变更、释放和关闭会清除复用结果，`measurement_cache_mib=0` 可关闭复用。本地和 RPC 使用相同机制，无需增加调用步骤。
 
 描述与规范参数确定可重放程序；候选来源还绑定研究和原始变体。临时注册带租约 scope，持久引用不带。共享模型只在活动注册范围内复用，私有状态与账户反馈不会变成历史模型缓存。
 

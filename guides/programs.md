@@ -206,7 +206,9 @@ Owner contributions sum to net account quantity. Spot sells can consume only tha
 
 ## Discovery, families and replay
 
-`registered.candidates` supplies original variant identities directly to `Discovery`, `ExternalProposer` and `CandidateGrid`. The same hard admission rules apply to programs, formulas and arrays. Under the order model, changed weights and sequential admissions always start fresh private states and replay actual execution. A program's previously realized target or position path is not reused as if account state had stayed constant.
+`registered.candidates` supplies original variant identities directly to `Discovery`, `ExternalProposer` and `CandidateGrid`. The same hard admission rules apply to programs, formulas and arrays. Under the order model, changed weights or an accepted earlier candidate require fresh private states and actual execution replay. A program's previously realized target or position path is not reused as if account state had stayed constant.
+
+An immediate `commit(report)` can reuse the session's own recent evaluation and admission reports while the research context is unchanged. It does not trust metrics or decisions supplied by the caller. At most one candidate batch of host metadata is retained, with no returns, positions or live accounts. Once a candidate is accepted, subsequent candidates are judged again against the updated portfolio. Refresh, registration changes, release and close invalidate this reuse; a zero `measurement_cache_mib` disables it. This works through both local sessions and RPC without an extra public call.
 
 The descriptor and canonical parameters identify the replayable program; a candidate source additionally binds the study and original variant. Temporary registration has a lease scope, while durable sources have none. Shared-model reuse is scoped to active registrations; run state and account feedback do not become a historical model cache.
 
