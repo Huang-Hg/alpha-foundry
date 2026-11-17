@@ -12,6 +12,6 @@
 | [外部框架](frameworks-pro6000-20261115/README.zh-CN.md) | 同一受限日线现货 SMA 规则下对比 Foundry、Spectre、vectorbt 与 Freqtrade |
 | [66 算子](ops-pro6000-20261115/README.zh-CN.md) | 66 个算子、124 个窗口条件的逐项耗时、误差与 4096 公式流程 |
 
-测试代码与基准驱动保留在本地未跟踪的 `tests/` 和 `scripts/` 中。在授权 Linux GPU 环境安装 `--group mining` 与匹配的 CuPy 依赖组（`cuda12` 或 `cuda13`），在测试环境单独安装 `pytest`、`pytest-benchmark`、`pytest-html`，按根目录 [README](../../README.zh-CN.md#linuxwsl2-与远程客户端) 编译原生扩展后执行 `python -m pytest -c tests/pytest.ini`。
+测试代码与基准驱动保留在本地未跟踪的 `tests/` 和 `scripts/` 中。在授权 Linux GPU 环境安装 `--group mining` 与匹配的 CuPy 依赖组（`cuda12` 或 `cuda13`），在测试环境单独安装 `pytest`、`pytest-benchmark`、`pytest-html`，按根目录 [README](../../README.zh-CN.md#安装与构建) 编译原生扩展后执行 `python -m pytest -c tests/pytest.ini`。
 
 GitHub Actions 仅核验保存的摘要与测试数据校验和，不执行数值计算。公开目录保留精简 Markdown、CSV 与 `summary.json`；完整原始日志与归档包留在本地 `var/runs/`。早期报告中出现的命令属于当时记录的版本（原 `foundry benchmark` 子命令已移除）。
