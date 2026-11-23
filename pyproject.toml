@@ -14,7 +14,7 @@ monitor = ["rich>=13"]
 # Policy models are optional; select a CUDA-enabled Torch wheel for GPU mining.
 mining = [
     { include-group = "runtime" },
-    "torch>=2.6,<3",
+    "torch>=2.15.0,<3",
 ]
 # Select exactly one CuPy group matching the compute host's CUDA major.
 cuda12 = ["cupy-cuda12x"]
