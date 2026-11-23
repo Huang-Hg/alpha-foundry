@@ -7,7 +7,7 @@ client = [
 runtime = [
     { include-group = "client" },
     "pandas>=2.0",
-    "exchange_calendars>=4.11,<5",
+    "exchange_calendars>=4.13.3,<5",
     "pyarrow>=17",
 ]
 monitor = ["rich>=13"]
